@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { requestPauseSceneRadio } from '../utils/mediaPlaybackCoordinator';
+import { StickerPlayer } from '../../stories/StickerPlayer';
 import {
   X,
   ChevronLeft,
@@ -87,6 +88,15 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [activeReactionBurst, setActiveReactionBurst] = useState<string | null>(null);
   const [isHolding, setIsHolding] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const onNextRef = useRef(onNext);
+  const onPrevRef = useRef(onPrev);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onNextRef.current = onNext;
+    onPrevRef.current = onPrev;
+    onCloseRef.current = onClose;
+  });
 
   // Determine current active story index safely
   const currentIndex = useMemo(() => {
@@ -184,17 +194,21 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
 
     const interval = setInterval(() => {
       setLocalProgress((prev) => {
-        if (prev >= 100) {
+        const nextVal = prev + increment;
+        if (nextVal >= 100) {
           clearInterval(interval);
-          onNext();
+          // Defer onNext call outside of React state update cycle
+          setTimeout(() => {
+            onNextRef.current();
+          }, 0);
           return 100;
         }
-        return Math.min(100, prev + increment);
+        return nextVal;
       });
     }, tickInterval);
 
     return () => clearInterval(interval);
-  }, [activeStory, isVideo, isPaused, isHolding, onNext]);
+  }, [activeStory?.id, isVideo, isPaused, isHolding]);
 
   // Video playback & timeupdate synchronization
   useEffect(() => {
@@ -216,7 +230,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   };
 
   const handleVideoEnded = () => {
-    onNext();
+    setTimeout(() => {
+      onNextRef.current();
+    }, 0);
   };
 
   // Keyboard navigation
@@ -224,11 +240,11 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     if (!activeStory) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
       } else if (e.key === 'ArrowRight') {
-        onNext();
+        onNextRef.current();
       } else if (e.key === 'ArrowLeft') {
-        onPrev();
+        onPrevRef.current();
       } else if (e.key === ' ') {
         e.preventDefault();
         setIsPaused(!isPaused);
@@ -237,7 +253,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeStory, isPaused, onClose, onNext, onPrev]);
+  }, [activeStory, isPaused]);
 
   // Touch / Pointer hold to pause
   const handlePointerDown = () => {
@@ -493,20 +509,57 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               {/* Stickers (if configured) */}
               {Array.isArray(activeStory.stickers) &&
                 activeStory.stickers.length > 0 &&
-                activeStory.stickers.map((stk, sIndex) => (
-                  <div
-                    key={`stk-${sIndex}`}
-                    className="absolute z-20 pointer-events-none drop-shadow-[0_4px_15px_rgba(0,0,0,0.8)] select-none"
-                    style={{
-                      top: `${activeStory.stickerY ?? 35}%`,
-                      left: `${activeStory.stickerX ?? 50}%`,
-                      transform: `translate(-50%, -50%) scale(${activeStory.stickerScale ?? 1.2})`,
-                      fontSize: '48px',
-                    }}
-                  >
-                    {typeof stk === 'string' ? stk : stk?.emoji || '🔥'}
-                  </div>
-                ))}
+                activeStory.stickers.map((stk, sIndex) => {
+                  const isBandcampSticker = typeof stk === 'object' && (stk?.type === 'bandcamp' || stk?.trackTitle);
+                  if (isBandcampSticker) {
+                    return (
+                      <div
+                        key={`stk-bc-${sIndex}`}
+                        className="absolute z-30 pointer-events-auto select-none"
+                        style={{
+                          top: `${activeStory.stickerY ?? stk.y ?? 45}%`,
+                          left: `${activeStory.stickerX ?? stk.x ?? 50}%`,
+                          transform: 'translate(-50%, -50%)',
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <StickerPlayer
+                          trackTitle={stk.trackTitle}
+                          artistName={stk.artistName}
+                          coverArtUrl={stk.coverArtUrl}
+                          audioUrl={stk.audioUrl}
+                          bandcampUrl={stk.bandcampUrl}
+                          variant={stk.variant || 'merch_badge'}
+                          scale={activeStory.stickerScale ?? stk.scale ?? 1.0}
+                          interactive={true}
+                          onPlayStateChange={(playing) => {
+                            if (playing) {
+                              setIsPaused(true);
+                              if (videoRef.current) {
+                                videoRef.current.pause();
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={`stk-${sIndex}`}
+                      className="absolute z-20 pointer-events-none drop-shadow-[0_4px_15px_rgba(0,0,0,0.8)] select-none"
+                      style={{
+                        top: `${activeStory.stickerY ?? 35}%`,
+                        left: `${activeStory.stickerX ?? 50}%`,
+                        transform: `translate(-50%, -50%) scale(${activeStory.stickerScale ?? 1.2})`,
+                        fontSize: '48px',
+                      }}
+                    >
+                      {typeof stk === 'string' ? stk : stk?.emoji || '🔥'}
+                    </div>
+                  );
+                })}
 
               {/* Reaction Burst Visual Animation */}
               <AnimatePresence>

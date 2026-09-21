@@ -1,15 +1,15 @@
 export async function fetchLiveFlightData(flightNumber: string, dateStr: string) {
-  // Check for developer specified API keys in Vite environment, otherwise fall back to original testing key
+  // Check for developer specified API keys in Vite environment
   const envKey = import.meta.env.VITE_AERODATABOX_API_KEY || import.meta.env.VITE_RAPIDAPI_KEY;
-  const API_KEY = envKey || "cmpt50brr000nl504t05zjktu";
+  const API_KEY = envKey || "";
   
-  const keySource = envKey ? (import.meta.env.VITE_AERODATABOX_API_KEY ? "VITE_AERODATABOX_API_KEY" : "VITE_RAPIDAPI_KEY") : "hardcoded fallback";
-  const maskedKey = API_KEY.length > 8 ? `${API_KEY.substring(0, 4)}...${API_KEY.substring(API_KEY.length - 4)}` : "None or too short";
+  const keySource = envKey ? (import.meta.env.VITE_AERODATABOX_API_KEY ? "VITE_AERODATABOX_API_KEY" : "VITE_RAPIDAPI_KEY") : "unconfigured";
+  const maskedKey = API_KEY.length > 8 ? `${API_KEY.substring(0, 4)}...${API_KEY.substring(API_KEY.length - 4)}` : "None";
   
   // Clean the flight number
   const cleanFlight = flightNumber.replace(/\s+/g, '').toUpperCase();
   
-  console.log(`[FlightSync] Syncing flight ${cleanFlight} on ${dateStr}. Trying live API first via rapidapi...`);
+  console.log(`[FlightSync] Syncing flight ${cleanFlight} on ${dateStr}.`);
   
   const options = {
     method: 'GET',
@@ -20,8 +20,8 @@ export async function fetchLiveFlightData(flightNumber: string, dateStr: string)
   };
 
   try {
-    // If the key seems unconfigured or placeholder-like, fail fast to enter resilient fallback
-    if (!envKey && (API_KEY === "cmpt50brr000nl504t05zjktu" || API_KEY.trim() === "")) {
+    // If the key is not configured, fall back to simulated / cached data
+    if (!API_KEY || API_KEY.trim() === "") {
       throw new Error("No active personal API subscription configured. Seamlessly auto-falling back.");
     }
 

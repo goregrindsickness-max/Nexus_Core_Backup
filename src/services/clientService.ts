@@ -7,6 +7,10 @@ import { wrapQueryBuilder } from './offlineSyncService';
 const rawSupabaseInstances: Record<string, SupabaseClient | null> = {};
 const proxiedSupabaseInstances: Record<string, any> = {};
 
+// Default production Supabase credentials (ensures APK builds without .env never lose database connectivity)
+export const DEFAULT_SUPABASE_URL = 'https://cyjnpuneruonskfzpmqo.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5am5wdW5lcnVvbnNrZnpwbXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NTA1NjIsImV4cCI6MjA5NTQyNjU2Mn0.94h4Ao-cpLXwU8xxJsKln0iud2wOw746yZlAdFP2gDM';
+
 export function getActivePortalType(): 'band' | 'promoter' | 'creative' {
   if (typeof window === 'undefined') return 'band';
   let profileStr = null;
@@ -40,7 +44,7 @@ export function getSupabaseUrlForPortal(portalType: 'band' | 'promoter' | 'creat
   return (
     (import.meta as any).env?.VITE_SUPABASE_URL ||
     (import.meta as any).env?.SUPABASE_URL ||
-    'https://cyjnpuneruonskfzpmqo.supabase.co'
+    DEFAULT_SUPABASE_URL
   ).trim();
 }
 
@@ -57,7 +61,7 @@ export function getSupabaseAnonKeyForPortal(portalType: 'band' | 'promoter' | 'c
   return (
     (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
     (import.meta as any).env?.SUPABASE_ANON_KEY ||
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5am5wdW5lcnVvbnNrZnpwbXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NTA1NjIsImV4cCI6MjA5NTQyNjU2Mn0.94h4Ao-cpLXwU8xxJsKln0iud2wOw746yZlAdFP2gDM'
+    DEFAULT_SUPABASE_ANON_KEY
   ).trim();
 }
 
@@ -72,25 +76,29 @@ export function getSupabaseAnonKey(): string {
 export const SUPABASE_URL = (
   (import.meta as any).env?.VITE_SUPABASE_URL ||
   (import.meta as any).env?.SUPABASE_URL ||
-  'https://cyjnpuneruonskfzpmqo.supabase.co'
+  DEFAULT_SUPABASE_URL
 ).trim();
 
 export const SUPABASE_KEY = (
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
   (import.meta as any).env?.SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5am5wdW5lcnVvbnNrZnpwbXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4NTA1NjIsImV4cCI6MjA5NTQyNjU2Mn0.94h4Ao-cpLXwU8xxJsKln0iud2wOw746yZlAdFP2gDM'
+  DEFAULT_SUPABASE_ANON_KEY
 ).trim();
 
-export const rawClient: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {
-    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
-    storageKey: 'nexus_core_auth_token',
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    flowType: 'pkce',
-  },
-});
+export const rawClient: SupabaseClient = createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  {
+    auth: {
+      storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+      storageKey: 'nexus_core_auth_token',
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      flowType: 'pkce',
+    },
+  }
+);
 
 export function clearSupabaseClientsCache() {
   for (const key of Object.keys(rawSupabaseInstances)) {

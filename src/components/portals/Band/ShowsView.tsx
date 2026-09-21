@@ -251,7 +251,7 @@ export const getResolvedMapboxToken = (): string => {
     if (local && local.trim() !== '') return local.trim();
     if ((window as any).__MAPBOX_TOKEN__) return (window as any).__MAPBOX_TOKEN__;
   }
-  return 'pk.eyJ1IjoiZ29yZWdyaW5kZXJjZW8iLCJhIjoiY211ODNzeHdoMDh3MjJ3b2YybXprcjY3aCJ9.7D3CIFFdNiuaSYqvtnz2oQ';
+  return '';
 };
 const mapboxStyleUrl = 'mapbox://styles/mapbox/dark-v11'; // High performance dark theme
 
@@ -3370,7 +3370,7 @@ export default function ShowsView({
                 type="text"
                 value={tokenInputVal}
                 onChange={(e) => setTokenInputVal(e.target.value)}
-                placeholder="pk.eyJ1..."
+                placeholder="Paste your Mapbox access token..."
                 className="w-full bg-[#161a24] border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-[#00ffcc]"
               />
             </div>

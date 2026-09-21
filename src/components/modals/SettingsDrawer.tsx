@@ -363,7 +363,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     rows={3}
                     value={showKey ? customKey : customKey.replace(/./g, '•')}
                     onChange={(e) => setCustomKey(e.target.value)}
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    placeholder="Paste your Supabase anon/public API key..."
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white font-mono focus:outline-none focus:border-[#00ffcc] resize-none"
                   />
                 </div>
