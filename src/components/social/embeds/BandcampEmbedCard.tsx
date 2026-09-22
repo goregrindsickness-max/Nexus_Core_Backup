@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Disc, ExternalLink, Music2, Loader2 } from 'lucide-react';
-import { Browser } from '@capacitor/browser';
 import { requestPauseSceneRadio } from '../utils/mediaPlaybackCoordinator';
 import { resolveBandcampMetadata, formatBandcampEmbedDarkUrl, BandcampResolvedData } from '../../../utils/socialFeedUtils';
 import { getSupabase } from '../../../supabase';
@@ -158,15 +157,6 @@ export const BandcampEmbedCard: React.FC<BandcampEmbedCardProps> = ({
   const artistName = directArtist || asyncResolved?.artist || bData.artist || (post as any)?.songData?.band || (post as any)?.authorName || (post as any)?.author?.name || '';
   const pageLink = directPageUrl || asyncResolved?.pageUrl || bData.pageUrl || bData.page_url || post?.mediaUrl || (post as any)?.media_url || (rawEmbedUrl && !rawEmbedUrl.includes('EmbeddedPlayer') ? rawEmbedUrl : null);
   const itemType = directItemType || asyncResolved?.itemType || bData.itemType || bData.item_type || (rawEmbedUrl?.includes('album=') ? 'album' : 'track');
-  const openBandcampLink = async (url: string) => {
-    const isNative = (window as any).Capacitor?.isNativePlatform();
-    
-    if (isNative) {
-      await Browser.open({ url });
-    } else {
-      window.open(url, '_blank');
-    }
-  };
 
   // Format the iframe embed src URL with pitch black background and cyan highlights
   let resolvedIframeSrc: string | null = null;
@@ -237,18 +227,20 @@ export const BandcampEmbedCard: React.FC<BandcampEmbedCardProps> = ({
         </div>
 
         {pageLink && (
-          <button
-            onClick={() => openBandcampLink(pageLink || activeEmbedUrl)}
+          <a
+            href={pageLink}
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 hover:text-white border border-cyan-500/40 hover:border-cyan-400 text-[9px] font-mono font-bold uppercase tracking-wider transition-all shrink-0 ml-2 shadow-[0_0_10px_rgba(6,182,212,0.15)]"
           >
             <span>BUY / SUPPORT</span>
             <ExternalLink className="w-2.5 h-2.5 text-cyan-400" />
-          </button>
+          </a>
         )}
       </div>
 
-        {/* Embed Player Iframe Container */}
-        <div className="relative w-full bg-black min-h-[120px]">
+      {/* Embed Player Iframe Container */}
+      <div className="relative w-full bg-black min-h-[120px]">
         {resolvedIframeSrc && resolvedIframeSrc.includes('EmbeddedPlayer') ? (
           <iframe
             src={resolvedIframeSrc}
@@ -286,14 +278,16 @@ export const BandcampEmbedCard: React.FC<BandcampEmbedCardProps> = ({
             </div>
 
             {pageLink && (
-  <button
-    onClick={() => openBandcampLink(pageLink || activeEmbedUrl)}
-    className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-  >
-    <span>Play on Bandcamp</span>
-    <ExternalLink className="w-3 h-3" />
-  </button>
-)}
+              <a
+                href={pageLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-mono font-black flex items-center gap-1.5 shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all"
+              >
+                <span>Play on Bandcamp</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
         )}
       </div>
