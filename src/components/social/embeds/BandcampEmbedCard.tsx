@@ -286,16 +286,14 @@ export const BandcampEmbedCard: React.FC<BandcampEmbedCardProps> = ({
             </div>
 
             {pageLink && (
-              <a
-                href={pageLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-mono font-black flex items-center gap-1.5 shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all"
-              >
-                <span>Play on Bandcamp</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
+  <button
+    onClick={() => openBandcampLink(pageLink || activeEmbedUrl)}
+    className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+  >
+    <span>Play on Bandcamp</span>
+    <ExternalLink className="w-3 h-3" />
+  </button>
+)}
           </div>
         )}
       </div>
