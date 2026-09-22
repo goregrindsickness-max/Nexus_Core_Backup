@@ -238,15 +238,17 @@ export const BandcampEmbedCard: React.FC<BandcampEmbedCardProps> = ({
 
         {pageLink && (
           <button
-  onClick={() => openBandcampLink(pageLink || activeEmbedUrl)}
-  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 hover:text-white border border-cyan-500/40 hover:border-cyan-400 text-[9px] font-mono font-bold uppercase tracking-wider transition-all shrink-0 ml-2 shadow-[0_0_10px_rgba(6,182,212,0.15)]"
->
-  <span>BUY / SUPPORT</span>
-  <ExternalLink className="w-2.5 h-2.5 text-cyan-400" />
-</button>
+            onClick={() => openBandcampLink(pageLink || activeEmbedUrl)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 hover:text-white border border-cyan-500/40 hover:border-cyan-400 text-[9px] font-mono font-bold uppercase tracking-wider transition-all shrink-0 ml-2 shadow-[0_0_10px_rgba(6,182,212,0.15)]"
+          >
+            <span>BUY / SUPPORT</span>
+            <ExternalLink className="w-2.5 h-2.5 text-cyan-400" />
+          </button>
+        )}
+      </div>
 
-      {/* Embed Player Iframe Container */}
-      <div className="relative w-full bg-black min-h-[120px]">
+        {/* Embed Player Iframe Container */}
+        <div className="relative w-full bg-black min-h-[120px]">
         {resolvedIframeSrc && resolvedIframeSrc.includes('EmbeddedPlayer') ? (
           <iframe
             src={resolvedIframeSrc}
