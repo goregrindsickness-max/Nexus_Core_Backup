@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "821941806915",
+    "project_id": "project-70bc9409-7c4e-4717-939",
+    "storage_bucket": "project-70bc9409-7c4e-4717-939.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:821941806915:android:2046e9d5638c1c1829b1f6",
+        "android_client_info": {
+          "package_name": "com.nexuscore.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtA5Gfb_3UVby5uusqMDxsZcvevgMw7qM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
