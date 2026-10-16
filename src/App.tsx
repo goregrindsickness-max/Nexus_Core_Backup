@@ -1,3 +1,4 @@
+import { syncPromoterProfileToSupabase } from './services/promoterService';
 import { usePromoterOffers } from './hooks/usePromoterOffers';
 import { useTourNotes } from './hooks/useTourNotes';
 import { useGlobalDataSync } from './hooks/useGlobalDataSync';
@@ -19,6 +20,7 @@ import { HomeV2DashboardView } from './components/dashboard/HomeV2DashboardView'
 import { BrandNavigationHeader } from './components/navigation/BrandNavigationHeader';
 import { NexusTopBar } from './components/navigation/NexusTopBar';
 import { GlobalModalsContainer } from './components/modals/GlobalModalsContainer';
+import { BugMonitorDrawer } from './components/common/BugMonitorDrawer';
 import { useModalStore } from './store/useModalStore';
 import { MainTabRouter } from './components/views/MainTabRouter';
 import { AnimatedCount, AnimatedText } from "./components/AnimatedElements";
@@ -26,11 +28,13 @@ import { BAND_PORTAL_BILLING } from './config/billingMatrix';
 import { useBandState } from "./hooks/useBandState";
 import { useInventoryState } from "./hooks/useInventoryState";
 import { useOffersManagement } from "./hooks/useOffersManagement";
+import { tourPackageManager } from './lib/tourPackageManager';
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import InteractiveRoutePreview from './components/portals/Band/InteractiveRoutePreview';
 import { inventoryStore, posSalesStore, itinerariesStore, socialFeedStore, reviewsStore, showsStore, registrationStagingStore, venuesStore, offersStore, routingBeaconsStore, creativeNodesStore, expensesStore, profileStore } from './utils/indexedDB';
 import { wipeAllLocalData } from './utils/resetApp';
 import { registerNotificationsOnStartup } from './services/pushNotificationService';
+import { initializeSonicActivityListeners } from './services/sonicFootprintService';
 import { formatTimeAgo, extractUUID } from './utils/socialFeedUtils';
 import { 
   Menu, 
@@ -125,7 +129,19 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Sale, Show, InventoryItem, TourNote, Band, UserProfile, ChecklistItem, BankItem, Flight, InventoryAudit, UserReview, LoyaltyMember, Offer, DbNotification, SubscriptionTier, StagedDistroItem, AssetRevenueSplit, CashTransaction, BandJoinRequest, RegisteredWorkspaceRef, hasRegisteredWorkspace, normalizeRegisteredWorkspaces } from './types';
 import { communityBandManager, isCommunityBandRecord } from './lib/communityBands';
 import { isMiguelNameOrProfile } from './components/social/utils/profileUtils';
-import { initOfflineQueue, getSupabase, testSupabaseConnection, getSupabaseUrl, getSupabaseAnonKey, subscribeToTable, sanitizeInventoryItemForDb, executeWithSchemaResilience, getOfflineQueue, processOfflineQueue, isBypassRequiredError, handleDatabaseFailover, saveToFailoverCache, generateUUID, uploadBase64ToStorage, fetchUserBands, sanitizeBandPayload, ensureValidSupabaseAuthSession, autoSyncCreativeProfile, fetchUserCreatives, resolveInventoryImageUrl } from './supabase';
+import { 
+  resolveCreativeName, 
+  resolveCreativeHandle, 
+  resolveCreativeLogo, 
+  resolveCreativeCover, 
+  resolveCreativeBio, 
+  resolveCreativeLocation,
+  resolvePromoterLogo,
+  resolvePromoterCover,
+  resolvePromoterHandle,
+  resolvePromoterLocation
+} from './utils/bandProfileUtils';
+import { initOfflineQueue, getSupabase, testSupabaseConnection, getSupabaseUrl, getSupabaseAnonKey, subscribeToTable, sanitizeInventoryItemForDb, executeWithSchemaResilience, getOfflineQueue, processOfflineQueue, isBypassRequiredError, handleDatabaseFailover, saveToFailoverCache, generateUUID, uploadBase64ToStorage, fetchUserBands, sanitizeBandPayload, ensureValidSupabaseAuthSession, autoSyncCreativeProfile, autoSyncPromoterProfile, normalizeLoadedProfile, fetchUserCreatives, resolveInventoryImageUrl, fetchInventoryItems } from './supabase';
 import AlbumArt from './components/AlbumArt';
 import { useOfflineSync } from './hooks/useOfflineSync';
 import { useSubscriptionTimer } from './hooks/useSubscriptionTimer';
@@ -325,17 +341,36 @@ export default function App() {
       if (parsed) {
         if (parsed.account_type === 'fan' || parsed.account_type === 'fan_only') {
           parsed.active_workspace = 'fan_only';
+        } else if (parsed.active_workspace === 'promoter' || parsed.account_type === 'promoter') {
+          parsed.active_workspace = 'promoter';
         } else {
-          parsed.active_workspace = 'industry_pro';
-          if (parsed.account_type === 'pro' || parsed.account_type === 'band' || parsed.account_type === 'creative' || parsed.account_type === 'promoter' || parsed.account_type === 'label') {
+          parsed.active_workspace = parsed.active_workspace || 'industry_pro';
+          if (parsed.account_type === 'pro' || parsed.account_type === 'band' || parsed.account_type === 'creative' || parsed.account_type === 'label') {
             parsed.account_type = 'industry_pro';
           }
         }
-        if (!parsed.console_handle || parsed.console_handle === 'user' || parsed.console_handle === '@user' || parsed.console_handle.toLowerCase().includes('virulent')) {
-          parsed.console_handle = '@bdmCEO';
-        }
-        if (!parsed.handle || parsed.handle === 'user' || parsed.handle === '@user' || parsed.handle.toLowerCase().includes('virulent')) {
-          parsed.handle = '@bdmCEO';
+        
+        const isOwnerMiguel = isMiguelNameOrProfile(parsed);
+        if (isOwnerMiguel) {
+          if (!parsed.console_handle || parsed.console_handle === 'user' || parsed.console_handle === '@user' || parsed.console_handle.toLowerCase().includes('virulent')) {
+            parsed.console_handle = '@bdmCEO';
+          }
+          if (!parsed.handle || parsed.handle === 'user' || parsed.handle === '@user' || parsed.handle.toLowerCase().includes('virulent')) {
+            parsed.handle = '@bdmCEO';
+          }
+        } else {
+          // If non-Miguel profile was mistakenly stamped with Miguel's handle or brand, heal and cleanse it
+          const rawH = parsed.console_handle || parsed.handle || '';
+          const isStaleAdminHandle = rawH.toLowerCase().includes('bdmceo') || rawH.toLowerCase().includes('goregrinder') || rawH.toLowerCase().includes('virulent');
+          if (isStaleAdminHandle || !parsed.console_handle || parsed.console_handle === 'user' || parsed.console_handle === '@user') {
+            const fallbackHandle = parsed.screen_name || parsed.username || (parsed.name && !parsed.name.toLowerCase().includes('miguel') ? parsed.name.replace(/\s+/g, '_').toLowerCase() : (parsed.email ? parsed.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : 'member'));
+            parsed.console_handle = `@${fallbackHandle.replace(/^@+/, '')}`;
+            parsed.handle = parsed.console_handle;
+          }
+          if (parsed.name && (parsed.name.toLowerCase().includes('miguel') || parsed.name.toLowerCase().includes('goregrinder'))) {
+            parsed.name = parsed.full_name && !parsed.full_name.toLowerCase().includes('miguel') ? parsed.full_name : 'Member Profile';
+            parsed.full_name = parsed.name;
+          }
         }
       }
       return parsed;
@@ -393,6 +428,7 @@ export default function App() {
        wipeAllLocalData();
     }
     registerNotificationsOnStartup();
+    initializeSonicActivityListeners();
   }, []);
 
   // Suppress "Invalid Refresh Token" from Supabase if it throws an unhandled rejection
@@ -640,11 +676,13 @@ export default function App() {
       // Resolve target receiver UUID for the author (never fall back to current user)
       const validReceiverUUID = (targetUserId && extractUUID(targetUserId)) || null;
       
-      if (validReceiverUUID && validReceiverUUID !== userProfile?.id) {
+      if (validReceiverUUID && validReceiverUUID !== userProfile?.id && validReceiverUUID !== userProfile?.email) {
         const notifId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (extractUUID(postId) || '00000000-0000-0000-0000-000000000000');
         const notifItem = {
           id: notifId,
           user_id: validReceiverUUID,
+          actor_id: userProfile?.id || null,
+          actor_email: userProfile?.email || null,
           title: `🔥 NEW REACTION`,
           message: `${actorName} reacted (${label}) to your transmission: "${postSnippet}"`,
           category: 'REACTION',
@@ -664,6 +702,8 @@ export default function App() {
             supabaseClient.from('nexus_notifications').insert([{
               id: notifItem.id,
               user_id: validReceiverUUID,
+              actor_id: userProfile?.id || null,
+              actor_email: userProfile?.email || null,
               title: notifItem.title,
               message: notifItem.message,
               category: 'REACTION',
@@ -865,6 +905,7 @@ export default function App() {
     const handleProfileUpdate = (e: any) => {
       if (e.detail) {
         setUserProfile(e.detail);
+        if (activeTab === 'social') return;
         const ws = e.detail.active_workspace || e.detail.account_type;
         if (ws === 'band') {
           setActiveTab('home-v2');
@@ -882,7 +923,7 @@ export default function App() {
     };
     window.addEventListener('nexus_core_user_profile_updated', handleProfileUpdate);
     return () => window.removeEventListener('nexus_core_user_profile_updated', handleProfileUpdate);
-  }, []);
+  }, [activeTab]);
 
   useEffect(() => {
     const handleRegisterWorkspace = (e: any) => {
@@ -909,9 +950,43 @@ export default function App() {
         }
       }
     };
+    const handleTourShowsUpdate = (e: any) => {
+      const tour = e.detail?.tour;
+      if (!tour) return;
+      const isPublished = tour.publicationStatus === 'public_announced';
+      const isEmbargoed = tour.publicationStatus === 'embargoed_private';
+
+      setShows(prevShows => {
+        return prevShows.map(s => {
+          let belongsToTour = false;
+          if (s.additional_notes) {
+            try {
+              const extra = typeof s.additional_notes === 'string' ? JSON.parse(s.additional_notes) : s.additional_notes;
+              if (extra.tour_id === tour.id) belongsToTour = true;
+            } catch (_) {}
+          }
+          if (!belongsToTour && (s as any).show_name && (s as any).show_name.startsWith(tour.title)) {
+            belongsToTour = true;
+          }
+          if (belongsToTour) {
+            return {
+              ...s,
+              is_published: isPublished,
+              publication_status: tour.publicationStatus,
+              embargo_until_date: tour.embargoUntilDate,
+              status: isEmbargoed ? 'Embargoed' : (s.status === 'Embargoed' ? 'Active' : s.status)
+            };
+          }
+          return s;
+        });
+      });
+    };
+
+    window.addEventListener('shows_updated_from_tour_manager', handleTourShowsUpdate);
     window.addEventListener('nexus_navigate', handleNavigate);
     window.addEventListener('nexus_navigate_tab', handleNavigate);
     return () => {
+      window.removeEventListener('shows_updated_from_tour_manager', handleTourShowsUpdate);
       window.removeEventListener('nexus_navigate', handleNavigate);
       window.removeEventListener('nexus_navigate_tab', handleNavigate);
     };
@@ -1067,13 +1142,23 @@ export default function App() {
   // Helper to determine the current or next show
   const getNextShow = () => {
     if (shows.length === 0) return null;
+    const isEmbargoedOrConfirming = (s: any) => {
+      if (s.is_published === false) return true;
+      if (s.publication_status === 'embargoed_private' || s.publication_status === 'draft') return true;
+      if (s.status === 'Draft' || s.status === 'Embargoed') return true;
+      return false;
+    };
+
     const todayStr = new Date().toISOString().split('T')[0];
     const upcoming = shows
-      .filter(s => s.date >= todayStr)
+      .filter(s => !isEmbargoedOrConfirming(s) && s.date >= todayStr)
       .sort((a, b) => a.date.localeCompare(b.date));
     if (upcoming.length > 0) return upcoming[0];
-    // Fallback: sort all and pick the latest one
-    const sorted = [...shows].sort((a, b) => b.date.localeCompare(a.date));
+    
+    // Fallback: pick only from unembargoed shows
+    const unembargoed = shows.filter(s => !isEmbargoedOrConfirming(s));
+    if (unembargoed.length === 0) return null;
+    const sorted = [...unembargoed].sort((a, b) => b.date.localeCompare(a.date));
     return sorted[0];
   };
 
@@ -1331,6 +1416,69 @@ export default function App() {
       console.error('Failed to merge extended show metadata on mount:', err);
     }
   }, []);
+
+  // Listen to Tour Manager package and publication updates to retroactively update shows in real-time
+  useEffect(() => {
+    const handleTourSync = (e: any) => {
+      const tour = e.detail?.tour;
+      if (!tour) return;
+      const isEmbargoed = tour.publicationStatus === 'embargoed_private';
+      const isPublished = tour.publicationStatus === 'public_announced';
+
+      setShows(prevShows => {
+        const stopMap = new Map<string, any>();
+        if (Array.isArray(tour.stops)) {
+          tour.stops.forEach((st: any) => {
+            stopMap.set(st.id, st);
+            const hexId = (st.id || '').replace(/[^a-f0-9]/gi, '').padEnd(32, '0').slice(0, 32);
+            const stopUuid = hexId.slice(0, 8) + '-' + hexId.slice(8, 12) + '-4' + hexId.slice(13, 16) + '-a' + hexId.slice(17, 20) + '-' + hexId.slice(20, 32);
+            stopMap.set(stopUuid, st);
+          });
+        }
+
+        const updated = prevShows.map(s => {
+          let matches = false;
+          if (s.additional_notes) {
+            try {
+              const extra = typeof s.additional_notes === 'string' ? JSON.parse(s.additional_notes) : s.additional_notes;
+              if (extra.tour_id === tour.id || (extra.stop_id && stopMap.has(extra.stop_id))) {
+                matches = true;
+              }
+            } catch (_) {}
+          }
+          if (!matches && (s as any).show_name && (s as any).show_name.toLowerCase().startsWith((tour.title || '').toLowerCase())) {
+            matches = true;
+          }
+          if (!matches && stopMap.has(s.id)) {
+            matches = true;
+          }
+
+          if (matches) {
+            return {
+              ...s,
+              status: isEmbargoed ? 'Embargoed' : 'Active',
+              is_published: isPublished,
+              publication_status: tour.publicationStatus,
+              embargo_until_date: tour.embargoUntilDate
+            };
+          }
+          return s;
+        });
+
+        // Save updated shows to stores
+        showsStore.setItem('nexus_master_shows', JSON.stringify(updated)).catch(console.warn);
+        try {
+          localStorage.setItem('nexus_core_shows_offline', JSON.stringify(updated));
+        } catch (_) {}
+        return updated;
+      });
+    };
+
+    window.addEventListener('shows_updated_from_tour_manager', handleTourSync);
+    return () => {
+      window.removeEventListener('shows_updated_from_tour_manager', handleTourSync);
+    };
+  }, []);
   
   const isLoadedFromDbRef = useRef(false);
   const { inventory, setInventory, editingItem, setEditingItem, stagedDistroItems, setStagedDistroItems, inventoryAudits, setInventoryAudits } = useInventoryState();
@@ -1394,6 +1542,125 @@ export default function App() {
       }
     }
   }, [userProfile, isOnline]);
+
+  // Proactively hydrate userProfile from Supabase profiles table on startup & when coming online
+  useEffect(() => {
+    const supabase = getSupabase();
+    if (!supabase || !navigator.onLine) return;
+
+    let isSubscribed = true;
+    const syncProfileFromSupabase = async () => {
+      try {
+        await ensureValidSupabaseAuthSession(supabase).catch(() => {});
+        let targetId = userProfile?.id;
+        let targetEmail = (userProfile?.email || '').trim();
+
+        if (!targetId || targetId === 'guest') {
+          const { data: { session } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+          if (session?.user) {
+            targetId = session.user.id;
+            targetEmail = session.user.email || '';
+          }
+        }
+
+        if (!targetId && !targetEmail) return;
+
+        let query = supabase.from('profiles').select('*');
+        if (targetId && targetEmail) {
+          query = query.or(`id.eq.${targetId},email.ilike.${targetEmail}`);
+        } else if (targetId) {
+          query = query.eq('id', targetId);
+        } else if (targetEmail) {
+          query = query.ilike('email', targetEmail);
+        }
+
+        const { data, error } = await query.maybeSingle();
+        if (data && !error && isSubscribed) {
+          // Also fetch live record from promoters table if accessible
+          let promoterRecord: any = null;
+          try {
+            const { data: pData } = await supabase
+              .from('promoters')
+              .select('*')
+              .or(`id.eq.${data.id},user_id.eq.${data.id}`)
+              .maybeSingle();
+            if (pData) promoterRecord = pData;
+          } catch (_) {}
+
+          const normalized = normalizeLoadedProfile(data);
+          if (promoterRecord) {
+            normalized.promoter_id = promoterRecord.id || normalized.promoter_id;
+            normalized.promoter_name = promoterRecord.entity_name || promoterRecord.brand_name || promoterRecord.name || normalized.promoter_name;
+            normalized.promoter_agency = promoterRecord.entity_name || promoterRecord.agency_name || normalized.promoter_agency;
+            normalized.promoter_brand = promoterRecord.entity_name || promoterRecord.brand_name || normalized.promoter_brand;
+            normalized.promoter_logo = promoterRecord.promoter_logo || normalized.promoter_logo;
+            normalized.promoter_cover_image = promoterRecord.promoter_cover_image || normalized.promoter_cover_image;
+            normalized.promoter_bio = promoterRecord.bio || normalized.promoter_bio;
+            normalized.promoter_metadata = {
+              ...(normalized.promoter_metadata || {}),
+              ...promoterRecord,
+              brand_name: normalized.promoter_name,
+              agency_name: normalized.promoter_agency,
+              logo_url: normalized.promoter_logo,
+              banner_url: normalized.promoter_cover_image,
+              bio: normalized.promoter_bio
+            };
+          }
+
+          setUserProfile((prev: any) => {
+            if (!prev) return normalized;
+            const merged = {
+              ...prev,
+              ...normalized,
+              active_workspace: normalized.active_workspace || prev.active_workspace || 'industry_pro',
+              account_type: prev.account_type || normalized.account_type || 'industry pro',
+              promoter_id: normalized.promoter_id || prev.promoter_id,
+              promoter_name: normalized.promoter_name || prev.promoter_name,
+              promoter_agency: normalized.promoter_agency || prev.promoter_agency,
+              promoter_brand: normalized.promoter_brand || prev.promoter_brand,
+              promoter_logo: normalized.promoter_logo || prev.promoter_logo,
+              promoter_cover_image: normalized.promoter_cover_image || prev.promoter_cover_image,
+              promoter_bio: normalized.promoter_bio || prev.promoter_bio,
+              promoter_metadata: {
+                ...(prev.promoter_metadata || {}),
+                ...(normalized.promoter_metadata || {})
+              }
+            };
+            try {
+              profileStore.setItem('nexus_core_user_profile', merged);
+              localStorage.setItem('nexus_core_user_profile', JSON.stringify(merged));
+              if (merged.avatar_url) {
+                localStorage.setItem('nexus_user_avatar', merged.avatar_url);
+                localStorage.setItem('nexus_avatar', merged.avatar_url);
+              }
+              if (merged.banner_url) {
+                localStorage.setItem('nexus_user_banner', merged.banner_url);
+                localStorage.setItem('nexus_banner', merged.banner_url);
+              }
+              if (merged.bio) {
+                localStorage.setItem('nexus_user_bio', merged.bio);
+              }
+              if (merged.promoter_metadata?.bio) {
+                localStorage.setItem('nexus_promoter_bio', merged.promoter_metadata.bio);
+              }
+              if (merged.promoter_metadata?.logo_url) {
+                localStorage.setItem('nexus_promoter_logo', merged.promoter_metadata.logo_url);
+              }
+              if (merged.promoter_metadata?.cover_url || merged.promoter_metadata?.banner_url) {
+                localStorage.setItem('nexus_promoter_cover', merged.promoter_metadata.cover_url || merged.promoter_metadata.banner_url);
+              }
+            } catch (_) {}
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn('[App] Proactive Supabase profile hydration notice:', err);
+      }
+    };
+
+    syncProfileFromSupabase();
+    return () => { isSubscribed = false; };
+  }, [userProfile?.id, isOnline]);
 
   // Load account-specific offline caches instantly upon context/tenant switch to allow pristine clean slates
   useEffect(() => {
@@ -1459,22 +1726,42 @@ export default function App() {
           userBands = [];
         }
 
-        // Restrict userBands strictly to Virulent Excision workspace
-        userBands = userBands.filter((b: any) => {
-          const bId = String(b.id || '').trim();
-          const bName = String(b.name || b.band_name || '').trim().toLowerCase();
-          return bId === 'cbddb810-259b-4230-9968-3d402dfdb872' || bName.includes('virulent excision');
-        });
-        if (userBands.length === 0) {
-          userBands = [{
-            id: 'cbddb810-259b-4230-9968-3d402dfdb872',
-            name: 'Virulent Excision',
-            band_name: 'Virulent Excision',
-            genre: 'Brutal Death Metal',
-            logo_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396',
-            cover_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-cover_1787467851123.jpg?t=1787467851123',
-            owner_id: userProfile?.id
-          }];
+        const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+
+        if (isOwnerMiguel) {
+          // Restrict userBands strictly to Virulent Excision workspace for Miguel
+          userBands = userBands.filter((b: any) => {
+            const bId = String(b.id || '').trim();
+            const bName = String(b.name || b.band_name || '').trim().toLowerCase();
+            return bId === 'cbddb810-259b-4230-9968-3d402dfdb872' || bName.includes('virulent excision');
+          });
+          if (userBands.length === 0) {
+            userBands = [{
+              id: 'cbddb810-259b-4230-9968-3d402dfdb872',
+              name: 'Virulent Excision',
+              band_name: 'Virulent Excision',
+              genre: 'Brutal Death Metal',
+              logo_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396',
+              cover_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-cover_1787467851123.jpg?t=1787467851123',
+              owner_id: userProfile?.id
+            }];
+          }
+        } else {
+          // Cleanse any accidentally inherited Virulent Excision bands for non-Miguel users
+          userBands = userBands.filter((b: any) => {
+            const bId = String(b.id || '').trim();
+            const bName = String(b.name || b.band_name || '').trim().toLowerCase();
+            return bId !== 'cbddb810-259b-4230-9968-3d402dfdb872' && !bName.includes('virulent excision');
+          });
+          if (userProfile?.band_name && userProfile.band_name.toLowerCase().includes('virulent')) {
+            userProfile.band_name = null;
+            userProfile.bandName = null;
+            userProfile.band_id = null;
+            try {
+              localStorage.setItem('nexus_core_user_profile', JSON.stringify(userProfile));
+              localStorage.removeItem('nexus_my_band_profile');
+            } catch (_) {}
+          }
         }
 
         if (userProfile?.id) {
@@ -1482,7 +1769,22 @@ export default function App() {
         }
         setBands(userBands);
 
-        const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+        // Ensure strict separation between Personal Bio and Promoter Bio, and heal if overwritten
+        const authenticPersonalBio = 'Chicago born artist, musician, promoter and entrepreneur with 25 years of history in the extreme metal underground. Probably best known for the Chicago/Texas Domination Fest that ran from 2014-2024. I am also the vocalist of Virulent Excision. Currently my latest ambition has been the creation of this very platform. I wanted to create the sickest all-in-one system for bands, labels, promoters and creators to link up free of algorithms of corporate junk and ads found on the platforms. Enjoy!';
+        const authenticPromoterBio = 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.';
+        const currentBio = userProfile?.bio || '';
+        const promoterBio = (userProfile as any)?.promoter_metadata?.bio || (userProfile as any)?.promoter_bio;
+
+        if (isOwnerMiguel && currentBio && (currentBio === promoterBio || currentBio.toLowerCase().includes('booking management for underground'))) {
+          userProfile.bio = authenticPersonalBio;
+          try {
+            localStorage.setItem('nexus_user_bio', authenticPersonalBio);
+            localStorage.setItem('nexus_core_user_profile', JSON.stringify(userProfile));
+          } catch (_) {}
+          if (supabase && userProfile.id) {
+            supabase.from('profiles').update({ bio: authenticPersonalBio }).eq('id', userProfile.id).then();
+          }
+        }
 
         // Cleanse corrupted band_id or band_name from userProfile if it was set to a community archive or mismatched
         const isCorruptCommunityBand = Boolean(
@@ -1523,7 +1825,7 @@ export default function App() {
           const primaryBand = userBands[0];
           const hasMissingBandFields = !userProfile.band_id || !userProfile.band_name || !userProfile.bandName;
           const isPrimaryValid = !isCommunityBandRecord(primaryBand.id) && !isCommunityBandRecord(primaryBand.name);
-          if (isPrimaryValid && (hasMissingBandFields || (isOwnerMiguel && userProfile.band_name !== 'Virulent Excision'))) {
+          if (isPrimaryValid && ((isOwnerMiguel && userProfile.band_name !== 'Virulent Excision') || (!isOwnerMiguel && hasMissingBandFields && !primaryBand.name?.toLowerCase().includes('virulent')))) {
             const updatedProfile = {
               ...userProfile,
               band_id: isOwnerMiguel ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (userProfile.band_id || primaryBand.id),
@@ -1549,24 +1851,105 @@ export default function App() {
           }
         }
 
-        // Auto-heal existing creative profile ONLY if workspace is registered
-        if (supabase && navigator.onLine && userProfile?.id && userProfile.id !== 'guest' && hasRegisteredWorkspace(userProfile, 'creative')) {
+        // Auto-heal existing creative profile ONLY if workspace is registered or Miguel
+        const hasCreativeAccess = hasRegisteredWorkspace(userProfile, 'creative') || 
+          userProfile?.account_type === 'creative' || 
+          userProfile?.active_workspace === 'creative' || 
+          Boolean(userProfile?.creative_id && userProfile?.creative_id !== userProfile?.id) || 
+          isOwnerMiguel;
+
+        if (supabase && navigator.onLine && userProfile?.id && userProfile.id !== 'guest' && hasCreativeAccess) {
           autoSyncCreativeProfile(userProfile).then((synced) => {
-            if (synced && (!userProfile.creative_id || !(userProfile as any).creative_business_name)) {
-              const healedProfile = {
-                ...userProfile,
-                creative_id: userProfile.creative_id || synced.id,
-                creative_name: userProfile.creative_name || synced.business_name || synced.creative_name,
-                creative_business_name: (userProfile as any).creative_business_name || synced.business_name || synced.creative_name,
-                creative_avatar: (userProfile as any).creative_avatar || synced.avatar_url,
-                creative_banner: (userProfile as any).creative_banner || synced.banner_url,
-              };
-              setUserProfile(healedProfile);
-              try {
-                localStorage.setItem('nexus_core_user_profile', JSON.stringify(healedProfile));
-              } catch (_) {}
+            if (synced) {
+              setUserProfile((prev: any) => {
+                if (!prev) return prev;
+                const cName = synced.business_name || synced.creative_name || resolveCreativeName(prev);
+                const cHandle = synced.creative_handle || resolveCreativeHandle(prev);
+                const cAvatar = synced.avatar_url || synced.creative_avatar || resolveCreativeLogo(prev);
+                const cBanner = synced.banner_url || synced.creative_banner || resolveCreativeCover(prev);
+                const cBio = synced.bio || resolveCreativeBio(prev);
+                const healedProfile = {
+                  ...prev,
+                  creative_id: synced.id || prev.creative_id || (isOwnerMiguel ? 'c-vortex' : generateUUID()),
+                  creative_name: cName,
+                  creative_business_name: cName,
+                  creative_handle: cHandle,
+                  creative_avatar: cAvatar,
+                  creative_banner: cBanner,
+                  creative_bio: cBio,
+                  creative_metadata: {
+                    ...(prev.creative_metadata || {}),
+                    ...synced,
+                    business_name: cName,
+                    creative_handle: cHandle,
+                    avatar_url: cAvatar,
+                    banner_url: cBanner,
+                    bio: cBio,
+                  }
+                };
+                try {
+                  localStorage.setItem('nexus_core_user_profile', JSON.stringify(healedProfile));
+                  if (cName) localStorage.setItem('nexus_creative_business_name', cName);
+                  if (cHandle) localStorage.setItem('nexus_creative_handle', cHandle);
+                  if (cAvatar) localStorage.setItem('nexus_creative_avatar', cAvatar);
+                  if (cBanner) localStorage.setItem('nexus_creative_banner', cBanner);
+                  if (cBio) localStorage.setItem('nexus_creative_bio', cBio);
+                } catch (_) {}
+                return healedProfile;
+              });
             }
           }).catch((err) => console.warn('Creative auto-sync notice:', err));
+        }
+
+        // Auto-heal existing promoter profile from Supabase ONLY if user is registered promoter or Miguel
+        const hasPromoterAccess = hasRegisteredWorkspace(userProfile, 'promoter') || 
+          userProfile?.account_type === 'promoter' || 
+          userProfile?.active_workspace === 'promoter' || 
+          Boolean(userProfile?.promoter_id && userProfile?.promoter_id !== userProfile?.id) || 
+          isOwnerMiguel;
+
+        if (supabase && navigator.onLine && userProfile?.id && userProfile.id !== 'guest' && hasPromoterAccess) {
+          autoSyncPromoterProfile(userProfile).then((synced) => {
+            if (synced) {
+              setUserProfile((prev: any) => {
+                if (!prev) return prev;
+                const healedProfile = {
+                  ...prev,
+                  promoter_id: synced.id || prev.promoter_id,
+                  promoter_name: synced.brand_name || synced.name || prev.promoter_name,
+                  promoter_agency: synced.agency_name || synced.brand_name || prev.promoter_agency,
+                  promoter_brand: synced.brand_name || prev.promoter_brand,
+                  promoter_logo: synced.promoter_logo || synced.logo_url || prev.promoter_logo,
+                  promoter_cover_image: synced.promoter_cover_image || synced.banner_url || prev.promoter_cover_image,
+                  promoter_bio: synced.bio || prev.promoter_bio,
+                  promoter_metadata: {
+                    ...(prev.promoter_metadata || {}),
+                    ...synced
+                  }
+                };
+                try {
+                  localStorage.setItem('nexus_core_user_profile', JSON.stringify(healedProfile));
+                  if (synced.bio) localStorage.setItem('nexus_promoter_bio', synced.bio);
+                  if (synced.promoter_logo || synced.logo_url) localStorage.setItem('nexus_promoter_logo', synced.promoter_logo || synced.logo_url);
+                  if (synced.promoter_cover_image || synced.banner_url) localStorage.setItem('nexus_promoter_cover', synced.promoter_cover_image || synced.banner_url);
+                } catch (_) {}
+                return healedProfile;
+              });
+            }
+          }).catch((err) => console.warn('Promoter auto-sync notice:', err));
+        } else if (!hasPromoterAccess && !isOwnerMiguel && userProfile) {
+          if (userProfile.promoter_agency || userProfile.promoter_brand || userProfile.promoter_name || (userProfile.promoter_id && userProfile.promoter_id === userProfile.id)) {
+            setUserProfile((prev: any) => {
+              if (!prev) return prev;
+              const cleaned = { ...prev };
+              delete cleaned.promoter_agency;
+              delete cleaned.promoter_brand;
+              delete cleaned.promoter_name;
+              delete cleaned.promoter_id;
+              try { localStorage.setItem('nexus_core_user_profile', JSON.stringify(cleaned)); } catch (_) {}
+              return cleaned;
+            });
+          }
         }
 
         let userActiveId = 'cbddb810-259b-4230-9968-3d402dfdb872';
@@ -1850,21 +2233,61 @@ export default function App() {
 
   // Filtered lists for the active band context
   const filteredShows = useMemo(() => {
+    const curBandName = (activeBand?.name || 'Virulent Excision').trim().toLowerCase();
+    const curBandId = (activeBandId || 'b1').trim();
+
     return shows.filter(show => {
       // 1. If marked as community-submitted, or created via community hub (sh_comm_), or band_id is 'community_hub' / starts with 'community':
       const isCommunityOnly = show.is_community_submitted === true || 
-        (typeof show.id === 'string' && show.id.startsWith('sh_comm_')) || 
+        (typeof show.id === 'string' && (show.id.startsWith('sh_comm_') || show.id.startsWith('df000000'))) || 
         (show.band_id && (show.band_id === 'community_hub' || show.band_id.startsWith('community')));
 
       if (isCommunityOnly) {
         // Only include in band workspace if explicitly assigned to this specific band's ID
-        return Boolean(show.band_id && show.band_id === activeBandId && show.band_id !== 'community_hub');
+        return Boolean(show.band_id && show.band_id === curBandId && show.band_id !== 'community_hub');
       }
 
-      // 2. Regular band shows: belong to this band or legacy show without band_id
-      return !show.band_id || show.band_id === activeBandId;
+      // Check additional_notes for tour package metadata or external band info
+      let tourId = '';
+      let tourHeadliner = '';
+      let tourTitle = '';
+      if (show.additional_notes) {
+        try {
+          const extra = typeof show.additional_notes === 'string' ? JSON.parse(show.additional_notes) : show.additional_notes;
+          tourId = extra.tour_id || '';
+          tourHeadliner = extra.headliner || '';
+          tourTitle = extra.tour_title || extra.tour_name || '';
+        } catch (_) {}
+      }
+
+      // If show has a headliner that is explicitly another band (e.g. Molested Divinity, Dying Fetus, Vader):
+      const showHeadliner = (show.headliner || tourHeadliner || '').toLowerCase().trim();
+      const showTitle = (show.name || show.show_name || show.festival_name || tourTitle || '').toLowerCase().trim();
+
+      if (showHeadliner && !showHeadliner.includes(curBandName) && !curBandName.includes(showHeadliner)) {
+        return false;
+      }
+
+      // Specific check for Primordial Hatred Tour, Dying Fetus, or Reign Forever Kingdom
+      if (showTitle.includes('primordial hatred') || showTitle.includes('dying fetus') || showTitle.includes('reign forever kingdom')) {
+        if (!curBandName.includes('molested') && !curBandName.includes('dying fetus') && !curBandName.includes('vader')) {
+          return false;
+        }
+      }
+
+      // 2. Regular band shows: belong to this band
+      if (show.band_id) {
+        return show.band_id === curBandId;
+      }
+
+      // If show has no band_id, check that it is not a managed client tour stop belonging to another tour
+      if (show.is_managed_client_booking || tourId) {
+        return false;
+      }
+
+      return true;
     });
-  }, [shows, activeBandId]);
+  }, [shows, activeBandId, activeBand?.name]);
 
   const filteredSales = useMemo(() => {
     return sales.filter(sale => !sale.band_id || sale.band_id === activeBandId);
@@ -2076,14 +2499,161 @@ export default function App() {
   };
 
   const handleOpenMyProfile = () => {
-    const personalHandle = userProfile?.console_handle && !userProfile.console_handle.toLowerCase().includes('virulent') && userProfile.console_handle !== '@user' && userProfile.console_handle !== 'user'
+    const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+    const activeWs = userProfile?.active_workspace || userProfile?.account_type;
+
+    if (activeWs === 'creative') {
+      const creativeName = resolveCreativeName(userProfile);
+      const creativeLogo = resolveCreativeLogo(userProfile);
+      const creativeCover = resolveCreativeCover(userProfile);
+      const creativeHandle = resolveCreativeHandle(userProfile);
+      const creativeBio = resolveCreativeBio(userProfile);
+      const creativeLoc = resolveCreativeLocation(userProfile);
+
+      const detailPayload = {
+        id: (userProfile as any)?.creative_id || userProfile?.id || 'creative:vortex',
+        user_id: userProfile?.id,
+        name: creativeName,
+        legalName: userProfile?.full_name || userProfile?.name,
+        business_name: creativeName,
+        creative_name: creativeName,
+        creative_business_name: creativeName,
+        handle: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+        console_handle: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+        username: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+        avatar: creativeLogo,
+        avatar_url: creativeLogo,
+        logo: creativeLogo,
+        logo_url: creativeLogo,
+        creative_avatar: creativeLogo,
+        banner: creativeCover,
+        banner_url: creativeCover,
+        cover_url: creativeCover,
+        creative_banner: creativeCover,
+        location: creativeLoc,
+        role: 'Creative',
+        account_type: 'creative',
+        type: 'creative',
+        portalRole: 'creative',
+        isPersonal: false,
+        isCreativeProfile: true,
+        isBandProfile: false,
+        isYou: true,
+        badges: ['🛠️ Creative Pro', '🎨 Designer'],
+        customBadges: ['🛠️ Creative Pro', '🎨 Designer'],
+        bio: creativeBio,
+        creative_metadata: (userProfile as any)?.creative_metadata || {}
+      };
+
+      setActiveTab('social');
+      triggerNotification?.("⚡ Opening your Creative workspace profile...");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+      }, 100);
+      return;
+    }
+
+    if (activeWs === 'promoter') {
+      const pm = (userProfile as any)?.promoter_metadata || {};
+      const promoterName = pm.brand_name || pm.agency_name || (userProfile as any)?.promoter_agency || (isOwnerMiguel ? 'Nexus Live Productions' : (userProfile?.name ? `${userProfile.name} Productions` : 'Promoter Operations'));
+      const promoterLogo = resolvePromoterLogo(userProfile);
+      const promoterCover = resolvePromoterCover(userProfile);
+      const promoterBioText = pm.bio || (userProfile as any)?.promoter_bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent live event promoter.');
+      const rawHandle = (userProfile as any)?.promoter_handle || resolvePromoterHandle(userProfile);
+      const resolvedHandle = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`;
+
+      const detailPayload = {
+        id: (userProfile as any)?.promoter_id || userProfile?.id || (isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : 'promoter_profile'),
+        user_id: userProfile?.id,
+        email: userProfile?.email || '',
+        name: promoterName,
+        legalName: userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Promoter User'),
+        full_name: userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Promoter User'),
+        handle: resolvedHandle,
+        console_handle: resolvedHandle,
+        username: resolvedHandle,
+        avatar: promoterLogo,
+        avatar_url: promoterLogo,
+        logo: promoterLogo,
+        logo_url: promoterLogo,
+        promoter_logo: promoterLogo,
+        banner: promoterCover,
+        banner_url: promoterCover,
+        cover: promoterCover,
+        cover_url: promoterCover,
+        promoter_cover_image: promoterCover,
+        location: resolvePromoterLocation(userProfile),
+        role: 'Event Promoter',
+        account_type: 'promoter',
+        type: 'promoter',
+        portalRole: 'promoter',
+        isPersonal: false,
+        isPromoterProfile: true,
+        is_promoter: true,
+        isBandProfile: false,
+        isYou: true,
+        badges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+        customBadges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+        bio: promoterBioText,
+        promoter_metadata: pm
+      };
+
+      setActiveTab('social');
+      triggerNotification?.("⚡ Opening your Promoter workspace profile...");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+      }, 100);
+      return;
+    }
+
+    if (activeWs === 'band' && activeBand) {
+      const bandName = activeBand?.name || 'Band';
+      const bandHandle = (activeBand as any)?.custom_slug || (activeBand as any)?.slug || '@band';
+      const bandLogo = (activeBand as any)?.logo_url || null;
+      const bandCover = (activeBand as any)?.banner_url || (activeBand as any)?.cover_url || null;
+      const bandBio = activeBand?.bio || 'Band profile.';
+      const detailPayload = {
+        id: activeBand?.id || 'band:active',
+        name: bandName,
+        legalName: bandName,
+        handle: bandHandle.startsWith('@') ? bandHandle : `@${bandHandle}`,
+        avatar: bandLogo,
+        avatar_url: bandLogo,
+        logo: bandLogo,
+        logo_url: bandLogo,
+        banner: bandCover,
+        banner_url: bandCover,
+        cover: bandCover,
+        cover_url: bandCover,
+        location: activeBand?.homebase || 'Global',
+        role: 'Band / Artist',
+        account_type: 'band',
+        type: 'band',
+        portalRole: 'band',
+        isPersonal: false,
+        isBandProfile: true,
+        isYou: true,
+        badges: ['⚡ Band Core', '🎵 Metal'],
+        bio: bandBio
+      };
+
+      setActiveTab('social');
+      triggerNotification?.("⚡ Opening your Band workspace profile...");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+      }, 100);
+      return;
+    }
+
+    const userFallbackHandle = userProfile?.console_handle || userProfile?.handle || userProfile?.username || userProfile?.screen_name || (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? userProfile.name.replace(/\s+/g, '_').toLowerCase() : (userProfile?.email ? userProfile.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : (isOwnerMiguel ? 'bdmCEO' : 'member')));
+    const personalHandle = userProfile?.console_handle && (!userProfile.console_handle.toLowerCase().includes('virulent') || isOwnerMiguel) && (!userProfile.console_handle.toLowerCase().includes('bdmceo') || isOwnerMiguel) && userProfile.console_handle !== '@user' && userProfile.console_handle !== 'user'
       ? (userProfile.console_handle.startsWith('@') ? userProfile.console_handle : `@${userProfile.console_handle}`)
-      : '@bdmCEO';
+      : (userFallbackHandle.startsWith('@') ? userFallbackHandle : `@${userFallbackHandle}`);
 
     const detailPayload = {
       id: userProfile?.id,
-      name: userProfile?.name || userProfile?.full_name || 'Miguel Goregrinder Medina',
-      legalName: userProfile?.full_name || userProfile?.name || 'Miguel Goregrinder Medina',
+      name: userProfile?.name || userProfile?.full_name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Member Profile'),
+      legalName: userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Member Profile'),
       handle: personalHandle,
       console_handle: personalHandle,
       username: personalHandle,
@@ -2193,7 +2763,7 @@ export default function App() {
     if (userProfile && !reviewerName) {
       setReviewerName(userProfile?.name);
     }
-  }, [userProfile]);
+  }, [userProfile?.id]);
 
   useEffect(() => {
     if (activeBand && !reviewerGroup) {
@@ -2500,7 +3070,12 @@ export default function App() {
           }
 
           const shws = await showsStore.getItem('nexus_master_shows');
-          if (shws) setShows(JSON.parse(shws as string));
+          if (shws) {
+            const parsed = JSON.parse(shws as string);
+            if (Array.isArray(parsed)) {
+              setShows(parsed);
+            }
+          }
 
           const flts = await itinerariesStore.getItem('nexus_master_itineraries');
           if (flts) setFlights(JSON.parse(flts as string));
@@ -2544,7 +3119,7 @@ export default function App() {
         try {
           const { data: showsDb, error: showsErr } = await supabase
             .from('shows')
-            .select('*')
+            .select('id, show_name, headliner, show_date, date, doors_time, venue_name, city, price, support_lineup, flyer_url, created_at')
             .order('date', { ascending: true });
           if (!showsErr && showsDb) {
             if (showsDb.length > 0) {
@@ -2556,7 +3131,7 @@ export default function App() {
                 supabase.from('shows').delete().in('id', Array.from(mockShowIds)).then();
               }
 
-              let mergedShows = realShows as Show[];
+              let mergedShows = (realShows as any[]) as Show[];
               try {
                 const existing = localStorage.getItem('nexus_core_shows_extended');
                 const extendedMap = existing ? JSON.parse(existing) : {};
@@ -2578,7 +3153,7 @@ export default function App() {
                 const seenShowSigs = new Set<string>();
                 const uniqueShows: Show[] = [];
 
-                for (const s of realShows) {
+                for (const s of (realShows as any[])) {
                   const extra = extendedMap[s.id] || (s.show_name ? Object.values(extendedMap).find((v: any) => v.name === s.show_name || v.show_name === s.show_name || (v.date === s.date && v.city === s.city)) : null);
                   const formatted: Show = {
                     ...s,
@@ -2587,6 +3162,7 @@ export default function App() {
                     venue: s.venue || s.venue_name || s.venue_address || s.name || s.show_name,
                     venue_name: s.venue_name || s.venue || s.name,
                     date: s.date || s.show_date,
+                    status: s.status || 'confirmed',
                     ...(extra || {})
                   };
 
@@ -2609,6 +3185,10 @@ export default function App() {
               } catch (_) {}
               setShows(mergedShows);
               showsStore.setItem('nexus_master_shows', JSON.stringify(mergedShows)).catch(console.warn);
+              try {
+                tourPackageManager.incorporateShowsFromDb(showsDb);
+                tourPackageManager.purgeCommunityTours();
+              } catch (_) {}
               addLog(`Synchronized ${realShows.length} tours from database table.`);
             } else {
               addLog(`Shows table is empty in live database.`);
@@ -2664,53 +3244,43 @@ export default function App() {
 
         // Try load inventory
         try {
-          const { data: inventoryDb, error: inventoryErr } = await supabase
-            .from('inventory')
-            .select('id, name, table_stock, van_stock, low_threshold, status, item_type, price, image_url, image_path, border_color, band_id, is_exclusive, sku, initial_batch_size, cost, barcode, variants');
-          if (!inventoryErr && inventoryDb) {
-            let cachedVariants: Record<string, any> = {};
-            try {
-              const cvStr = localStorage.getItem('nexus_core_variants_cache');
-              if (cvStr) cachedVariants = JSON.parse(cvStr);
-            } catch (_) {}
+          const fetchedItems = await fetchInventoryItems(activeBandIdRef.current || undefined);
+          let cachedVariants: Record<string, any> = {};
+          try {
+            const cvStr = localStorage.getItem('nexus_core_variants_cache');
+            if (cvStr) cachedVariants = JSON.parse(cvStr);
+          } catch (_) {}
 
-            const formatted = inventoryDb.map((item: any) => ({
-              ...item,
-              image_url: resolveInventoryImageUrl(item),
-              image_path: item.image_path || undefined,
-              variants: item.variants || cachedVariants[item.id],
-              band_id: item.band_id || activeBandIdRef.current
-            }));
+          const formatted = (fetchedItems || []).map((item: any) => ({
+            ...item,
+            image_url: resolveInventoryImageUrl(item),
+            image_path: item.image_path || undefined,
+            variants: item.variants || cachedVariants[item.id],
+            band_id: item.band_id || activeBandIdRef.current
+          }));
 
-            // --- OFFLINE/BYPASS UNION MERGE ---
-            const suffix = activeBandIdRef.current || userProfileRef.current?.id || 'offline';
-            let existingLocal: InventoryItem[] = [];
-            try {
-              const cachedStr = localStorage.getItem(`nexus_core_${suffix}_inventory_offline`);
-              if (cachedStr) existingLocal = JSON.parse(cachedStr);
-            } catch (_) {}
+          // --- OFFLINE/BYPASS UNION MERGE ---
+          const suffix = activeBandIdRef.current || userProfileRef.current?.id || 'offline';
+          let existingLocal: InventoryItem[] = [];
+          try {
+            const cachedStr = localStorage.getItem(`nexus_core_${suffix}_inventory_offline`);
+            if (cachedStr) existingLocal = JSON.parse(cachedStr);
+          } catch (_) {}
 
-            const dbIdSet = new Set(formatted.map(item => item.id));
-            const localOnlyItems = existingLocal.filter(item => item && item.id && !dbIdSet.has(item.id));
-            const merged = [...formatted, ...localOnlyItems];
+          const dbIdSet = new Set(formatted.map(item => item.id));
+          const localOnlyItems = existingLocal.filter(item => item && item.id && !dbIdSet.has(item.id));
+          const merged = [...formatted, ...localOnlyItems];
 
-            setInventory(merged as InventoryItem[]);
-            inventoryStore.setItem('nexus_master_inventory', JSON.stringify(merged)).catch(console.warn);
+          setInventory(merged as InventoryItem[]);
+          inventoryStore.setItem('nexus_master_inventory', JSON.stringify(merged)).catch(console.warn);
 
-            if (formatted.length > 0) {
-              if (localOnlyItems.length > 0) {
-                addLog(`Synchronized ${formatted.length} inventory products from Supabase. Merged and preserved ${localOnlyItems.length} unsynced local items.`);
-              } else {
-                addLog(`Synchronized ${formatted.length} inventory products from Supabase.`);
-              }
-            } else {
-              addLog(`Inventory table is empty in live database. Restored ${localOnlyItems.length} cached items.`);
-            }
-          } else if (inventoryErr) {
-            // Silently catch egress block, preserving UI state!
+          if (formatted.length > 0) {
+            addLog(`Synchronized ${formatted.length} inventory products from Supabase and global cloud sync.`);
+          } else {
+            addLog(`Inventory synced. Loaded ${localOnlyItems.length} cached items.`);
           }
         } catch (e: any) {
-          // Silently catch egress block, preserving UI state!
+          console.warn('Inventory loading warning:', e);
         }
 
         // Try load inventory audits
@@ -2883,6 +3453,9 @@ export default function App() {
             // Deduplicate loaded notifications to guarantee no duplicates reach the state
             const seenIds = new Set<string>();
             const seenMessages = new Map<string, number>();
+            const myId = userProfile?.id;
+            const myEmail = userProfile?.email;
+
             const cleanNotifs = (notificationsDb as any[]).map(row => ({
               ...row,
               message: row.message || row.content || row.title || row.body || '',
@@ -2890,6 +3463,26 @@ export default function App() {
             })).filter(notif => {
               if (!notif || !notif.id) return false;
               if (seenIds.has(notif.id)) return false;
+
+              // Never show self-notifications (where current user was the actor)
+              if (myId && (notif.actor_id === myId || notif.data?.actor_id === myId)) return false;
+              if (myEmail && (notif.actor_email === myEmail || notif.data?.actor_email === myEmail)) return false;
+
+              const isReaction = notif.category === 'REACTION' || notif.type === 'post_reaction' || (notif.title && String(notif.title).toUpperCase().includes('REACTION'));
+              if (isReaction) {
+                const isForMe = Boolean(
+                  (myId && notif.user_id === myId) ||
+                  (myEmail && (notif.user_id === myEmail || notif.data?.user_id === myEmail))
+                );
+                if (!isForMe) return false;
+              } else if (notif.user_id) {
+                const isForMe = Boolean(
+                  (myId && notif.user_id === myId) ||
+                  (myEmail && (notif.user_id === myEmail || notif.data?.user_id === myEmail))
+                );
+                if (!isForMe) return false;
+              }
+
               seenIds.add(notif.id);
 
               const msgKey = `${notif.category || ''}:${notif.message}`;
@@ -3264,13 +3857,25 @@ export default function App() {
   }, [filteredSales, inventory]);
 
   // Active or next scheduled show (closest to today, within 1 year in the future)
-  const sortedShows = [...filteredShows].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const sortedShows = useMemo(() => {
+    return [...filteredShows].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [filteredShows]);
+
+  const publicAnnouncedShows = useMemo(() => {
+    return sortedShows.filter(s => {
+      if (s.is_published === false) return false;
+      if (s.publication_status === 'embargoed_private' || s.publication_status === 'draft') return false;
+      if (s.status === 'Draft' || s.status === 'Embargoed') return false;
+      return true;
+    });
+  }, [sortedShows]);
+
   const todayStr = new Date().toISOString().split('T')[0];
   const oneYearFromNow = new Date();
   oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
   const oneYearFromNowStr = oneYearFromNow.toISOString().split('T')[0];
   
-  const currentOrNextShow = sortedShows.find(s => s.date >= todayStr && s.date <= oneYearFromNowStr) || null;
+  const currentOrNextShow = publicAnnouncedShows.find(s => s.date >= todayStr && s.date <= oneYearFromNowStr) || null;
   
   // Calculate active shows needing settlement
   const showsNeedingSettlement = useMemo(() => {
@@ -3802,24 +4407,26 @@ list.push({
 
       <div className="flex-1 w-full flex flex-col relative">
         {showSplash ? (
-          <SplashView 
-            isLoggedOut={isLoggedOut}
-            onGoToDashboard={() => {
-              const saved = localStorage.getItem('nexus_core_user_profile');
-              const profileSaved = saved !== null && saved !== 'null';
-              if (profileSaved) {
-                setIsLoggedOut(false);
-              } else {
+          <div className="fixed inset-0 z-[9999] bg-[#07080a] overflow-y-auto custom-scrollbar">
+            <SplashView 
+              isLoggedOut={isLoggedOut}
+              onGoToDashboard={() => {
+                const saved = localStorage.getItem('nexus_core_user_profile');
+                const profileSaved = saved !== null && saved !== 'null';
+                if (profileSaved) {
+                  setIsLoggedOut(false);
+                } else {
+                  setIsLoggedOut(true);
+                }
+                setShowSplash(false);
+              }} 
+              onCreateAccount={() => {
+                setLoginInitialTab('signup');
                 setIsLoggedOut(true);
-              }
-              setShowSplash(false);
-            }} 
-            onCreateAccount={() => {
-              setLoginInitialTab('signup');
-              setIsLoggedOut(true);
-              setShowSplash(false);
-            }}
-          />
+                setShowSplash(false);
+              }}
+            />
+          </div>
         ) : isLoggedOut ? (
           <LoginView 
             initialTab={loginInitialTab} 
@@ -3873,6 +4480,99 @@ list.push({
                   }
                 }
 
+                const hasUnlockedPromoterWorkspace = Boolean(
+                  customProfile.promoter_id ||
+                  customProfile.promoter_agency ||
+                  customProfile.promoter_brand ||
+                  customProfile.promoter_name ||
+                  customProfile.promoter_metadata?.brand_name ||
+                  customProfile.promoter_metadata?.agency_name ||
+                  hasRegisteredWorkspace(customProfile, 'promoter')
+                );
+
+                if (hasUnlockedPromoterWorkspace) {
+                  const isOwnerMiguel = isMiguelNameOrProfile(customProfile);
+                  const pName = customProfile.promoter_metadata?.brand_name || customProfile.promoter_metadata?.agency_name || customProfile.promoter_agency || customProfile.promoter_brand || customProfile.promoter_name || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations');
+                  const pId = customProfile.promoter_id || (customProfile.promoter_metadata as any)?.id || customProfile.id;
+                  const pLogo = customProfile.promoter_logo || customProfile.promoter_metadata?.logo_url || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : (customProfile.avatar_url || ''));
+                  const pCover = customProfile.promoter_cover_image || customProfile.promoter_metadata?.banner_url || customProfile.promoter_metadata?.cover_url || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : (customProfile.banner_url || ''));
+                  const pBio = customProfile.promoter_bio || customProfile.promoter_metadata?.bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.');
+
+                  customProfile.promoter_id = pId;
+                  customProfile.promoter_agency = pName;
+                  customProfile.promoter_brand = pName;
+                  customProfile.promoter_name = pName;
+                  customProfile.promoter_logo = pLogo;
+                  customProfile.promoter_cover_image = pCover;
+                  customProfile.promoter_bio = pBio;
+
+                  if (!hasRegisteredWorkspace(customProfile, 'promoter')) {
+                    customProfile.registered_workspaces = normalizeRegisteredWorkspaces(customProfile.registered_workspaces, [{
+                      type: 'promoter',
+                      id: pId,
+                      name: pName
+                    }]);
+                  }
+                  // Automatically sync promoter profile to Supabase public.promoters
+                  syncPromoterProfileToSupabase(customProfile).catch((err) => {
+                    console.warn('[Supabase Promoter Sync Warning]:', err);
+                  });
+                }
+
+                const hasUnlockedCreativeWorkspace = Boolean(
+                  customProfile.creative_id ||
+                  customProfile.creative_business_name ||
+                  customProfile.creative_name ||
+                  customProfile.creative_metadata?.business_name ||
+                  hasRegisteredWorkspace(customProfile, 'creative') ||
+                  isMiguelNameOrProfile(customProfile)
+                );
+
+                if (hasUnlockedCreativeWorkspace) {
+                  const isOwnerMiguel = isMiguelNameOrProfile(customProfile);
+                  const cName = resolveCreativeName(customProfile);
+                  const cHandle = resolveCreativeHandle(customProfile);
+                  const cId = customProfile.creative_id || (isOwnerMiguel ? 'c-vortex' : generateUUID());
+                  const cLogo = resolveCreativeLogo(customProfile);
+                  const cCover = resolveCreativeCover(customProfile);
+                  const cBio = resolveCreativeBio(customProfile);
+                  const cLoc = resolveCreativeLocation(customProfile);
+
+                  customProfile.creative_id = cId;
+                  customProfile.creative_business_name = cName;
+                  customProfile.creative_name = cName;
+                  customProfile.creative_handle = cHandle;
+                  customProfile.creative_avatar = cLogo;
+                  customProfile.creative_banner = cCover;
+                  customProfile.creative_bio = cBio;
+                  customProfile.creative_metadata = {
+                    ...(customProfile.creative_metadata || {}),
+                    business_name: cName,
+                    creative_handle: cHandle,
+                    avatar_url: cLogo,
+                    banner_url: cCover,
+                    bio: cBio,
+                    city: customProfile.creative_metadata?.city || (isOwnerMiguel ? 'Detroit' : 'Detroit'),
+                    state_province: customProfile.creative_metadata?.state_province || (isOwnerMiguel ? 'MI' : 'MI'),
+                    country: 'USA'
+                  };
+
+                  if (!hasRegisteredWorkspace(customProfile, 'creative')) {
+                    customProfile.registered_workspaces = normalizeRegisteredWorkspaces(customProfile.registered_workspaces, [{
+                      type: 'creative',
+                      id: cId,
+                      name: cName
+                    }]);
+                  }
+                }
+
+                if (isMiguelNameOrProfile(customProfile)) {
+                  const veLogo = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396';
+                  if (!customProfile.band_logo || customProfile.band_logo === customProfile.promoter_logo) {
+                    customProfile.band_logo = veLogo;
+                  }
+                }
+
                 // Preserve personal profile avatar & banner (DO NOT overwrite with band logo)
                 if (customBand && customBand.name) {
                   customProfile.bandName = customBand.name;
@@ -3923,7 +4623,7 @@ list.push({
               addLog(customProfile ? `New crew profile signed up: ${customProfile.name} (${customProfile.role}) for ${customBand?.name || 'Artist'}` : 'Session restored by authorized administrator.');
             }} 
           />
-        ) : (!showSplash && !isLoggedOut && (activeTab as string) === 'social') ? (
+        ) : ((activeTab as string) === 'social') ? (
           <UniversalSocialFeed 
             userProfile={userProfile}
             setUserProfile={setUserProfile}
@@ -3975,7 +4675,7 @@ list.push({
               }
             }}
           />
-        ) : (!showSplash && !isLoggedOut && (userProfile?.account_type === 'creative' || userProfile?.active_workspace === 'creative' || (activeTab as string) === 'creative')) ? (
+        ) : (userProfile?.account_type === 'creative' || userProfile?.active_workspace === 'creative' || (activeTab as string) === 'creative') ? (
           <div className="flex-grow overflow-y-auto">
               <CreativeDashboardViewV2
                 onUpgradeToPro={() => setShowWorkspaceRegistration(true)}
@@ -4007,7 +4707,7 @@ list.push({
                 addLog={addLog}
               />
           </div>
-        ) : (!showSplash && !isLoggedOut && (userProfile?.account_type === 'label' || userProfile?.active_workspace === 'label' || (activeTab as string) === 'label')) ? (
+        ) : (userProfile?.account_type === 'label' || userProfile?.active_workspace === 'label' || (activeTab as string) === 'label') ? (
             <LabelDashboardViewV2
               userProfile={userProfile}
               setUserProfile={setUserProfile}
@@ -4020,7 +4720,7 @@ list.push({
                 triggerNotification('Session closed. Goodbye.');
               }}
             />
-        ) : (!showSplash && !isLoggedOut && FLAGS.ENABLE_PROMOTER_PORTAL && (userProfile?.account_type === 'promoter' || userProfile?.active_workspace === 'promoter' || (activeTab as string) === 'promoter')) ? (
+        ) : (FLAGS.ENABLE_PROMOTER_PORTAL && (userProfile?.account_type === 'promoter' || userProfile?.active_workspace === 'promoter' || (activeTab as string) === 'promoter')) ? (
             <div className="flex-grow overflow-y-auto">
               <PromoterDashboardViewV2
                 onUpgradeToPro={() => setShowWorkspaceRegistration(true)}
@@ -4380,6 +5080,13 @@ list.push({
       {/* Real-time overlay portals */}
       <FloatingChatHead />
       <AvatarPopupOverlay />
+
+      {/* Autonomous Shake & Instabug Bug Monitor (Private Owner Console) */}
+      <BugMonitorDrawer
+        userProfile={userProfile}
+        activeTab={activeTab as string}
+        activeBand={activeBand}
+      />
     </div>
   );
 }

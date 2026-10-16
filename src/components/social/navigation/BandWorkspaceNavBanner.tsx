@@ -42,15 +42,8 @@ export function BandWorkspaceNavBanner({
     return null;
   }
 
-  // State for collapsible container - default to collapsed, with localStorage persistence
-  const [isExpanded, setIsExpanded] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('nexus_social_band_nav_expanded');
-      return saved !== null ? saved === 'true' : false;
-    } catch {
-      return false;
-    }
-  });
+  // State for collapsible container - default to collapsed
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
   const toggleExpanded = () => {
     setIsExpanded((prev) => {

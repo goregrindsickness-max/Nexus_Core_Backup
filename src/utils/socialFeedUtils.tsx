@@ -1,4 +1,5 @@
 import React from 'react';
+import { getSupabase } from '../supabase';
 
 export const formatPostTimestamp = (
   timestampOrPost?: any,
@@ -227,23 +228,101 @@ export function isBandcampUrl(url?: string | null): boolean {
   return lower.includes('bandcamp.com');
 }
 
+export async function openBandcampLink(url?: string | null) {
+  if (!url) return;
+  const clean = url.trim();
+  const target = clean.startsWith('http') ? clean : `https://${clean}`;
+  try {
+    const win = window as any;
+    if (win.Capacitor && win.Capacitor.Plugins && win.Capacitor.Plugins.Browser) {
+      await win.Capacitor.Plugins.Browser.open({ url: target });
+      return;
+    }
+  } catch (e) {}
+
+  try {
+    const newWindow = window.open(target, '_blank', 'noopener,noreferrer');
+    if (!newWindow) {
+      window.location.href = target;
+    }
+  } catch (e) {
+    try {
+      window.location.href = target;
+    } catch (err) {}
+  }
+}
+
+export function normalizeBandcampUrl(url: string): string {
+  if (!url || typeof url !== 'string') return '';
+  let clean = url.trim();
+  const iframeMatch = clean.match(/src=["'](https?:\/\/[^"']+)["']/i);
+  if (iframeMatch) {
+    clean = iframeMatch[1];
+  }
+  return clean.replace(/&amp;/g, '&');
+}
+
+export function extractSlugMetadata(url: string) {
+  if (!url || typeof url !== 'string') return { artist: '', title: '', itemType: 'track' as const };
+  try {
+    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    const hostParts = parsed.hostname.split('.');
+    let artist = '';
+    if (hostParts.length >= 3) {
+      artist = hostParts[0].replace(/-/g, ' ').toUpperCase();
+    }
+    const pathSegments = parsed.pathname.split('/').filter(Boolean);
+    let itemType: 'track' | 'album' = 'track';
+    let title = '';
+    if (pathSegments.length >= 2) {
+      const typeSegment = pathSegments[0].toLowerCase();
+      if (typeSegment === 'album') itemType = 'album';
+      title = pathSegments[1].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    } else if (pathSegments.length === 1) {
+      title = pathSegments[0].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+    return {
+      artist: artist || 'Bandcamp Artist',
+      title: title || 'Bandcamp Release',
+      itemType
+    };
+  } catch (e) {
+    return { artist: 'Bandcamp Artist', title: 'Bandcamp Release', itemType: 'track' as const };
+  }
+}
+
 export function getEmbedUrl(url: string | undefined | null): string | null {
   if (!url) return null;
-  const cleanedUrl = url.trim();
+  let cleanedUrl = url.trim();
+
+  // Strip iframe HTML if the whole tag was pasted
+  const iframeMatch = cleanedUrl.match(/src=["'](https?:\/\/[^"']+)["']/i);
+  if (iframeMatch && iframeMatch[1]) {
+    cleanedUrl = iframeMatch[1];
+  }
+
+  // Handle leading slashes or protocol-relative URLs (e.g. /youtu.be/..., //youtube.com/...)
+  if (cleanedUrl.startsWith('//')) {
+    cleanedUrl = `https:${cleanedUrl}`;
+  } else if (cleanedUrl.startsWith('/youtu.be/')) {
+    cleanedUrl = `https://youtu.be/${cleanedUrl.slice(10)}`;
+  } else if (cleanedUrl.startsWith('/youtube.com/')) {
+    cleanedUrl = `https://youtube.com/${cleanedUrl.slice(13)}`;
+  }
 
   // Spotify
   if (cleanedUrl.includes('spotify.com')) {
     return cleanedUrl.replace(/open\.spotify\.com\/(track|playlist|album|artist)\/([a-zA-Z0-9]+)/i, 'open.spotify.com/embed/$1/$2');
   }
 
-  // YouTube (supports watch, shorts, live, youtu.be, embed, mobile)
-  const ytMatch = cleanedUrl.match(/(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts|live)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
+  // YouTube (supports watch, shorts, live, youtu.be, embed, mobile, with query params like ?si=)
+  const ytMatch = cleanedUrl.match(/(?:(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts|live)\/|\S*?[?&]v=)|(?:\/)?youtu\.be\/))([a-zA-Z0-9_-]{11})/i);
   if (ytMatch && ytMatch[1]) {
     return `https://www.youtube.com/embed/${ytMatch[1]}`;
   }
 
   if (cleanedUrl.includes('youtube.com/embed/') || cleanedUrl.includes('youtube-nocookie.com/embed/')) {
-    return cleanedUrl;
+    return cleanedUrl.startsWith('http') ? cleanedUrl : `https://${cleanedUrl.replace(/^\/+/, '')}`;
   }
 
   // SoundCloud
@@ -253,10 +332,6 @@ export function getEmbedUrl(url: string | undefined | null): string | null {
 
   // Bandcamp
   if (cleanedUrl.includes('bandcamp.com')) {
-    const iframeSrc = cleanedUrl.match(/src=["'](https:\/\/bandcamp\.com\/EmbeddedPlayer\/[^"']+)["']/i);
-    if (iframeSrc) {
-      return iframeSrc[1].replace(/&amp;/g, '&');
-    }
     const directEmbed = cleanedUrl.match(/https:\/\/bandcamp\.com\/EmbeddedPlayer\/[^\s"']+/i);
     if (directEmbed) {
       return directEmbed[0].replace(/&amp;/g, '&');
@@ -415,68 +490,186 @@ export async function resolveBandcampMetadata(url: string): Promise<BandcampReso
     return resolved;
   }
 
-  // 4.5. Query Bandcamp public oEmbed API directly from client (works in browser and Android APK)
+  // 5. Direct Supabase Query (Blazing fast ~30ms & universally accessible from Native Android APK)
   try {
-    const oembedRes = await fetch(`https://bandcamp.com/api/oembed?url=${encodeURIComponent(cleanUrl)}&format=json`, {
-      method: 'GET',
-    });
-    if (oembedRes.ok) {
-      const oembedData = await oembedRes.json();
-      if (oembedData && oembedData.html) {
-        const srcMatch = oembedData.html.match(/src=["'](https:\/\/bandcamp\.com\/EmbeddedPlayer\/[^"']+)["']/i);
-        if (srcMatch) {
-          const rawEmbed = srcMatch[1].replace(/&amp;/g, '&');
-          const trackId = rawEmbed.match(/track=(\d+)/i)?.[1] || null;
-          const albumId = rawEmbed.match(/album=(\d+)/i)?.[1] || null;
-          const resolved: BandcampResolvedData = {
-            success: true,
-            embedUrl: formatBandcampEmbedDarkUrl(rawEmbed),
-            trackId,
-            albumId,
-            itemType: trackId ? 'track' : (albumId ? 'album' : (cleanUrl.includes('album') ? 'album' : 'track')),
-            title: oembedData.title || undefined,
-            artist: oembedData.author_name || undefined,
-            pageUrl: cleanUrl
-          };
-          bandcampResolvedMemoryCache.set(cleanUrl, resolved);
-          try {
-            localStorage.setItem(`nexus_bc_meta_${cleanUrl}`, JSON.stringify(resolved));
-          } catch (e) {}
-          return resolved;
+    const supabase = getSupabase();
+    if (supabase) {
+      const { data: posts } = await supabase
+        .from('nexus_posts')
+        .select('data, media_url')
+        .or(`media_url.eq.${cleanUrl},media_url.ilike.%${cleanUrl}%`)
+        .limit(3);
+
+      if (posts && posts.length > 0) {
+        for (const postRow of posts) {
+          const postObj = typeof postRow.data === 'string' ? JSON.parse(postRow.data) : (postRow.data || {});
+          const bData = postObj.bandcampData || postObj.bandcamp_data;
+          if (bData && (bData.embedUrl || bData.embed_url || bData.trackId || bData.albumId)) {
+            const embed = bData.embedUrl || bData.embed_url || (bData.trackId ? `https://bandcamp.com/EmbeddedPlayer/track=${bData.trackId}/size=large/bgcol=000000/linkcol=06b6d4/tracklist=false/artwork=small/transparent=true/` : null);
+            if (embed) {
+              const resolved: BandcampResolvedData = {
+                success: true,
+                embedUrl: formatBandcampEmbedDarkUrl(embed),
+                trackId: bData.trackId,
+                albumId: bData.albumId,
+                title: bData.title,
+                artist: bData.artist,
+                artwork: bData.artwork || bData.artworkUrl,
+                itemType: bData.itemType || 'track',
+                pageUrl: cleanUrl
+              };
+              bandcampResolvedMemoryCache.set(cleanUrl, resolved);
+              try {
+                localStorage.setItem(`nexus_bc_meta_${cleanUrl}`, JSON.stringify(resolved));
+              } catch (e) {}
+              return resolved;
+            }
+          }
         }
       }
     }
   } catch (e) {}
 
-  // 5. Query backend endpoints with automatic fallback (supporting Web & Native Android APK)
-  const endpoints = getApiFallbackEndpoints('/api/bandcamp/resolve');
-  for (const endpoint of endpoints) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
+  // Helper parser for HTML scraping
+  const parseBandcampHtml = (html: string): BandcampResolvedData | null => {
+    if (!html || html.length < 150) return null;
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: cleanUrl }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.embedUrl) {
-          data.embedUrl = formatBandcampEmbedDarkUrl(data.embedUrl);
-          bandcampResolvedMemoryCache.set(cleanUrl, data);
-          try {
-            localStorage.setItem(`nexus_bc_meta_${cleanUrl}`, JSON.stringify(data));
-          } catch (e) {}
-          return data;
-        }
+    const ogVideoMatch = html.match(/<meta[^>]+property=["']og:video["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video["']/i) ||
+                         html.match(/<meta[^>]+property=["']twitter:player["'][^>]+content=["']([^"']+)["']/i);
+    let embedUrl = ogVideoMatch ? ogVideoMatch[1].replace(/&amp;/g, '&') : null;
+    if (!embedUrl) {
+      const directEmbedInHtml = html.match(/https:\/\/bandcamp\.com\/EmbeddedPlayer\/[^\s"'<>]+/i);
+      if (directEmbedInHtml) {
+        embedUrl = directEmbedInHtml[0].replace(/&amp;/g, '&');
       }
-    } catch (err) {
-      console.warn(`[Bandcamp Resolve] Failed to query endpoint ${endpoint}:`, err);
     }
+
+    const trackIdMatch = html.match(/track_id(?:&quot;|")?\s*:\s*(\d+)/i) || 
+                         (embedUrl ? embedUrl.match(/track=(\d+)/i) : null) ||
+                         html.match(/item_id=(\d+)/i);
+    const albumIdMatch = html.match(/album_id(?:&quot;|")?\s*:\s*(\d+)/i) || 
+                         (embedUrl ? embedUrl.match(/album=(\d+)/i) : null);
+    const trackId = trackIdMatch ? trackIdMatch[1] : null;
+    const albumId = albumIdMatch ? albumIdMatch[1] : null;
+
+    if (!embedUrl && (trackId || albumId)) {
+      if (trackId) {
+        embedUrl = `https://bandcamp.com/EmbeddedPlayer/track=${trackId}/size=large/bgcol=000000/linkcol=06b6d4/tracklist=false/artwork=small/transparent=true/`;
+      } else if (albumId) {
+        embedUrl = `https://bandcamp.com/EmbeddedPlayer/album=${albumId}/size=large/bgcol=000000/linkcol=06b6d4/tracklist=false/artwork=small/transparent=true/`;
+      }
+    }
+
+    if (embedUrl) {
+      const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+      const imageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+      const artistMatch = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i) ||
+                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:site_name["']/i);
+
+      let title = titleMatch ? titleMatch[1] : "";
+      let artist = artistMatch ? artistMatch[1] : "";
+      if (title.includes(", by ")) {
+        const parts = title.split(", by ");
+        title = parts[0];
+        if (!artist) artist = parts[1];
+      }
+
+      return {
+        success: true,
+        embedUrl: formatBandcampEmbedDarkUrl(embedUrl),
+        trackId,
+        albumId,
+        title: title || undefined,
+        artist: artist || undefined,
+        artwork: imageMatch ? imageMatch[1] : undefined,
+        itemType: trackId ? "track" : albumId ? "album" : "track",
+        pageUrl: cleanUrl
+      };
+    }
+    return null;
+  };
+
+  // 6. Fast parallel resolution across backend proxy + public proxy endpoints
+  const fetchResolvers: Promise<BandcampResolvedData>[] = [];
+
+  // Local relative backend endpoint (fast for Web browser)
+  if (typeof window !== 'undefined' && !window.location.origin.startsWith('capacitor') && !window.location.origin.startsWith('file:')) {
+    fetchResolvers.push(
+      (async () => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3500);
+        try {
+          const res = await fetch('/api/bandcamp/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: cleanUrl }),
+            signal: ctrl.signal
+          });
+          clearTimeout(t);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.embedUrl) {
+              data.embedUrl = formatBandcampEmbedDarkUrl(data.embedUrl);
+              return data;
+            }
+          }
+        } catch (e) {}
+        throw new Error('Local backend failed');
+      })()
+    );
+  }
+
+  // AllOrigins Raw Proxy
+  fetchResolvers.push(
+    (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(cleanUrl)}`, { signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) {
+          const html = await res.text();
+          const parsed = parseBandcampHtml(html);
+          if (parsed) return parsed;
+        }
+      } catch (e) {}
+      throw new Error('Allorigins raw failed');
+    })()
+  );
+
+  // Codetabs Proxy
+  fetchResolvers.push(
+    (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanUrl)}`, { signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) {
+          const html = await res.text();
+          const parsed = parseBandcampHtml(html);
+          if (parsed) return parsed;
+        }
+      } catch (e) {}
+      throw new Error('Codetabs failed');
+    })()
+  );
+
+  try {
+    // Race all resolvers in parallel
+    const winner = await Promise.any(fetchResolvers);
+    if (winner && winner.embedUrl) {
+      bandcampResolvedMemoryCache.set(cleanUrl, winner);
+      try {
+        localStorage.setItem(`nexus_bc_meta_${cleanUrl}`, JSON.stringify(winner));
+      } catch (e) {}
+      return winner;
+    }
+  } catch (err) {
+    // All parallel resolvers rejected
   }
 
   return {
@@ -582,7 +775,10 @@ export { playAmbientMetalDrone } from './audioEngine';
 export const formatTimeTo12h = (input?: string): string => {
   if (!input) return 'Doors 8:00 PM';
   let str = String(input);
-  str = str.replace(/\b([01]?[0-9]|2[0-3]):([0-5][0-9])\b/g, (match, h, m) => {
+  if (/\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(str)) {
+    return str.replace(/\s*(AM|PM)\s*(AM|PM)/gi, ' $1');
+  }
+  str = str.replace(/\b([01]?[0-9]|2[0-3]):([0-5][0-9])(?!\s*(?:AM|PM))\b/gi, (match, h, m) => {
     let hour = parseInt(h, 10);
     const minute = m;
     const ampm = hour >= 12 ? 'PM' : 'AM';
@@ -590,15 +786,7 @@ export const formatTimeTo12h = (input?: string): string => {
     hour = hour ? hour : 12;
     return `${hour}:${minute} ${ampm}`;
   });
-  str = str.replace(/\b([01][0-9]|2[0-3])([0-5][0-9])\b/g, (match, h, m) => {
-    let hour = parseInt(h, 10);
-    const minute = m;
-    const ampm = hour >= 12 ? 'PM' : 'AM';
-    hour = hour % 12;
-    hour = hour ? hour : 12;
-    return `${hour}:${minute} ${ampm}`;
-  });
-  return str;
+  return str.replace(/\s*(AM|PM)\s*(AM|PM)/gi, ' $1');
 };
 
 export const hasGigTickets = (gig: any): boolean => {
@@ -615,6 +803,60 @@ export const hasGigTickets = (gig: any): boolean => {
     !priceStr.includes('crowdsourced')
   );
   return hasUrl || hasPaidPrice || gig.hasTickets === true;
+};
+
+export const isPastShowDate = (dateVal?: string): boolean => {
+  if (!dateVal) return false;
+  const str = String(dateVal).trim().toLowerCase();
+  if (
+    !str ||
+    str === 'tonight' ||
+    str === 'tomorrow' ||
+    str === 'upcoming' ||
+    str.includes('tonight') ||
+    str.includes('tomorrow')
+  ) {
+    return false;
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  // 1. Check explicit 4-digit ISO YYYY-MM-DD or YYYY/MM/DD pattern
+  const isoMatch = str.match(/\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (isoMatch) {
+    const year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10) - 1;
+    const day = parseInt(isoMatch[3], 10);
+    const showDate = new Date(year, month, day, 23, 59, 59, 999);
+    return showDate < now;
+  }
+
+  // 2. Only attempt Date.parse if an explicit 4-digit year is present in string (e.g., "2024", "2025")
+  if (/\b(20\d{2})\b/.test(str)) {
+    const timestamp = Date.parse(str);
+    if (!isNaN(timestamp)) {
+      const showDate = new Date(timestamp);
+      showDate.setHours(23, 59, 59, 999);
+      return showDate < now;
+    }
+  }
+
+  // 3. Check Month + Day pattern without year (e.g. "Sept 27", "Sep 24", "Oct 15")
+  const monthDayMatch = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})\b/i);
+  if (monthDayMatch) {
+    const monthStr = monthDayMatch[1];
+    const dayNum = parseInt(monthDayMatch[2], 10);
+    const dateWithYear = `${monthStr} ${dayNum}, ${currentYear}`;
+    const timestamp = Date.parse(dateWithYear);
+    if (!isNaN(timestamp)) {
+      const showDate = new Date(timestamp);
+      showDate.setHours(23, 59, 59, 999);
+      return showDate < now;
+    }
+  }
+
+  return false;
 };
 
 

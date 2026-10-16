@@ -56,7 +56,7 @@ export default function AddItemView({ onBack, onSave, onDelete, triggerNotificat
 
   React.useEffect(() => {
     try {
-      const savedBandId = localStorage.getItem('nexus_core_active_band_id') || '';
+      const savedBandId = localStorage.getItem('nexus_core_active_band_id') || localStorage.getItem('nexus_active_band_id') || '';
       const savedProfileStr = localStorage.getItem('nexus_core_user_profile');
       let savedProfileId = 'profile_admin';
       if (savedProfileStr) {
@@ -101,16 +101,23 @@ export default function AddItemView({ onBack, onSave, onDelete, triggerNotificat
     const prefixes: Record<string, string> = {
       'APPAREL': 'AP',
       'MUSIC': 'MU',
+      'MEDIA': 'MD',
+      'VINYL': 'VN',
+      'CD': 'CD',
+      'CASSETTE': 'CS',
       'ACCESSORIES': 'AC',
-      'POSTERS': 'PO'
+      'POSTERS': 'PO',
+      'HEADWEAR': 'HW',
+      'STICKERS': 'ST'
     };
-    const prefix = prefixes[category] || 'IT';
+    const prefix = prefixes[category?.toUpperCase()] || 'IT';
     const randNum = Math.floor(1000 + Math.random() * 9000);
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    const randChar = chars[Math.floor(Math.random() * chars.length)];
-    const generated = `${prefix}`;
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const randChar1 = chars[Math.floor(Math.random() * chars.length)];
+    const randChar2 = chars[Math.floor(Math.random() * chars.length)];
+    const generated = `${prefix}-${randNum}-${randChar1}${randChar2}`;
     setSku(generated);
-    triggerNotification(`Generated SKU: ${generated}`);
+    triggerNotification(`Generated SKU & Barcode: ${generated}`);
   };
 
 
@@ -131,7 +138,7 @@ export default function AddItemView({ onBack, onSave, onDelete, triggerNotificat
     triggerNotification(`Routing upload to '${INVENTORY_STORAGE_BUCKET}' storage bucket...`);
 
     try {
-      const activeBandId = initialItem?.band_id || localStorage.getItem('nexus_core_active_band_id') || '';
+      const activeBandId = initialItem?.band_id || localStorage.getItem('nexus_core_active_band_id') || localStorage.getItem('nexus_active_band_id') || '';
       const result = await uploadInventoryItemImage(file, initialItem?.id || generateUUID(), activeBandId);
 
       if (result && result.publicUrl) {

@@ -35,6 +35,7 @@ export {
   base64ToBlob,
   uploadBase64ToStorage,
   uploadCommunityBandMedia,
+  uploadArchiveFlyer,
   uploadClipVideoFile,
   testPhotoPitStorageConnection,
   ensureImagesUploadedToStorage,
@@ -103,6 +104,13 @@ export {
   autoSyncCreativeProfile,
 } from './services/creativeService';
 
+// 6c. Promoter Domain Service
+export {
+  buildNexusLivePromoterPayload,
+  syncPromoterProfileToSupabase,
+  autoSyncPromoterProfile,
+} from './services/promoterService';
+
 // 7. Shop Merch Service
 export {
   fetchShopMerchItems,
@@ -131,4 +139,16 @@ export {
   deleteInventoryItem,
 } from './services/inventoryService';
 export type { InventoryImageUploadResult } from './services/inventoryService';
+
+// 10. Archive Shows Domain Service
+export {
+  fetchArchiveShowsFromDatabase,
+  saveArchiveShowToDatabase,
+  deleteArchiveShowFromDatabase,
+  resetArchiveShowInDatabase,
+  seedArchiveShowsToTable,
+  CANONICAL_DOMINATION_FEST_ARCHIVES,
+  sanitizeArchiveShowForDb,
+} from './services/archiveShowsService';
+export type { ArchiveShowItem } from './services/archiveShowsService';
 

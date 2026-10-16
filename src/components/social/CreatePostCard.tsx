@@ -4,6 +4,7 @@ import { getCurrentCoordinates } from '../../services/locationService';
 import { getAvailablePersonas, resolveActivePersona } from './utils/personaResolution';
 import {
   Send,
+  Pin,
   Image as ImageIcon,
   Video,
   MapPin,
@@ -36,8 +37,11 @@ import {
 } from 'lucide-react';
 import { checkDuplicateCommunityEvent, EVENT_CATEGORIES } from '../../utils/communityEventUtils';
 import { getExistingPhotoPitAlbums, persistPhotoPitFolders } from './utils/photoPitAlbums';
-import { resolveBandcampMetadata, BandcampResolvedData } from '../../utils/socialFeedUtils';
+import { resolveBandcampMetadata, isBandcampUrl, normalizeBandcampUrl, BandcampResolvedData } from '../../utils/socialFeedUtils';
 import { BandcampEmbedCard } from './embeds/BandcampEmbedCard';
+import { BandcampSearchHelper } from './embeds/BandcampSearchHelper';
+import { VenueAutocompleteInput } from './VenueAutocompleteInput';
+import { BandTagAutocomplete } from './BandTagAutocomplete';
 
 
 export type ComposerRoleTheme = 'band' | 'creative' | 'promoter' | 'label' | 'industry_pro' | 'fan_only';
@@ -350,6 +354,24 @@ export interface CreatePostCardProps {
   eventData?: any;
   setEventData?: (data: any) => void;
   setUserProfile?: (profile: any) => void;
+
+  // Classifieds & Gear Swap
+  classifiedType?: 'gear' | 'classifieds';
+  setClassifiedType?: (val: 'gear' | 'classifieds') => void;
+  classifiedTitle?: string;
+  setClassifiedTitle?: (val: string) => void;
+  classifiedPrice?: string;
+  setClassifiedPrice?: (val: string) => void;
+  classifiedCondition?: string;
+  setClassifiedCondition?: (val: string) => void;
+  classifiedBrand?: string;
+  setClassifiedBrand?: (val: string) => void;
+  classifiedYear?: string;
+  setClassifiedYear?: (val: string) => void;
+  classifiedLocation?: string;
+  setClassifiedLocation?: (val: string) => void;
+  classifiedDescription?: string;
+  setClassifiedDescription?: (val: string) => void;
 }
 
 export const CreatePostCard: React.FC<CreatePostCardProps> = ({
@@ -449,6 +471,24 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   setEventTicketUrl,
   eventData,
   setEventData,
+
+  // Classifieds & Gear Swap
+  classifiedType,
+  setClassifiedType,
+  classifiedTitle,
+  setClassifiedTitle,
+  classifiedPrice,
+  setClassifiedPrice,
+  classifiedCondition,
+  setClassifiedCondition,
+  classifiedBrand,
+  setClassifiedBrand,
+  classifiedYear,
+  setClassifiedYear,
+  classifiedLocation,
+  setClassifiedLocation,
+  classifiedDescription,
+  setClassifiedDescription,
 }) => {
   const availablePersonas = useMemo(() => {
     const effectiveBands = (bands && bands.length > 0) ? bands : (availableIdentities && availableIdentities.length > 0 ? availableIdentities : []);
@@ -495,6 +535,33 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   const [showScheduler, setShowScheduler] = useState(false);
   const [localScheduledTime, setLocalScheduledTime] = useState('');
   const [postScope, setPostScope] = useState<'public' | 'followers' | 'private'>('public');
+
+  // Classifieds & Gear Swap Notice internal states & fallback
+  const [internalClassifiedType, setInternalClassifiedType] = useState<'gear' | 'classifieds'>('gear');
+  const [internalClassifiedTitle, setInternalClassifiedTitle] = useState('');
+  const [internalClassifiedPrice, setInternalClassifiedPrice] = useState('150');
+  const [internalClassifiedCondition, setInternalClassifiedCondition] = useState('Good');
+  const [internalClassifiedBrand, setInternalClassifiedBrand] = useState('');
+  const [internalClassifiedYear, setInternalClassifiedYear] = useState('');
+  const [internalClassifiedLocation, setInternalClassifiedLocation] = useState('');
+  const [internalClassifiedDescription, setInternalClassifiedDescription] = useState('');
+
+  const localClassifiedType = classifiedType !== undefined ? classifiedType : internalClassifiedType;
+  const setLocalClassifiedType = setClassifiedType || setInternalClassifiedType;
+  const localClassifiedTitle = classifiedTitle !== undefined ? classifiedTitle : internalClassifiedTitle;
+  const setLocalClassifiedTitle = setClassifiedTitle || setInternalClassifiedTitle;
+  const localClassifiedPrice = classifiedPrice !== undefined ? classifiedPrice : internalClassifiedPrice;
+  const setLocalClassifiedPrice = setClassifiedPrice || setInternalClassifiedPrice;
+  const localClassifiedCondition = classifiedCondition !== undefined ? classifiedCondition : internalClassifiedCondition;
+  const setLocalClassifiedCondition = setClassifiedCondition || setInternalClassifiedCondition;
+  const localClassifiedBrand = classifiedBrand !== undefined ? classifiedBrand : internalClassifiedBrand;
+  const setLocalClassifiedBrand = setClassifiedBrand || setInternalClassifiedBrand;
+  const localClassifiedYear = classifiedYear !== undefined ? classifiedYear : internalClassifiedYear;
+  const setLocalClassifiedYear = setClassifiedYear || setInternalClassifiedYear;
+  const localClassifiedLocation = classifiedLocation !== undefined ? classifiedLocation : internalClassifiedLocation;
+  const setLocalClassifiedLocation = setClassifiedLocation || setInternalClassifiedLocation;
+  const localClassifiedDescription = classifiedDescription !== undefined ? classifiedDescription : internalClassifiedDescription;
+  const setLocalClassifiedDescription = setClassifiedDescription || setInternalClassifiedDescription;
   const existingPhotoPitAlbums = useMemo(() => {
     const list = getExistingPhotoPitAlbums(userProfile, portalRole);
     return list.length > 0 ? list : ['Profile Pics', 'Cover Images'];
@@ -517,6 +584,31 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   const [bandcampResolved, setBandcampResolved] = useState<BandcampResolvedData | null>(null);
   const [isResolvingBandcamp, setIsResolvingBandcamp] = useState<boolean>(false);
 
+  const handleSelectBandcampTrack = (track: { url: string; title: string; artist: string; artworkUrl?: string }) => {
+    setNewPostImageUrl(track.url);
+    setIsResolvingBandcamp(true);
+    setBandcampResolved({
+      success: true,
+      embedUrl: null,
+      title: track.title,
+      artist: track.artist,
+      artwork: track.artworkUrl,
+      pageUrl: track.url,
+      itemType: 'track'
+    });
+    resolveBandcampMetadata(track.url).then((res) => {
+      if (res && res.success && res.embedUrl) {
+        setBandcampResolved(res);
+      }
+      setIsResolvingBandcamp(false);
+    }).catch(() => {
+      setIsResolvingBandcamp(false);
+    });
+    if (triggerNotification) {
+      triggerNotification(`🎵 Attached Bandcamp track "${track.title}" by ${track.artist}!`);
+    }
+  };
+
   useEffect(() => {
     if (!newPostImageUrl || !newPostImageUrl.toLowerCase().includes('bandcamp.com')) {
       setBandcampResolved(null);
@@ -531,7 +623,17 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
       try {
         const result = await resolveBandcampMetadata(newPostImageUrl);
         if (isMounted) {
-          setBandcampResolved(result);
+          setBandcampResolved((prev) => {
+            if (result && result.embedUrl) {
+              return {
+                ...result,
+                title: result.title || prev?.title,
+                artist: result.artist || prev?.artist,
+                artwork: result.artwork || prev?.artwork,
+              };
+            }
+            return prev || result;
+          });
           setIsResolvingBandcamp(false);
         }
       } catch (err) {
@@ -824,6 +926,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
     Boolean(tapeTitle || tapeAudioUrl) ||
     Boolean(eventTitle) ||
     Boolean(eventData) ||
+    Boolean(localClassifiedTitle) ||
     postScope !== 'public';
 
   return (
@@ -1186,8 +1289,8 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
             </button>
           </div>
 
-          {/* Row 3: +Merch Drop, +Tape/ Demo */}
-          <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+          {/* Row 3: +Merch Drop, +Tape/ Demo, +Classified / Gear */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={() => {
@@ -1215,6 +1318,19 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
             >
               <Radio className="w-3 h-3 animate-pulse shrink-0" style={{ color: theme.glowHex }} />
               <span className="truncate">+TAPE/ DEMO</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => togglePanel('classified')}
+              className={`w-full px-2 py-2 rounded-xl border text-[10px] font-mono tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer truncate ${
+                activePanel === 'classified' || localClassifiedTitle
+                  ? 'bg-amber-950/70 border-amber-500 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+                  : theme.inactiveBtnStyle
+              }`}
+            >
+              <Pin className="w-3 h-3 shrink-0 text-amber-400 rotate-45" />
+              <span className="truncate">+CLASSIFIED/ GEAR</span>
             </button>
           </div>
 
@@ -1368,14 +1484,27 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
               )}
             </div>
 
+            {/* 2.8 Search Songs on Bandcamp Helper */}
+            <BandcampSearchHelper
+              onSelectTrack={handleSelectBandcampTrack}
+              theme={theme}
+            />
+
             {/* 3. Direct Image or Bandcamp URL input */}
             <div className="space-y-1">
-              <label className="text-[9px] font-mono text-zinc-400 uppercase font-bold block">Or Paste Direct Image / Bandcamp Track Link</label>
+              <div className="flex items-center justify-between">
+                <label className="text-[9px] font-mono text-zinc-400 uppercase font-bold block">Or Paste Direct Image / Bandcamp Track Link</label>
+                {isBandcampUrl(newPostImageUrl) && (
+                  <span className="text-[8px] font-mono font-bold text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-500/30 animate-pulse">
+                    ⚡ Smart Bandcamp Slug Resolver Active
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
-                placeholder="https://artistname.bandcamp.com/track/... or image URL..."
+                placeholder="https://artistname.bandcamp.com/track/symbiotic-voracity..."
                 value={newPostImageUrl}
-                onChange={(e) => setNewPostImageUrl(e.target.value)}
+                onChange={(e) => setNewPostImageUrl(normalizeBandcampUrl(e.target.value))}
                 className={`w-full ${theme.innerPanelBg} text-xs text-white placeholder:text-zinc-600 border ${theme.inputBorder} rounded-lg p-2 font-mono ${theme.inputFocus}`}
               />
             </div>
@@ -1416,8 +1545,10 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                       embedUrl={bandcampResolved?.embedUrl || (newPostImageUrl.includes('EmbeddedPlayer') ? newPostImageUrl : null)}
                       title={bandcampResolved?.title}
                       artist={bandcampResolved?.artist}
+                      artworkUrl={bandcampResolved?.artwork}
                       pageUrl={bandcampResolved?.pageUrl || newPostImageUrl}
                       itemType={bandcampResolved?.itemType}
+                      variant="feed"
                       compact={false}
                     />
                   </div>
@@ -1594,43 +1725,75 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
         {activePanel === 'venue' && (
           <div className={`${theme.panelBg} p-3 rounded-xl border ${theme.panelBorder} space-y-2 animate-in fade-in duration-150`}>
             <div className={`flex items-center justify-between text-[10px] font-mono ${theme.badgeText} font-bold uppercase`}>
-              <span>TAG VENUE & SHOW LOCATION</span>
+              <span className="flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                TAG VENUE & SHOW LOCATION
+              </span>
               <button type="button" onClick={() => setActivePanel(null)} className="text-zinc-500 hover:text-zinc-300"><X className="w-3.5 h-3.5" /></button>
             </div>
-            <input
-              type="text"
-              placeholder="e.g. The Underground • Doors 8:00 PM..."
+
+            <VenueAutocompleteInput
               value={taggedVenue}
-              onChange={(e) => setTaggedVenue && setTaggedVenue(e.target.value)}
-              className={`w-full ${theme.innerPanelBg} text-xs text-white placeholder:text-zinc-600 border ${theme.inputBorder} rounded-lg p-2 font-mono ${theme.inputFocus}`}
+              onChange={(venue, venueData) => {
+                if (setTaggedVenue) setTaggedVenue(venue);
+                if (venueData && !eventLocationName && setEventLocationName) {
+                  setEventLocationName(venueData.name);
+                }
+                if (venueData?.fullAddress && !eventAddress && setEventAddress) {
+                  setEventAddress(venueData.fullAddress);
+                }
+              }}
+              placeholder="Search Black Book or Google Places venue (e.g. Chain Reaction, The Echo)..."
+              theme={{
+                innerPanelBg: theme.innerPanelBg,
+                inputBorder: theme.inputBorder,
+                inputFocus: theme.inputFocus,
+                badgeBg: theme.badgeBg,
+                badgeText: theme.badgeText,
+                accentText: theme.accentText
+              }}
+              onClose={() => setActivePanel(null)}
             />
           </div>
         )}
 
         {/* Tag Band Panel */}
         {activePanel === 'band' && (
-          <div className={`${theme.panelBg} p-3 rounded-xl border ${theme.panelBorder} space-y-2 animate-in fade-in duration-150`}>
+          <div className={`${theme.panelBg} p-3 rounded-xl border ${theme.panelBorder} space-y-2.5 animate-in fade-in duration-150`}>
             <div className={`flex items-center justify-between text-[10px] font-mono ${theme.badgeText} font-bold uppercase`}>
-              <span>TAG BANDS IN THIS POST</span>
+              <span className="flex items-center gap-1.5">
+                <Music className={`w-3.5 h-3.5 ${theme.accentText}`} />
+                TAG BAND PROFILES IN THIS POST
+              </span>
               <button type="button" onClick={() => setActivePanel(null)} className="text-zinc-500 hover:text-zinc-300"><X className="w-3.5 h-3.5" /></button>
             </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Band name (e.g. DYING FETUS)..."
-                value={tagBandInput}
-                onChange={(e) => setTagBandInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTaggedBand(); } }}
-                className={`flex-1 ${theme.innerPanelBg} text-xs text-white placeholder:text-zinc-600 border ${theme.inputBorder} rounded-lg p-2 font-mono ${theme.inputFocus}`}
-              />
-              <button
-                type="button"
-                onClick={addTaggedBand}
-                className={`px-3 py-1.5 ${theme.badgeBg} hover:${theme.accentBg} ${theme.badgeText} text-xs font-mono font-bold rounded-lg border ${theme.accentBorder}`}
-              >
-                + ADD
-              </button>
-            </div>
+            
+            <BandTagAutocomplete
+              taggedBands={taggedBands}
+              onAddBand={(bandName) => {
+                if (setTaggedBands && !taggedBands.includes(bandName)) {
+                  setTaggedBands([...taggedBands, bandName]);
+                }
+              }}
+              onRemoveBand={(bandName) => {
+                if (setTaggedBands) {
+                  setTaggedBands(taggedBands.filter((b) => b !== bandName));
+                }
+              }}
+              availableBands={bands}
+              theme={{
+                innerPanelBg: theme.innerPanelBg,
+                inputBorder: theme.inputBorder,
+                inputFocus: theme.inputFocus,
+                badgeBg: theme.badgeBg,
+                badgeText: theme.badgeText,
+                accentText: theme.accentText,
+                accentBg: theme.accentBg,
+                accentBorder: theme.accentBorder,
+                attachedTagBg: theme.attachedTagBg
+              }}
+              onClose={() => setActivePanel(null)}
+            />
           </div>
         )}
 
@@ -2172,14 +2335,22 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div className="space-y-1">
                 <label className="text-[9px] font-mono text-amber-400 uppercase font-bold block">
-                  Venue / Location Name
+                  Venue / Location Name (Black Book & Places)
                 </label>
-                <input
-                  type="text"
-                  placeholder="e.g. The Underground, Basement, Saint Vitus"
+                <VenueAutocompleteInput
                   value={eventLocationName}
-                  onChange={(e) => setEventLocationName?.(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-lg p-2 text-xs text-white font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                  onChange={(venue, venueData) => {
+                    setEventLocationName?.(venueData ? venueData.name : venue);
+                    if (venueData?.fullAddress && setEventAddress) {
+                      setEventAddress(venueData.fullAddress);
+                    }
+                  }}
+                  placeholder="e.g. Chain Reaction, The Echo, Saint Vitus..."
+                  theme={{
+                    innerPanelBg: 'bg-zinc-950',
+                    inputBorder: 'border-zinc-800',
+                    inputFocus: 'focus:border-amber-500'
+                  }}
                 />
               </div>
 
@@ -2192,7 +2363,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                   placeholder="e.g. 1120 Manhattan Ave, Brooklyn NY"
                   value={eventAddress}
                   onChange={(e) => setEventAddress?.(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-lg p-2 text-xs text-white font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                  className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-lg p-2.5 text-xs text-white font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
                 />
               </div>
             </div>
@@ -2304,6 +2475,195 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>SAVE & ATTACH TO POST</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Classified & Gear Swap Bulletin Panel */}
+        {activePanel === 'classified' && (
+          <div className="bg-[#18110b] p-4 rounded-xl border-2 border-[#4a2e1d] space-y-3 animate-in fade-in duration-150 shadow-xl">
+            <div className="flex items-center justify-between text-[10px] font-mono text-amber-300 font-bold uppercase border-b border-[#3d2516] pb-2">
+              <div className="flex items-center gap-2">
+                <Pin className="w-4 h-4 text-amber-400 rotate-45" />
+                <span className="font-black tracking-wider text-amber-200">📌 COMMUNITY BULLETIN & GEAR SWAP LISTING</span>
+              </div>
+              <button type="button" onClick={() => setActivePanel(null)} className="text-zinc-500 hover:text-zinc-300 p-1">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Listing Type Switcher: Gear vs Classifieds */}
+            <div>
+              <label className="block text-[9px] font-mono font-black uppercase text-amber-400/80 tracking-wider mb-1.5">
+                Notice Type
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLocalClassifiedType('gear')}
+                  className={`py-2 px-3 rounded-lg border text-xs font-mono font-bold uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    localClassifiedType === 'gear'
+                      ? 'bg-red-950/60 border-red-500 text-red-300 shadow-[0_0_10px_rgba(239,68,68,0.25)]'
+                      : 'bg-black/60 border-zinc-800 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <span>🎸</span> GEAR SWAP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLocalClassifiedType('classifieds')}
+                  className={`py-2 px-3 rounded-lg border text-xs font-mono font-bold uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    localClassifiedType === 'classifieds'
+                      ? 'bg-amber-950/60 border-amber-500 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.25)]'
+                      : 'bg-black/60 border-zinc-800 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  <span>📋</span> CLASSIFIED NOTICE
+                </button>
+              </div>
+            </div>
+
+            {/* Title */}
+            <div className="space-y-1">
+              <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                {localClassifiedType === 'gear' ? 'Gear / Equipment Title' : 'Notice Headline'}
+              </label>
+              <input
+                type="text"
+                placeholder={localClassifiedType === 'gear' ? 'e.g. 1984 Marshall JCM800 2203 Head' : 'e.g. Drummer Wanted for Texas Slam Project'}
+                value={localClassifiedTitle}
+                onChange={(e) => setLocalClassifiedTitle(e.target.value)}
+                className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2.5 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+              />
+            </div>
+
+            {/* Price & Condition Row (for Gear) */}
+            {localClassifiedType === 'gear' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                    Asking Price ($ USD) • 0 for Trade/OBO
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 1200 (or 0)"
+                    value={localClassifiedPrice}
+                    onChange={(e) => setLocalClassifiedPrice(e.target.value)}
+                    className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                    Condition
+                  </label>
+                  <select
+                    value={localClassifiedCondition}
+                    onChange={(e) => setLocalClassifiedCondition(e.target.value)}
+                    className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono focus:outline-none transition-colors"
+                  >
+                    <option value="New">Mint / New</option>
+                    <option value="Like New">Like New</option>
+                    <option value="Good">Good (Stage-Ready)</option>
+                    <option value="Fair">Fair / Relic</option>
+                    <option value="Poor">As-Is / Project</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Brand, Year & Location Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {localClassifiedType === 'gear' && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                      Brand / Builder
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Peavey, Gibson, Mesa"
+                      value={localClassifiedBrand}
+                      onChange={(e) => setLocalClassifiedBrand(e.target.value)}
+                      className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                      Year / Era
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 1992"
+                      value={localClassifiedYear}
+                      onChange={(e) => setLocalClassifiedYear(e.target.value)}
+                      className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className={`space-y-1 ${localClassifiedType !== 'gear' ? 'sm:col-span-3' : ''}`}>
+                <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                  Location / City
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Los Angeles, CA / Local Pickup"
+                  value={localClassifiedLocation}
+                  onChange={(e) => setLocalClassifiedLocation(e.target.value)}
+                  className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* Note details */}
+            <div className="space-y-1">
+              <label className="text-[9px] font-mono text-amber-400/80 uppercase font-bold block">
+                Notice Details / Specs / Contact Note
+              </label>
+              <textarea
+                placeholder={localClassifiedType === 'gear' ? 'Mention tubes, mods, shipping preference, or trade interests...' : 'Describe what you are looking for, genre influences, rehearsal location...'}
+                value={localClassifiedDescription}
+                onChange={(e) => setLocalClassifiedDescription(e.target.value)}
+                rows={2}
+                className="w-full bg-[#100b07] border border-[#3d2516] focus:border-amber-500 rounded-lg p-2 text-xs text-amber-100 font-mono placeholder:text-zinc-600 focus:outline-none resize-none transition-colors"
+              />
+            </div>
+
+            {/* Panel Action footer */}
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#3d2516]">
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalClassifiedTitle('');
+                  setLocalClassifiedPrice('150');
+                  setLocalClassifiedBrand('');
+                  setLocalClassifiedYear('');
+                  setLocalClassifiedLocation('');
+                  setLocalClassifiedDescription('');
+                  setActivePanel(null);
+                }}
+                className="px-3 py-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-rose-400 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Clear Notice
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActivePanel(null);
+                  if (triggerNotification) {
+                    triggerNotification(localClassifiedTitle ? `✓ Nailed notice attached: "${localClassifiedTitle}"!` : 'Classified notice saved.');
+                  }
+                }}
+                className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-zinc-950 text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>ATTACH TO BULLETIN POST</span>
               </button>
             </div>
           </div>
@@ -2421,6 +2781,38 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
               </span>
             )}
 
+            {localClassifiedTitle && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-950/80 border border-amber-500/60 text-[10px] font-mono text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.25)]">
+                <Pin className="w-3.5 h-3.5 text-amber-400 rotate-45 shrink-0" />
+                <span className="font-bold">
+                  {localClassifiedType === 'gear' ? '🎸 Gear:' : '📋 Notice:'} {localClassifiedTitle}
+                  {localClassifiedType === 'gear' && Number(localClassifiedPrice) > 0 ? ` ($${localClassifiedPrice})` : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => togglePanel('classified')}
+                  className="text-amber-400 hover:text-amber-200 underline text-[9px] ml-1 cursor-pointer font-bold uppercase"
+                >
+                  EDIT
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocalClassifiedTitle('');
+                    setLocalClassifiedPrice('150');
+                    setLocalClassifiedBrand('');
+                    setLocalClassifiedYear('');
+                    setLocalClassifiedLocation('');
+                    setLocalClassifiedDescription('');
+                  }}
+                  className="hover:text-rose-400 ml-1 cursor-pointer p-0.5"
+                  title="Remove bulletin notice"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+
             {postScope !== 'public' && (
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded ${theme.attachedTagBg} text-[10px] font-mono ${theme.badgeText}`}>
                 <Globe className={`w-3 h-3 ${theme.attachedTagIcon}`} />
@@ -2444,7 +2836,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
         <div className="pt-2">
           <button
             type="submit"
-            disabled={!newPostText.trim() && !newPostImageUrl && !tapeAudioUrl && !pollQuestion && !merchDropName && !eventTitle && !eventData}
+            disabled={!newPostText.trim() && !newPostImageUrl && !tapeAudioUrl && !pollQuestion && !merchDropName && !eventTitle && !eventData && !localClassifiedTitle}
             className={`w-full py-3 sm:py-3.5 rounded-xl disabled:bg-zinc-800/80 disabled:border-zinc-800 disabled:text-zinc-500 disabled:shadow-none font-mono font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed active:scale-[0.99] ${theme.buttonBg}`}
           >
             <Send className="w-3.5 h-3.5" />

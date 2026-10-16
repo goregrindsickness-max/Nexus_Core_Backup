@@ -4,6 +4,7 @@ import { loadFeedCache, saveFeedCache, getDeletedPostIdsLocal, resolveWorkspaceE
 import { getSupabase, subscribeToTable } from '../../../supabase';
 import { extractYouTubeId } from '../utils/postSyncUtils';
 import { mergePostWithReactions } from '../utils/reactionStore';
+import { isMiguelNameOrProfile } from '../utils/profileUtils';
 
 interface UseFeedLocalCacheOptions {
   portalRole: string;
@@ -44,7 +45,32 @@ export function useFeedLocalCache({
 
         const storedFeed = await loadFeedCache(portalRole, userProfile?.id, resolvedEntityId);
         if (!active) return;
-        let finalFeed = storedFeed || [];
+        const currentLiveAvatar = userProfile?.avatar || userProfile?.avatar_url || userProfile?.profile_avatar;
+        // Sanitize stored feed in case any of the current user's personal posts had their avatar corrupted by a band event
+        let finalFeed = (storedFeed || []).map(post => {
+          const rawPost = post as any;
+          const isPostSelf = Boolean(
+            post.author?.isYou ||
+            rawPost.isYou ||
+            (userProfile?.id && (post.author?.id === userProfile.id || rawPost.profile_id === userProfile.id || rawPost.user_id === userProfile.id)) ||
+            (userProfile?.console_handle && post.author?.name && post.author.name.toLowerCase().includes(userProfile.console_handle.toLowerCase().replace(/^@/, ''))) ||
+            (userProfile?.name && post.author?.name && post.author.name.toLowerCase().includes(userProfile.name.toLowerCase()))
+          );
+          const postWorkspace = (rawPost.workspace_type || rawPost.workspaceType || post.author?.workspace_type || post.author?.workspaceType || '').toLowerCase();
+          const isEntityPost = postWorkspace === 'band' || postWorkspace === 'creative' || postWorkspace === 'promoter' || postWorkspace === 'label' ||
+            post.author?.role === 'Band / Artist' || post.author?.role === 'Creative Pro' || post.author?.role === 'Promoter / Venue' || post.author?.role === 'Record Label' ||
+            Boolean((post.author as any)?.isBand);
+          if (isPostSelf && !isEntityPost && currentLiveAvatar) {
+            return {
+              ...post,
+              author: {
+                ...post.author,
+                avatar: currentLiveAvatar
+              }
+            };
+          }
+          return post;
+        });
 
         // Fetch from Supabase
         const supabaseClient = getSupabase();
@@ -73,8 +99,29 @@ export function useFeedLocalCache({
                   try {
                     const postObj = typeof item.data === 'string' ? JSON.parse(item.data) : (item.data || {});
 
-                    const isSelf = userProfile?.id && (userProfile.id === item.profiles?.id || userProfile.id === item.profile_id);
-                    const liveSelfAvatar = isSelf ? (userProfile?.avatar || userProfile?.avatar_url || userProfile?.profile_avatar) : null;
+                    const authorNameVal = (postObj.authorName || postObj.author?.name || item.profiles?.full_name || item.profiles?.name || '').toLowerCase();
+                    const authorHandleVal = (postObj.authorHandle || postObj.author?.console_handle || item.profiles?.console_handle || '').toLowerCase();
+
+                    const isViewerMiguel = isMiguelNameOrProfile(userProfile);
+                    const isSelf = Boolean(
+                      (userProfile?.id && (userProfile.id === item.profiles?.id || userProfile.id === item.profile_id || userProfile.id === postObj.author?.id || userProfile.id === postObj.authorId)) ||
+                      (userProfile?.email && (userProfile.email.toLowerCase() === (item.profiles?.email || '').toLowerCase() || userProfile.email.toLowerCase() === (postObj.author?.email || '').toLowerCase())) ||
+                      (userProfile?.console_handle && (
+                        userProfile.console_handle.toLowerCase() === authorHandleVal ||
+                        userProfile.console_handle.replace(/^@/, '').toLowerCase() === authorHandleVal.replace(/^@/, '') ||
+                        userProfile.console_handle.toLowerCase() === authorNameVal
+                      )) ||
+                      (userProfile?.name && authorNameVal === userProfile.name.toLowerCase()) ||
+                      (userProfile?.full_name && authorNameVal === userProfile.full_name.toLowerCase()) ||
+                      (isViewerMiguel && (
+                        authorNameVal.includes('goregrinder') ||
+                        authorNameVal.includes('bdmceo') ||
+                        authorNameVal === 'miguel medina'
+                      ))
+                    );
+
+                    const localStoredAvatar = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null;
+                    const liveSelfAvatar = isSelf ? (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || localStoredAvatar) : null;
 
                     const isCreativePost = postObj.workspace_type === 'creative' ||
                       postObj.workspaceType === 'creative' ||
@@ -129,12 +176,30 @@ export function useFeedLocalCache({
                       ? (postObj.author?.name || postObj.authorName)
                       : (postObj.authorName || postObj.author?.name || item.profiles?.console_handle || item.profiles?.full_name || 'Anonymous');
 
+                    const isNonPersonalEntityPost = isBandPost || isCreativePost || isLabelPost || isPromoterPost;
                     const dedicatedAvatar = postObj.authorAvatar || postObj.author?.avatar;
-                    const resolvedAvatar = (dedicatedAvatar && !dedicatedAvatar.includes('ui-avatars.com'))
-                      ? dedicatedAvatar
-                      : (isSelf
-                        ? (liveSelfAvatar || item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar || item.profiles?.profile_image || dedicatedAvatar || undefined)
-                        : (item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar || item.profiles?.profile_image || dedicatedAvatar || undefined));
+                    const resolvedAvatar = (!isNonPersonalEntityPost && isSelf && (liveSelfAvatar || item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar))
+                      ? (liveSelfAvatar || item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar)
+                      : ((dedicatedAvatar && !dedicatedAvatar.includes('ui-avatars.com'))
+                        ? dedicatedAvatar
+                        : (isSelf
+                          ? (liveSelfAvatar || item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar || item.profiles?.profile_image || dedicatedAvatar || undefined)
+                          : (item.profiles?.avatar_url || item.profiles?.avatar || item.profiles?.profile_avatar || item.profiles?.profile_image || dedicatedAvatar || undefined)));
+
+                    // Auto-heal Supabase post record ONLY if a purely personal post avatar was corrupted
+                    if (isSelf && !isNonPersonalEntityPost && liveSelfAvatar && supabaseClient && item.id) {
+                      if (postObj.author?.avatar && postObj.author.avatar !== liveSelfAvatar && !postObj.author.avatar.includes('ui-avatars.com')) {
+                        const healedData = {
+                          ...postObj,
+                          author: {
+                            ...(postObj.author || {}),
+                            avatar: liveSelfAvatar
+                          },
+                          authorAvatar: liveSelfAvatar
+                        };
+                        supabaseClient.from('nexus_posts').update({ data: healedData }).eq('id', item.id).then();
+                      }
+                    }
 
                     const author = {
                       id: postObj.author?.id || item.profiles?.id || item.profile_id,
@@ -162,15 +227,24 @@ export function useFeedLocalCache({
                     };
 
                     const contentText = item.content || postObj.content || postObj.text || '';
-                    const rawMediaUrl = item.media_url || postObj.media_url || postObj.mediaUrl || postObj.image || (postObj.images && postObj.images[0]) || null;
+                    const rawMediaUrl = (item.media_url !== undefined && item.media_url !== null)
+                      ? item.media_url
+                      : (postObj.media_url || postObj.mediaUrl || postObj.image || (postObj.images && postObj.images[0]) || null);
 
                     const ytId = postObj.youtubeId || postObj.youtube_id || extractYouTubeId(postObj.youtubeUrl || postObj.youtube_url || rawMediaUrl || contentText);
                     const ytUrl = postObj.youtubeUrl || postObj.youtube_url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : null);
 
                     const resolvedMediaUrl = rawMediaUrl || ytUrl || postObj.tapeData?.audioUrl || postObj.songData?.audioUrl || null;
-                    const imagesArr = postObj.images && postObj.images.length > 0
-                      ? postObj.images
-                      : (resolvedMediaUrl ? [resolvedMediaUrl] : []);
+                    
+                    let imagesArr: string[] = [];
+                    if (Array.isArray(postObj.images)) {
+                      imagesArr = postObj.images;
+                    } else if (resolvedMediaUrl) {
+                      imagesArr = [resolvedMediaUrl];
+                    }
+                    if (rawMediaUrl && !imagesArr.includes(rawMediaUrl)) {
+                      imagesArr = [rawMediaUrl, ...imagesArr];
+                    }
 
                     const resolvedBandcampData = postObj.bandcampData || postObj.bandcamp_data || null;
                     const resolvedBandcampUrl = postObj.bandcampUrl || postObj.bandcamp_url || (rawMediaUrl && rawMediaUrl.includes('bandcamp.com') ? rawMediaUrl : null);
@@ -386,8 +460,29 @@ export function useFeedLocalCache({
             }
           }
 
-          const isSelf = userProfile?.id && (userProfile.id === profile?.id || userProfile.id === newItem.profile_id);
-          const liveSelfAvatar = isSelf ? (userProfile?.avatar || userProfile?.avatar_url || userProfile?.profile_avatar) : null;
+          const authorNameVal = (parsedPost.authorName || parsedPost.author?.name || profile?.full_name || profile?.name || '').toLowerCase();
+          const authorHandleVal = (parsedPost.authorHandle || parsedPost.author?.console_handle || profile?.console_handle || '').toLowerCase();
+
+          const isViewerMiguel = isMiguelNameOrProfile(userProfile);
+          const isSelf = Boolean(
+            (userProfile?.id && (userProfile.id === profile?.id || userProfile.id === newItem.profile_id || userProfile.id === parsedPost.author?.id || userProfile.id === parsedPost.authorId)) ||
+            (userProfile?.email && (userProfile.email.toLowerCase() === (profile?.email || '').toLowerCase() || userProfile.email.toLowerCase() === (parsedPost.author?.email || '').toLowerCase())) ||
+            (userProfile?.console_handle && (
+              userProfile.console_handle.toLowerCase() === authorHandleVal ||
+              userProfile.console_handle.replace(/^@/, '').toLowerCase() === authorHandleVal.replace(/^@/, '') ||
+              userProfile.console_handle.toLowerCase() === authorNameVal
+            )) ||
+            (userProfile?.name && authorNameVal === userProfile.name.toLowerCase()) ||
+            (userProfile?.full_name && authorNameVal === userProfile.full_name.toLowerCase()) ||
+            (isViewerMiguel && (
+              authorNameVal.includes('goregrinder') ||
+              authorNameVal.includes('bdmceo') ||
+              authorNameVal === 'miguel medina'
+            ))
+          );
+
+          const localStoredAvatar = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null;
+          const liveSelfAvatar = isSelf ? (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || localStoredAvatar) : null;
 
           const isCreativePost = parsedPost.workspace_type === 'creative' ||
             parsedPost.workspaceType === 'creative' ||
@@ -460,15 +555,26 @@ export function useFeedLocalCache({
           };
 
           const contentText = newItem.content || parsedPost.content || parsedPost.text || '';
-          const rawMediaUrl = newItem.media_url || parsedPost.media_url || parsedPost.mediaUrl || parsedPost.image || (parsedPost.images && parsedPost.images[0]) || null;
+          const rawMediaUrl = (newItem.media_url !== undefined && newItem.media_url !== null)
+            ? newItem.media_url
+            : (parsedPost.media_url || parsedPost.mediaUrl || parsedPost.image || (parsedPost.images && parsedPost.images[0]) || null);
 
           const ytId = parsedPost.youtubeId || parsedPost.youtube_id || extractYouTubeId(parsedPost.youtubeUrl || parsedPost.youtube_url || rawMediaUrl || contentText);
           const ytUrl = parsedPost.youtubeUrl || parsedPost.youtube_url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : null);
 
           const resolvedMediaUrl = rawMediaUrl || ytUrl || parsedPost.tapeData?.audioUrl || parsedPost.songData?.audioUrl || null;
-          const imagesArr = parsedPost.images && parsedPost.images.length > 0
-            ? parsedPost.images
-            : (resolvedMediaUrl ? [resolvedMediaUrl] : []);
+          
+          let imagesArr: string[] = [];
+          if (Array.isArray(parsedPost.images)) {
+            imagesArr = parsedPost.images;
+          } else if (resolvedMediaUrl) {
+            imagesArr = [resolvedMediaUrl];
+          }
+
+          // If rawMediaUrl is present but not in imagesArr, ensure it is included
+          if (rawMediaUrl && !imagesArr.includes(rawMediaUrl)) {
+            imagesArr = [rawMediaUrl, ...imagesArr];
+          }
 
           parsedPost = {
             ...parsedPost,
@@ -476,9 +582,12 @@ export function useFeedLocalCache({
             timestamp: newItem.created_at || parsedPost.timestamp || parsedPost.created_at || new Date().toISOString(),
             created_at: newItem.created_at || parsedPost.created_at || parsedPost.timestamp || new Date().toISOString(),
             content: contentText,
+            message: contentText,
+            text: contentText,
             image: resolvedMediaUrl,
-            mediaUrl: resolvedMediaUrl,
-            media_url: resolvedMediaUrl,
+            image_url: resolvedMediaUrl || undefined,
+            mediaUrl: resolvedMediaUrl || undefined,
+            media_url: resolvedMediaUrl || undefined,
             images: imagesArr,
             youtubeId: ytId || parsedPost.youtubeId,
             youtube_id: ytId || parsedPost.youtube_id,
@@ -523,8 +632,14 @@ export function useFeedLocalCache({
                 ...updated[matchIdx],
                 ...parsedPost,
                 id: parsedPost.id,
-                image: parsedPost.image || updated[matchIdx].image || updated[matchIdx].images?.[0],
-                images: (parsedPost.images && parsedPost.images.length > 0) ? parsedPost.images : (updated[matchIdx].images || (updated[matchIdx].image ? [updated[matchIdx].image] : [])),
+                content: contentText,
+                message: contentText,
+                text: contentText,
+                image: resolvedMediaUrl,
+                image_url: resolvedMediaUrl || undefined,
+                mediaUrl: resolvedMediaUrl || undefined,
+                media_url: resolvedMediaUrl || undefined,
+                images: imagesArr,
                 user_reactions: updated[matchIdx].user_reactions || parsedPost.user_reactions,
                 user_liked: updated[matchIdx].user_liked ?? parsedPost.user_liked,
               }, userProfile?.id);
@@ -608,7 +723,58 @@ export function useFeedLocalCache({
         return matched ? next : prev;
       });
     };
+
+    const handleAvatarUpdateSync = (e: any) => {
+      const detail = e.detail;
+      const newUrl = detail?.avatarUrl || detail?.avatar_url || detail?.logo_url || detail?.avatar;
+      if (!newUrl) return;
+
+      const targetId = detail?.id || userProfile?.id;
+      const targetName = (detail?.authorName || detail?.name || userProfile?.name || '').toLowerCase().trim();
+
+      setFeed((prev: FeedItem[]) => prev.map(post => {
+        const rawPost = post as any;
+        const postAuthorId = rawPost.author_id || rawPost.authorId || rawPost.profile_id || rawPost.user_id || post.author?.id;
+        const postAuthorName = (post.author?.name || rawPost.authorName || '').toLowerCase().trim();
+        const postWorkspace = (rawPost.workspace_type || rawPost.workspaceType || post.author?.workspace_type || post.author?.workspaceType || '').toLowerCase();
+        const isBandPost = postWorkspace === 'band' || post.author?.role === 'Band / Artist' || Boolean((post.author as any)?.isBand);
+
+        const isMatch = Boolean(
+          (targetId && postAuthorId === targetId) ||
+          (targetName && (
+            postAuthorName === targetName ||
+            postAuthorName.includes(targetName) ||
+            targetName.includes(postAuthorName) ||
+            (targetName.includes('miguel') && postAuthorName.includes('bdmceo')) ||
+            (targetName.includes('bdmceo') && postAuthorName.includes('miguel'))
+          )) ||
+          post.author?.isYou ||
+          rawPost.isYou
+        );
+
+        // Update post avatar for all matching author posts (skip purely band posts only if this update is not for a band)
+        const isBandUpdate = detail?.authorRole?.toLowerCase().includes('band');
+        if (isMatch && (!isBandPost || isBandUpdate)) {
+          return {
+            ...post,
+            authorAvatar: newUrl,
+            avatar: newUrl,
+            avatar_url: newUrl,
+            author_avatar: newUrl,
+            author: {
+              ...(post.author || {}),
+              name: post.author?.name || 'User',
+              avatar: newUrl,
+              avatar_url: newUrl
+            }
+          } as FeedItem;
+        }
+        return post;
+      }));
+    };
+
     window.addEventListener('nexus_reaction_updated', handleReactionSync as EventListener);
+    window.addEventListener('nexus_avatar_updated', handleAvatarUpdateSync as EventListener);
 
     return () => {
       active = false;
@@ -616,6 +782,7 @@ export function useFeedLocalCache({
       if (unsubComments) unsubComments();
       window.removeEventListener('nexus_post_deleted', handlePostDeletedSync as EventListener);
       window.removeEventListener('nexus_reaction_updated', handleReactionSync as EventListener);
+      window.removeEventListener('nexus_avatar_updated', handleAvatarUpdateSync as EventListener);
     };
   }, [userProfile?.id, setFeed]);
 

@@ -34,6 +34,13 @@ import {
   DiscoveryZone,
   PeopleYouMayKnow,
 } from './timeline';
+import { ForumHighlightCard } from './ForumHighlightCard';
+import {
+  getCuratedForumHighlights,
+  syncForumHighlightsFromSupabase,
+  isUserForumThread,
+  ForumHighlightThread,
+} from '../../services/forumHighlightService';
 
 export type {
   FeedComment,
@@ -81,10 +88,35 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
   onTriggerNotification,
   discoverProfiles = [],
   onFollowProfile,
+  onNavigateToForum,
 }) => {
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [expandedTourDates, setExpandedTourDates] = useState<Record<string, boolean>>({});
+
+  // Curated Forum Highlights in Feed (prioritizing user's real forum posts)
+  const [forumHighlights, setForumHighlights] = useState<ForumHighlightThread[]>(() =>
+    getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId)
+  );
+  const [dismissedHighlightIds, setDismissedHighlightIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    // Initial sync with user context
+    setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+
+    // Also run asynchronous Supabase sync if connected
+    syncForumHighlightsFromSupabase().then(() => {
+      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+    });
+
+    const handleForumCacheUpdated = () => {
+      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+    };
+    window.addEventListener('nexus_forum_cache_updated' as any, handleForumCacheUpdated);
+    return () => {
+      window.removeEventListener('nexus_forum_cache_updated' as any, handleForumCacheUpdated);
+    };
+  }, [userProfile, currentUserName, currentUserId]);
   
   // Ticket purchase modal state
   const [selectedTicketShow, setSelectedTicketShow] = useState<{ post: FeedPost; date: any } | null>(null);
@@ -110,6 +142,7 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
   // Inline post edit state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState<string>('');
+  const [editingImages, setEditingImages] = useState<string[]>([]);
 
   // Song playback preview state
   const [playingSongId, setPlayingSongId] = useState<string | null>(null);
@@ -204,16 +237,15 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
   const openMerchLightbox = (post: FeedPost, initialIndex = 0) => {
     if (!post.merchData) return;
     const primary = post.merchData.thumbnail;
-    const extra = post.images && post.images.length > 0 ? post.images : [
-      primary,
-      'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Origin%20Destroyer%20T-Shirt%20copy.jpg',
-      'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Destroy%20the%20Opps.webp'
-    ];
-    const uniqueImages = Array.from(new Set([primary, ...extra]));
+    const merchImages = post.merchData.images && post.merchData.images.length > 0
+      ? post.merchData.images
+      : (post.images && post.images.length > 0 ? post.images : [primary]);
+    const uniqueImages = Array.from(new Set(merchImages.filter(Boolean))).slice(0, 3);
+    const imagesToUse = uniqueImages.length > 0 ? uniqueImages : [primary];
     setActiveMerchLightbox({
       post,
-      images: uniqueImages,
-      activeIndex: Math.min(initialIndex, uniqueImages.length - 1)
+      images: imagesToUse,
+      activeIndex: Math.min(initialIndex, Math.max(0, imagesToUse.length - 1))
     });
   };
 
@@ -298,21 +330,28 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
 
   const startEditing = (post: FeedPost) => {
     setEditingPostId(post.id);
-    setEditingText(post.message);
+    setEditingText(post.message || (post as any).content || '');
+    const currentImgs = (post.images && post.images.length > 0)
+      ? post.images
+      : (post.image_url ? [post.image_url] : (post.image ? [post.image] : (post.mediaUrl ? [post.mediaUrl] : (post.media_url ? [post.media_url] : []))));
+    setEditingImages(currentImgs.filter(Boolean));
   };
 
   const cancelEditing = () => {
     setEditingPostId(null);
     setEditingText('');
+    setEditingImages([]);
   };
 
-  const saveEditing = (postId: string, newText: string) => {
-    if (!newText.trim()) return;
+  const saveEditing = (postId: string, newText: string, newImages?: string[]) => {
+    const imagesToSave = newImages !== undefined ? newImages : editingImages;
+    if (!newText.trim() && imagesToSave.length === 0) return;
     if (onEditPost) {
-      onEditPost(postId, newText.trim());
+      onEditPost(postId, newText.trim(), imagesToSave);
     }
     setEditingPostId(null);
     setEditingText('');
+    setEditingImages([]);
   };
 
   const handleShare = (postId: string) => {
@@ -392,12 +431,32 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
           );
         }
 
+        const activeHighlights = forumHighlights.filter(
+          (h) => !dismissedHighlightIds.has(h.id)
+        );
+
         return (
           <React.Fragment>
             {processedPosts.map((post, index) => {
               const showSuggestionsAfterThis = (index === 3) || (processedPosts.length < 4 && index === processedPosts.length - 1);
+
+              // Curated Forum Highlight interleaving (spaced evenly, never flooding)
+              let highlightToRender: ForumHighlightThread | null = null;
+              if (activeHighlights.length > 0) {
+                const hasUserPost = isUserForumThread(activeHighlights[0], userProfile, currentUserName, currentUserId);
+                // When the user has a real forum post, spotlight it after post #3 (index 2) so it's directly visible
+                const firstSlotIndex = hasUserPost ? (processedPosts.length > 2 ? 2 : 0) : (processedPosts.length >= 6 ? 5 : (processedPosts.length >= 2 ? 1 : 0));
+
+                if (index === firstSlotIndex) {
+                  highlightToRender = activeHighlights[0];
+                } else if (index > firstSlotIndex && (index - firstSlotIndex) % 8 === 0) {
+                  const slot = Math.floor((index - firstSlotIndex) / 8);
+                  highlightToRender = activeHighlights[slot % activeHighlights.length];
+                }
+              }
+
               return (
-                <React.Fragment key={post.id ? `feed-post-${index}-${post.id}` : `feed-post-${index}`}>
+                <React.Fragment key={post.id ? `feed-post-${post.id}` : `feed-post-${index}`}>
                   <PostCard
                     post={post}
                     currentUserId={currentUserId}
@@ -410,6 +469,7 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                     replyingTo={replyingToCommentId[post.id] || null}
                     isEditing={editingPostId === post.id}
                     editingText={editingText}
+                    editingImages={editingImages}
                     isPostMenuOpen={openPostMenuId === post.id}
                     isReactionMenuOpen={reactionMenuPostId === post.id}
                     isHypeAnimated={!!hypeAnimations[post.id]}
@@ -434,8 +494,9 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                     onTogglePin={onTogglePin}
                     onStartEditing={() => startEditing(post)}
                     onCancelEditing={cancelEditing}
-                    onSaveEditing={(txt) => saveEditing(post.id, txt)}
+                    onSaveEditing={(txt, imgs) => saveEditing(post.id, txt, imgs)}
                     onSetEditingText={setEditingText}
+                    onSetEditingImages={setEditingImages}
                     onDeletePost={onDeletePost}
                     onShareClick={() => handleShare(post.id)}
                     onOpenBoostModal={() => setActiveBoostPostId(post.id)}
@@ -513,6 +574,33 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                       onFollowProfile={onFollowProfile}
                       onTriggerNotification={onTriggerNotification}
                     />
+                  )}
+                  {highlightToRender && (
+                    <div
+                      key={`forum-highlight-slot-${highlightToRender.id}-${index}`}
+                      className="my-3 animate-in fade-in duration-200"
+                    >
+                      <ForumHighlightCard
+                        thread={highlightToRender}
+                        currentUserName={userProfile?.name || currentUserName || 'You'}
+                        currentUserAvatar={userProfile?.avatar || ''}
+                        isUserPost={isUserForumThread(highlightToRender, userProfile, currentUserName, currentUserId)}
+                        onOpenThread={(threadId) => {
+                          if (onNavigateToForum) {
+                            onNavigateToForum(threadId);
+                          } else {
+                            window.dispatchEvent(
+                              new CustomEvent('nexus_open_forum_thread', { detail: { threadId } })
+                            );
+                          }
+                        }}
+                        onDismiss={(threadId) => {
+                          setDismissedHighlightIds((prev) => new Set(prev).add(threadId));
+                          onTriggerNotification?.('Forum highlight hidden from feed.');
+                        }}
+                        onTriggerNotification={onTriggerNotification}
+                      />
+                    </div>
                   )}
                 </React.Fragment>
               );

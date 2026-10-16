@@ -38,10 +38,16 @@ import {
   CommunityBandRecord,
   LineupMember,
   DiscographyRelease,
-  DiscographyTrack
+  DiscographyTrack,
+  saveBandDiscographyToCache,
+  loadBandDiscographyFromCache,
+  deduplicateDiscography,
+  markReleaseDeletedInStorage
 } from '../../../lib/communityBands';
+import { deleteReleaseFromDatabase } from '../../../services/releasesService';
 import { uploadBase64ToStorage, generateUUID, ensureUUID } from '../../../supabase';
 import { MASTER_GENRES } from '../../../constants/genres';
+import { MetalArchivesImportModal } from './MetalArchivesImportModal';
 
 interface CommunityBandCuratorModalProps {
   isOpen: boolean;
@@ -119,9 +125,14 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const [newMemberYears, setNewMemberYears] = useState('');
   const [editingMemberIdx, setEditingMemberIdx] = useState<number | null>(null);
 
+  // Delete Dialog Confirmation State
+  const [confirmDeleteBand, setConfirmDeleteBand] = useState<CommunityBandRecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Discography Editor State
   const [albums, setAlbums] = useState<DiscographyRelease[]>([]);
   const [editingAlbumIdx, setEditingAlbumIdx] = useState<number | null>(null);
+  const [showImporterModal, setShowImporterModal] = useState(false);
 
   // Current working release (for creating or editing)
   const [releaseTitle, setReleaseTitle] = useState('');
@@ -246,11 +257,55 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         setBandsList(freshList);
       }
     };
+
+    const handleDiscoImported = (e: any) => {
+      const { releases } = e.detail || {};
+      if (releases && Array.isArray(releases) && releases.length > 0) {
+        setAlbums((prev) => {
+          const merged = [...prev];
+          for (const r of releases) {
+            const existingIdx = merged.findIndex(
+              (m) => m.id === r.id || (m.title && r.title && m.title.toLowerCase().trim() === r.title.toLowerCase().trim())
+            );
+            const cover = r.cover_url || r.coverUrl || r.cover_image || r.coverImage || r.image_url || '';
+            const newAlb: DiscographyRelease = {
+              id: r.id || `rel-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+              title: r.title || 'Untitled',
+              year: r.releaseDate || r.year || String(new Date().getFullYear()),
+              type: (['album', 'ep', 'single', 'demo'].includes((r.type || '').toLowerCase()) ? (r.type.toLowerCase() as any) : 'album'),
+              image_url: cover,
+              label: r.label || '',
+              release_info: r.label || '',
+              catalog_id: r.catalogId || r.catalog_id || '',
+              tracks: (r.tracks || []).map((t: any, idx: number) => ({
+                number: t.num || t.number || idx + 1,
+                title: t.title || `Track ${idx + 1}`,
+                duration: t.duration || '3:30',
+                lyrics: t.lyrics || undefined
+              }))
+            };
+            if (existingIdx >= 0) {
+              merged[existingIdx] = {
+                ...merged[existingIdx],
+                ...newAlb,
+                image_url: cover || merged[existingIdx].image_url
+              };
+            } else {
+              merged.push(newAlb);
+            }
+          }
+          return merged.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
+        });
+      }
+    };
+
     window.addEventListener('nexus_community_bands_updated', handleUpdate);
     window.addEventListener('nexus_avatar_updated', handleUpdate);
+    window.addEventListener('nexus_discography_imported', handleDiscoImported as EventListener);
     return () => {
       window.removeEventListener('nexus_community_bands_updated', handleUpdate);
       window.removeEventListener('nexus_avatar_updated', handleUpdate);
+      window.removeEventListener('nexus_discography_imported', handleDiscoImported as EventListener);
     };
   }, []);
 
@@ -275,33 +330,99 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     setMetalArchivesUrl(band.metal_archives_url || '');
     setYoutubeUrl(band.youtube_url || band.featured_youtube_url || '');
     setCuratorHandle(band.curated_by || (userProfile?.console_handle || userProfile?.handle || '@community_archivist'));
-    setLineup(band.lineup || []);
-    setAlbums([...(band.discography || [])].sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0')));
+
+    // Resilient lineup resolution
+    let loadedLineup: LineupMember[] = [];
+    if (Array.isArray(band.lineup) && band.lineup.length > 0) {
+      loadedLineup = band.lineup;
+    } else if (typeof band.lineup === 'string' && (band.lineup as string).trim()) {
+      try {
+        const parsed = JSON.parse(band.lineup);
+        if (Array.isArray(parsed) && parsed.length > 0) loadedLineup = parsed;
+      } catch {
+        const parts = (band.lineup as string).split(',').map(s => s.trim()).filter(Boolean);
+        loadedLineup = parts.map((part, idx) => {
+          const match = part.match(/^(.*?)\s*\((.*?)\)$/);
+          if (match) {
+            return {
+              id: `mem-${idx}`,
+              name: match[1].trim(),
+              role: match[2].trim() || 'Musician',
+              status: 'active' as const,
+              years: 'Present'
+            };
+          }
+          return {
+            id: `mem-${idx}`,
+            name: part,
+            role: 'Musician',
+            status: 'active' as const,
+            years: 'Present'
+          };
+        });
+      }
+    }
+    if (loadedLineup.length === 0) {
+      const bId = band.id || '';
+      const bUUID = bId ? ensureUUID(bId) : '';
+      const bName = (band.name || (band as any).band_name || '').toLowerCase().trim();
+      const stored = (bId ? localStorage.getItem(`nexus_core_band_lineup_${bId}`) : null) ||
+                     (bUUID ? localStorage.getItem(`nexus_core_band_lineup_${bUUID}`) : null) ||
+                     (bName ? localStorage.getItem(`nexus_core_band_lineup_${bName}`) : null);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) loadedLineup = parsed;
+        } catch {}
+      }
+    }
+    setLineup(loadedLineup);
+
+    let loadedAlbums = (band.discography && band.discography.length > 0) ? band.discography : [];
+    const cached = loadBandDiscographyFromCache(band.id, band.name);
+    const combined = deduplicateDiscography([...loadedAlbums, ...(cached || [])]);
+    if (combined.length > 0) {
+      loadedAlbums = combined;
+    }
+
+    setAlbums([...loadedAlbums].sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0')));
     setEditingAlbumIdx(null);
     setEditingMemberIdx(null);
     resetReleaseInputs();
     setActivePage('editor');
   };
 
-  // Delete Community Band Archive with confirmation
+  // Delete Community Band Archive with clean in-app confirmation
   const handleDeleteBand = (band: CommunityBandRecord) => {
-    const bandTitle = band.name || 'this band';
-    const releaseCount = band.discography?.length || 0;
-    
-    if (!window.confirm(`🗑️ Are you sure you want to permanently delete "${bandTitle}" (${releaseCount} releases)?\n\nThis will remove it from community archives and Supabase.`)) {
-      return;
-    }
+    setConfirmDeleteBand(band);
+  };
 
-    const res = communityBandManager.deleteCommunityBand(band.id, true);
-    if (res.success) {
-      triggerNotification?.(`🗑️ Deleted community archive for "${bandTitle}".`);
-      loadBands();
-      if (selectedBand?.id === band.id) {
-        resetForm();
-        setActivePage('list');
+  const executeDeleteBand = async (band: CommunityBandRecord) => {
+    setIsDeleting(true);
+    try {
+      const bandTitle = band.name || 'this band';
+      const res = await communityBandManager.deleteCommunityBand(band.id, true);
+      if (res.success) {
+        try {
+          localStorage.removeItem(`nexus_core_band_lineup_${band.id}`);
+          localStorage.removeItem(`nexus_core_band_lineup_${ensureUUID(band.id)}`);
+          if (band.name) localStorage.removeItem(`nexus_core_band_lineup_${band.name.toLowerCase().trim()}`);
+          localStorage.removeItem(`nexus_core_band_logo_${band.id}`);
+          localStorage.removeItem(`nexus_core_band_cover_${band.id}`);
+        } catch {}
+        setBandsList(prev => prev.filter(b => b.id !== band.id && ensureUUID(b.id) !== ensureUUID(band.id) && (b.name || '').toLowerCase().trim() !== (band.name || '').toLowerCase().trim()));
+        triggerNotification?.(`🗑️ Deleted community archive for "${bandTitle}".`);
+        loadBands();
+        if (selectedBand?.id === band.id) {
+          resetForm();
+          setActivePage('list');
+        }
+      } else {
+        triggerNotification?.(`❌ Failed to delete archive: ${res.error || 'Unknown error'}`);
       }
-    } else {
-      triggerNotification?.(`❌ Failed to delete archive: ${res.error || 'Unknown error'}`);
+    } finally {
+      setIsDeleting(false);
+      setConfirmDeleteBand(null);
     }
   };
 
@@ -445,6 +566,13 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   };
 
   const handleRemoveAlbum = (idx: number) => {
+    const targetAlbum = albums[idx];
+    if (targetAlbum) {
+      markReleaseDeletedInStorage(targetAlbum.id, targetAlbum.title, selectedBand?.id || selectedBand?.name);
+      if (targetAlbum.id) {
+        deleteReleaseFromDatabase(targetAlbum.id, undefined, selectedBand?.id || selectedBand?.name, targetAlbum.title);
+      }
+    }
     setAlbums(albums.filter((_, i) => i !== idx));
     if (editingAlbumIdx === idx) {
       resetReleaseInputs();
@@ -482,6 +610,57 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     setIsSaving(true);
 
     try {
+      // Auto-commit any currently typed lineup member in the input fields
+      let finalLineup = [...lineup];
+      if (newMemberName.trim()) {
+        const pendingMember: LineupMember = {
+          id: editingMemberIdx !== null && lineup[editingMemberIdx]?.id
+            ? lineup[editingMemberIdx].id
+            : `mem-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          name: newMemberName.trim(),
+          role: newMemberRole.trim() || 'Musician',
+          status: newMemberStatus,
+          years: newMemberYears.trim() || 'Present'
+        };
+        if (editingMemberIdx !== null && editingMemberIdx < finalLineup.length) {
+          finalLineup[editingMemberIdx] = pendingMember;
+        } else {
+          finalLineup.push(pendingMember);
+        }
+        setLineup(finalLineup);
+        setNewMemberName('');
+        setNewMemberRole('');
+        setNewMemberYears('');
+        setEditingMemberIdx(null);
+      }
+
+      // Auto-commit any currently typed release in the input fields
+      let finalAlbums = [...albums];
+      if (releaseTitle.trim()) {
+        const releaseId = editingAlbumIdx !== null && albums[editingAlbumIdx]?.id
+          ? ensureUUID(albums[editingAlbumIdx].id)
+          : generateUUID();
+        const pendingRelease: DiscographyRelease = {
+          id: releaseId,
+          title: releaseTitle.trim(),
+          year: releaseYear.trim() || new Date().getFullYear().toString(),
+          type: releaseType,
+          image_url: releaseImageUrl.trim() || undefined,
+          label: releaseLabel.trim() || undefined,
+          release_info: releaseLabel.trim() || undefined,
+          catalog_id: releaseCatalogId.trim() || undefined,
+          tracks: releaseTracks
+        };
+        if (editingAlbumIdx !== null && editingAlbumIdx < finalAlbums.length) {
+          finalAlbums[editingAlbumIdx] = pendingRelease;
+        } else {
+          finalAlbums.push(pendingRelease);
+        }
+        finalAlbums.sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0'));
+        setAlbums(finalAlbums);
+        resetReleaseInputs();
+      }
+
       const resolvedCreatorId = selectedBand?.creator_id || userProfile?.id || (userProfile?.console_handle ? userProfile.console_handle : undefined);
 
       const parsedFoundedYear = foundedYear.trim() ? parseInt(foundedYear.trim(), 10) : undefined;
@@ -517,8 +696,8 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         metal_archives_url: metalArchivesUrl.trim() || undefined,
         youtube_url: youtubeUrl.trim() || undefined,
         featured_youtube_url: youtubeUrl.trim() || undefined,
-        lineup,
-        discography: albums,
+        lineup: finalLineup,
+        discography: finalAlbums,
         creator_id: resolvedCreatorId,
         curated_by: curatorHandle || userProfile?.console_handle || userProfile?.handle || '@fan_archivist',
         curator_name: userProfile?.full_name || userProfile?.name || 'Community Archivist',
@@ -527,6 +706,34 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
       const savedRecord = communityBandManager.upsertCommunityBand(bandPayload, { isNew: isCreatingNew });
 
+      // Cache lineup to localStorage for immediate cross-portal availability
+      try {
+        const serializedLineup = JSON.stringify(finalLineup);
+        localStorage.setItem(`nexus_core_band_lineup_${bandId}`, serializedLineup);
+        localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, serializedLineup);
+        if (savedRecord?.id) {
+          localStorage.setItem(`nexus_core_band_lineup_${savedRecord.id}`, serializedLineup);
+          localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(savedRecord.id)}`, serializedLineup);
+        }
+        if (name.trim()) {
+          localStorage.setItem(`nexus_core_band_lineup_${name.trim().toLowerCase()}`, serializedLineup);
+        }
+        window.dispatchEvent(new CustomEvent('nexus_band_lineup_updated', {
+          detail: { bandId: savedRecord?.id || bandId, lineup: finalLineup }
+        }));
+      } catch {}
+
+      // Cache discography to localStorage and memory for permanent resilience
+      try {
+        saveBandDiscographyToCache(bandId, name, finalAlbums);
+        if (savedRecord?.id) {
+          saveBandDiscographyToCache(savedRecord.id, name, finalAlbums);
+        }
+        window.dispatchEvent(new CustomEvent('nexus_band_discography_updated', {
+          detail: { bandId: savedRecord?.id || bandId, discography: finalAlbums }
+        }));
+      } catch {}
+
       // Attempt Supabase sync with explicit isNew configuration
       try {
         const syncRes = await communityBandManager.syncToSupabaseTables(savedRecord, { isNew: isCreatingNew });
@@ -534,7 +741,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
           console.error('[CommunityBandCuratorModal] Remote Supabase sync error:', syncRes.error);
           triggerNotification?.(`⚠️ Saved locally, cloud sync notice: ${syncRes.error}`);
         } else {
-          triggerNotification?.(`⚡ Saved & synchronized "${savedRecord.name}" to cloud archive!`);
+          triggerNotification?.(`⚡ Saved & synchronized "${savedRecord.name}" (${finalLineup.length} members, ${finalAlbums.length} releases) to cloud archive!`);
         }
       } catch (syncErr: any) {
         console.warn('[CommunityBandCuratorModal] Remote Supabase sync deferred (offline / offline queue active):', syncErr);
@@ -545,13 +752,11 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
       setTimeout(() => setSavedFeedback(false), 3000);
 
       loadBands();
-      populateForm(savedRecord);
+      populateForm({
+        ...savedRecord,
+        lineup: finalLineup
+      });
       onSaved?.(savedRecord);
-      
-      // Return to archives list after successful save
-      setTimeout(() => {
-        setActivePage('list');
-      }, 800);
     } catch (error) {
       console.error('Failed to save archive:', error);
       triggerNotification?.(`❌ Failed to save band archive: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -562,31 +767,35 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
   if (!isOpen) return null;
 
-  const filteredBands = bandsList.filter((b) =>
-    b.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    b.genre.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredBands = bandsList
+    .filter((b) =>
+      b.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      b.genre.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base', numeric: true }));
 
   return (
-    <div className="fixed inset-0 z-[1000005] bg-black/90 backdrop-blur-md flex items-center justify-center p-2 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
-      <div className="w-full max-w-4xl bg-[#090a0f] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94vh] sm:h-[88vh]">
+    <div className="fixed inset-0 z-[1000005] bg-black/90 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 md:p-6 pb-20 sm:pb-6 overflow-y-auto animate-in fade-in duration-200">
+      <div className="w-full max-w-4xl bg-[#090a0f] border border-zinc-800 rounded-none sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full max-h-[calc(100dvh-4.75rem)] sm:max-h-[88vh] sm:h-[88vh]">
         
-        {/* Global Modal Header */}
-        <div className="p-3.5 sm:p-5 border-b border-zinc-850 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-zinc-950 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-              <Users className="w-5 h-5" />
+        {/* Global Modal Header - Compact on mobile */}
+        <div className="px-3 py-2 sm:px-5 sm:py-3.5 border-b border-zinc-850 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-zinc-950 flex items-center justify-between shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-lg sm:rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <Users className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-black text-white font-display uppercase tracking-wide">
-                  Community Band Archivist Hub
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                <h3 className="text-xs sm:text-base font-black text-white font-display uppercase tracking-wide truncate">
+                  {activePage === 'editor' 
+                    ? (name.trim() ? name : (isCreatingNew ? 'New Archive' : 'Band Editor')) 
+                    : 'Community Band Hub'}
                 </h3>
-                <span className="hidden sm:inline-block text-[9px] font-mono font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40">
-                  SUPABASE SYNCED
+                <span className="hidden xs:inline-block text-[8px] sm:text-[9px] font-mono font-black uppercase px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 shrink-0">
+                  SUPABASE
                 </span>
               </div>
-              <p className="text-[11px] sm:text-xs text-zinc-400 font-sans">
+              <p className="text-[10px] sm:text-xs text-zinc-400 font-sans truncate hidden sm:block">
                 {activePage === 'list' 
                   ? 'Select an existing archive or create a new community band profile.'
                   : (isCreatingNew ? 'Creating New Archive' : `Editing: ${selectedBand?.name || 'Band'}`)}
@@ -594,13 +803,13 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {activePage === 'editor' && (
               <>
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-mono text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer shadow"
+                  className="px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-mono text-[11px] sm:text-xs font-bold uppercase flex items-center gap-1 transition-all cursor-pointer shadow"
                   title="Start a blank band profile from scratch"
                 >
                   <Plus className="w-3.5 h-3.5 text-zinc-400" />
@@ -611,7 +820,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                   <button
                     type="button"
                     onClick={() => handleDeleteBand(selectedBand)}
-                    className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-500/40 font-mono text-xs font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer shadow"
+                    className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-500/40 font-mono text-[11px] sm:text-xs font-bold uppercase flex items-center gap-1 transition-all cursor-pointer shadow"
                     title="Permanently delete this community band archive"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -619,30 +828,31 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                   </button>
                 )}
 
-
-
                 <button
+                  type="button"
                   onClick={() => setActivePage('list')}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-mono text-xs font-bold uppercase flex items-center gap-1.5 border border-zinc-800 cursor-pointer"
+                  className="px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-mono text-[11px] sm:text-xs font-bold uppercase flex items-center gap-1 border border-zinc-800 cursor-pointer"
+                  title="Return to existing archives list"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Archives List</span>
+                  <span className="hidden xs:inline">List</span>
                 </button>
               </>
             )}
 
             <button
               onClick={onClose}
-              className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer border border-zinc-800"
+              className="p-1.5 sm:p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer border border-zinc-800"
+              title="Close modal"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
         </div>
 
         {/* PAGE 1: EXISTING ARCHIVES LIST (Explorer) */}
         {activePage === 'list' && (
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-zinc-950/40">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-28 sm:pb-20 space-y-4 bg-zinc-950/40">
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               <div>
                 <h4 className="text-sm font-mono font-bold text-white uppercase tracking-wider">
@@ -736,7 +946,12 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
                     <div className="text-[10px] text-zinc-500 font-mono mt-1.5 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-3">
-                        <span>💿 {band.discography?.length || 0} releases</span>
+                        {(() => {
+                          const discoCount = (band.discography && band.discography.length > 0)
+                            ? band.discography.length
+                            : (loadBandDiscographyFromCache(band.id, band.name)?.length || 0);
+                          return <span>💿 {discoCount} {discoCount === 1 ? 'release' : 'releases'}</span>;
+                        })()}
                         <span>👥 {band.lineup?.length || 0} members</span>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -772,52 +987,64 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
           <div className="flex-1 flex flex-col overflow-hidden bg-[#090a0f]">
             
             {/* Top Sub-navigation Tabs */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-850 bg-zinc-950/80 shrink-0 overflow-x-auto gap-2">
-              <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-zinc-850 bg-zinc-950/80 shrink-0 overflow-x-auto gap-2">
+              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setActiveTab('overview')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer ${
                     activeTab === 'overview'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
                       : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                   }`}
                 >
-                  <Info className="w-3.5 h-3.5" /> Overview
+                  <Info className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span>Overview</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('lineup')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer ${
                     activeTab === 'lineup'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
                       : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                   }`}
                 >
-                  <Users className="w-3.5 h-3.5" /> Lineup ({lineup.length})
+                  <Users className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span>Lineup ({lineup.length})</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('discography')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-mono font-bold uppercase transition-all flex items-center gap-1 cursor-pointer ${
                     activeTab === 'discography'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
                       : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                   }`}
                 >
-                  <Disc className="w-3.5 h-3.5" /> Discography ({albums.length})
+                  <Disc className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span>Releases ({albums.length})</span>
                 </button>
               </div>
 
-              {savedFeedback && (
-                <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1 animate-in fade-in shrink-0">
-                  <Check className="w-3.5 h-3.5" /> Saved & Synced!
-                </span>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {savedFeedback && (
+                  <span className="text-[11px] font-mono font-bold text-emerald-400 flex items-center gap-1 animate-in fade-in">
+                    <Check className="w-3.5 h-3.5" /> Saved!
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={isSaving || !name.trim()}
+                  className="px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-mono font-black text-[10px] sm:text-xs uppercase tracking-wide cursor-pointer flex items-center gap-1.5 transition-all active:scale-95 shadow"
+                  title="Quick Save & Sync Archive"
+                >
+                  {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                  <span className="hidden xs:inline">Save</span>
+                </button>
+              </div>
             </div>
 
             {/* Scrollable Editor Content */}
-            <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3.5">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-32 sm:pb-24 space-y-3.5">
               
               {/* TAB 1: OVERVIEW & MEDIA */}
               {activeTab === 'overview' && (
@@ -1232,6 +1459,12 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           placeholder="e.g. Trey Williams, Chuck Schuldiner"
                           value={newMemberName}
                           onChange={(e) => setNewMemberName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddOrUpdateMember();
+                            }
+                          }}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs font-mono text-white outline-none focus:border-amber-500"
                         />
                       </div>
@@ -1243,6 +1476,12 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           placeholder="e.g. Drums, Vocals"
                           value={newMemberRole}
                           onChange={(e) => setNewMemberRole(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddOrUpdateMember();
+                            }
+                          }}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs font-mono text-white outline-none focus:border-amber-500"
                         />
                       </div>
@@ -1254,6 +1493,12 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           placeholder="e.g. 1993–present"
                           value={newMemberYears}
                           onChange={(e) => setNewMemberYears(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddOrUpdateMember();
+                            }
+                          }}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs font-mono text-white outline-none focus:border-amber-500"
                         />
                       </div>
@@ -1299,10 +1544,9 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                         <button
                           type="button"
                           onClick={() => {
-                            if (window.confirm(`Clear all ${lineup.length} lineup members from this form?`)) {
-                              setLineup([]);
-                              setEditingMemberIdx(null);
-                            }
+                            setLineup([]);
+                            setEditingMemberIdx(null);
+                            triggerNotification?.('Cleared lineup members from form.');
                           }}
                           className="text-[11px] font-mono text-zinc-400 hover:text-red-400 flex items-center gap-1 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-950/20 border border-transparent hover:border-red-900/40"
                         >
@@ -1606,11 +1850,9 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           <button
                             type="button"
                             onClick={() => {
-                              if (window.confirm(`Are you sure you want to clear all ${albums.length} releases from this archive?`)) {
-                                setAlbums([]);
-                                resetReleaseInputs();
-                                triggerNotification?.('Cleared all releases from form.');
-                              }
+                              setAlbums([]);
+                              resetReleaseInputs();
+                              triggerNotification?.('Cleared all releases from form.');
                             }}
                             className="px-2.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-500/40 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
@@ -1619,14 +1861,16 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                         )}
                         <button
                           type="button"
+                          id="btn-import-discography-hub"
                           onClick={() => {
-                            // Open Metal Archives Import Modal
+                            setShowImporterModal(true);
+                            // Also dispatch custom event for any global listeners
                             const event = new CustomEvent('open_metal_archives_import', { detail: { bandId: selectedBand?.id || 'band-1', bandName: name } });
                             window.dispatchEvent(event);
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/40 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer shadow"
+                          className="px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/40 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer shadow transition-all hover:scale-[1.02] active:scale-95"
                         >
-                          <Disc className="w-3.5 h-3.5" /> Import from Metal-Archives
+                          <Disc className="w-3.5 h-3.5" /> Import Discography (Google, Metal-Archives, iTunes)
                         </button>
                       </div>
                     </div>
@@ -1685,132 +1929,191 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                   </div>
                 </div>
               )}
-            </div>
-
-            {/* Visual Supabase Connection Status & Real-Time Debug Log Terminal */}
-            {showUpsertBox && (
-              <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-3 shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 font-mono text-xs">
-                    <span className={`w-2.5 h-2.5 rounded-full ${
-                      connectionStatus === 'success' ? 'bg-emerald-400 animate-pulse' :
-                      connectionStatus === 'error' ? 'bg-red-400 animate-ping' :
-                      connectionStatus === 'syncing' ? 'bg-amber-400 animate-bounce' : 'bg-zinc-600'
-                    }`} />
-                    <span className="text-zinc-300 uppercase tracking-wider font-bold">Supabase Upsert Connection:</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-black ${
-                      connectionStatus === 'success' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
-                      connectionStatus === 'error' ? 'bg-red-950 text-red-300 border border-red-800' :
-                      connectionStatus === 'syncing' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
-                    }`}>
-                      {connectionStatus === 'success' ? 'Synced & Active' :
-                       connectionStatus === 'error' ? 'Sync Error / RLS Notice' :
-                       connectionStatus === 'syncing' ? 'Transferring Data...' : 'Standby / Ready'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSyncLogs([])}
-                      className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300 uppercase tracking-wider px-2 py-1 rounded bg-zinc-900 border border-zinc-800 cursor-pointer"
-                    >
-                      Clear Log
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowDebugPanel(!showDebugPanel)}
-                      className="text-[10px] font-mono text-amber-400 hover:text-amber-300 uppercase tracking-wider px-2.5 py-1 rounded bg-amber-950/40 border border-amber-800/60 font-bold cursor-pointer"
-                    >
-                      {showDebugPanel ? 'Hide Live Logs' : `Show Live Logs (${syncLogs.length})`}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowUpsertBox(false)}
-                      className="p-1 text-zinc-400 hover:text-zinc-200 rounded hover:bg-zinc-900 cursor-pointer"
-                      title="Hide connection box"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {showDebugPanel && (
-                  <div className="bg-black/90 rounded-xl border border-zinc-800 p-2.5 max-h-36 overflow-y-auto font-mono text-[10px] space-y-1 shadow-inner select-text">
-                    {syncLogs.length === 0 ? (
-                      <div className="text-zinc-600 italic py-1 text-center">
-                        No active database transfer logs yet. Click "Save & Sync Archive" to initiate live Supabase upsert.
+              {/* Integrated Bottom Page Action Section (Back to List, Supabase Status & Sync) */}
+              <div className="pt-5 border-t border-zinc-800/80 mt-6 space-y-3">
+                {/* Visual Supabase Connection Status & Real-Time Debug Log Terminal */}
+                {showUpsertBox && (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/90 p-3.5 space-y-2 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-mono text-xs">
+                        <span className={`w-2.5 h-2.5 rounded-full ${
+                          connectionStatus === 'success' ? 'bg-emerald-400 animate-pulse' :
+                          connectionStatus === 'error' ? 'bg-red-400 animate-ping' :
+                          connectionStatus === 'syncing' ? 'bg-amber-400 animate-bounce' : 'bg-zinc-600'
+                        }`} />
+                        <span className="text-zinc-300 uppercase tracking-wider font-bold">Supabase Connection:</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-black ${
+                          connectionStatus === 'success' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
+                          connectionStatus === 'error' ? 'bg-red-950 text-red-300 border border-red-800' :
+                          connectionStatus === 'syncing' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+                        }`}>
+                          {connectionStatus === 'success' ? 'Synced & Active' :
+                           connectionStatus === 'error' ? 'Sync Error / Notice' :
+                           connectionStatus === 'syncing' ? 'Transferring Data...' : 'Standby / Ready'}
+                        </span>
                       </div>
-                    ) : (
-                      syncLogs.map((log, lIdx) => (
-                        <div key={`sync-log-${lIdx}-${log.timestamp}`} className="flex items-start gap-2 text-zinc-300 border-b border-zinc-900/60 pb-1 last:border-0">
-                          <span className="text-zinc-500 shrink-0">
-                            {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })}
-                          </span>
-                          <span className={log.message.includes('Success') || log.message.includes('fully synced') ? 'text-emerald-400 font-bold' : log.message.includes('error') || log.message.includes('fail') || log.message.includes('notice') ? 'text-amber-400' : 'text-zinc-300'}>
-                            {log.message}
-                          </span>
-                        </div>
-                      ))
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSyncLogs([])}
+                          className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300 uppercase tracking-wider px-2 py-1 rounded bg-zinc-900 border border-zinc-800 cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowDebugPanel(!showDebugPanel)}
+                          className="text-[10px] font-mono text-amber-400 hover:text-amber-300 uppercase tracking-wider px-2.5 py-1 rounded bg-amber-950/40 border border-amber-800/60 font-bold cursor-pointer"
+                        >
+                          {showDebugPanel ? 'Hide Logs' : `Logs (${syncLogs.length})`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowUpsertBox(false)}
+                          className="p-1 text-zinc-400 hover:text-zinc-200 rounded hover:bg-zinc-900 cursor-pointer"
+                          title="Hide connection box"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {showDebugPanel && (
+                      <div className="bg-black/90 rounded-xl border border-zinc-850 p-2.5 max-h-36 overflow-y-auto font-mono text-[10px] space-y-1 shadow-inner select-text">
+                        {syncLogs.length === 0 ? (
+                          <div className="text-zinc-600 italic py-1 text-center">
+                            No active database transfer logs yet. Click &quot;Save & Sync Archive&quot; to initiate live Supabase upsert.
+                          </div>
+                        ) : (
+                          syncLogs.map((log, lIdx) => (
+                            <div key={`sync-log-${lIdx}-${log.timestamp}`} className="flex items-start gap-2 text-zinc-300 border-b border-zinc-900/60 pb-1 last:border-0">
+                              <span className="text-zinc-500 shrink-0">
+                                {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })}
+                              </span>
+                              <span className={log.message.includes('Success') || log.message.includes('fully synced') ? 'text-emerald-400 font-bold' : log.message.includes('error') || log.message.includes('fail') || log.message.includes('notice') ? 'text-amber-400' : 'text-zinc-300'}>
+                                {log.message}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
+
+                {/* Main Action Bar at Bottom of Page */}
+                <div className="p-3 sm:p-4 rounded-2xl bg-zinc-950/90 border border-zinc-850 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActivePage('list')}
+                      className="px-3.5 sm:px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white font-mono text-xs uppercase font-bold border border-zinc-800 cursor-pointer flex items-center gap-1.5 transition-colors"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back to List</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowUpsertBox(!showUpsertBox)}
+                      className={`px-2.5 py-2 rounded-xl text-[11px] font-mono border flex items-center gap-1.5 transition-all cursor-pointer ${
+                        showUpsertBox
+                          ? 'bg-amber-950/60 border-amber-500/50 text-amber-300'
+                          : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                      title="Toggle Supabase Upsert Connection Details & Live Logs"
+                    >
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        connectionStatus === 'success' ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' :
+                        connectionStatus === 'error' ? 'bg-red-400 shadow-[0_0_6px_#f87171]' :
+                        connectionStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : 'bg-zinc-600'
+                      }`} />
+                      <Database className="w-3.5 h-3.5 text-zinc-400" />
+                      <span className="font-bold">Supabase</span>
+                      {showUpsertBox ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isSaving || !name.trim()}
+                    className="flex-1 sm:flex-initial px-5 sm:px-7 py-2.5 sm:py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-mono font-black text-xs uppercase tracking-wider cursor-pointer shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95"
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Syncing to Supabase...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        <span>Save & Sync Archive</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            )}
 
-            {/* Sticky Mobile-First Footer with Save Button & Supabase Toggle */}
-            <div className="p-4 border-t border-zinc-850 bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 flex flex-wrap items-center justify-between shrink-0 gap-3">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActivePage('list')}
-                  className="px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 font-mono text-xs uppercase font-bold border border-zinc-800 cursor-pointer"
-                >
-                  ← Back to List
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowUpsertBox(!showUpsertBox)}
-                  className={`px-2.5 py-2 rounded-xl text-[11px] font-mono border flex items-center gap-1.5 transition-all cursor-pointer ${
-                    showUpsertBox
-                      ? 'bg-amber-950/60 border-amber-500/50 text-amber-300'
-                      : 'bg-zinc-900/90 hover:bg-zinc-850 border-zinc-800 text-zinc-400 hover:text-zinc-200'
-                  }`}
-                  title="Toggle Supabase Upsert Connection Details & Live Logs"
-                >
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    connectionStatus === 'success' ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' :
-                    connectionStatus === 'error' ? 'bg-red-400 shadow-[0_0_6px_#f87171]' :
-                    connectionStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : 'bg-zinc-600'
-                  }`} />
-                  <Database className="w-3.5 h-3.5 text-zinc-400" />
-                  <span className="hidden sm:inline font-bold">Supabase</span>
-                  {showUpsertBox ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={isSaving || !name.trim()}
-                className="flex-1 sm:flex-initial px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-mono font-black text-xs uppercase tracking-wider cursor-pointer shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95"
-              >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Syncing to Supabase...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    <span>Save & Sync Archive</span>
-                  </>
-                )}
-              </button>
             </div>
-
           </div>
         )}
+
+        {/* In-App Delete Confirmation Modal (Replaces blocked window.confirm) */}
+        {confirmDeleteBand && (
+          <div className="fixed inset-0 z-[1000020] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-zinc-950 border border-red-500/40 rounded-2xl shadow-2xl p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-400 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white font-display uppercase tracking-wide">
+                    Delete Community Archive
+                  </h4>
+                  <p className="text-xs text-zinc-400 font-mono">
+                    This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-zinc-300 font-mono leading-relaxed bg-red-950/20 border border-red-900/30 rounded-xl p-3">
+                Permanently delete <strong className="text-white font-bold">&quot;{confirmDeleteBand.name}&quot;</strong> ({confirmDeleteBand.discography?.length || 0} releases, {confirmDeleteBand.lineup?.length || 0} members)? This will remove it from all community band archives.
+              </p>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteBand(null)}
+                  className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-zinc-300 font-mono text-xs font-bold uppercase border border-zinc-800 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => executeDeleteBand(confirmDeleteBand)}
+                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-mono text-xs font-black uppercase tracking-wider transition-all shadow-lg flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  <span>{isDeleting ? 'Deleting...' : 'Confirm Delete'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Integrated Direct Discography Importer Modal */}
+        <MetalArchivesImportModal
+          isOpen={showImporterModal}
+          onClose={() => setShowImporterModal(false)}
+          bandId={selectedBand?.id || 'band-1'}
+          bandName={name}
+          onImportSuccess={(count) => {
+            setShowImporterModal(false);
+            triggerNotification?.(`⚡ Successfully imported ${count} releases into catalog!`);
+          }}
+        />
 
       </div>
     </div>

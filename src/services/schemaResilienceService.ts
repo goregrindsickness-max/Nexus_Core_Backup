@@ -44,144 +44,273 @@ export function sanitizeInventoryItemForDb(item: any): any {
 
 /**
  * Strips properties from a Show that are not present in the
- * 'shows' Postgres table schema, preventing column not found errors.
+ * 'shows' Postgres table schema, preventing column not found (PGRST204) errors.
  */
+export const VALID_SHOW_COLUMNS = [
+  'id',
+  'creator_id',
+  'show_name',
+  'festival_name',
+  'show_date',
+  'date',
+  'status',
+  'show_type',
+  'event_scope',
+  'headliner',
+  'venue',
+  'venue_name',
+  'venue_address',
+  'city',
+  'state_province',
+  'country',
+  'promoter_contact',
+  'doors_time',
+  'set_time',
+  'price',
+  'presale_price',
+  'day_of_show_price',
+  'age',
+  'age_restriction',
+  'safety_code',
+  'capacity',
+  'venue_capacity',
+  'expected_attendance',
+  'guarantee_amount',
+  'venue_cut_percentage',
+  'merch_space_fee',
+  'seller_cost',
+  'settlement_currency',
+  'tax_rate',
+  'tables_provided',
+  'hanging_grids_provided',
+  'shore_power',
+  'parking_arrangements',
+  'wifi_network',
+  'wifi_password',
+  'emergency_medical_info',
+  'local_pharmacy_info',
+  'flyer_url',
+  'ticket_url',
+  'external_ticket_url',
+  'support_lineup',
+  'is_time_24h',
+  'is_community_submitted',
+  'is_managed_client_booking',
+  'tm_commission_rate',
+  'executive_contact_info',
+  'management_notes',
+  'additional_notes',
+  'created_at'
+];
+
 export function sanitizeShowForDb(show: any): any {
-  const allowedKeys = [
-    'id',
-    'created_at',
-    'name',
-    'title',
-    'festival_name',
-    'date',
-    'status',
-    'show_type',
-    'band_id',
-    'band_name',
-    'event_scope',
-    'tour_id',
-    'venue',
-    'venue_name',
-    'venue_address',
-    'city',
-    'state_province',
-    'country',
-    'promoter_contact',
-    'load_in_time',
-    'doors_time',
-    'set_time',
-    'curfew_time',
-    'venue_cut_percentage',
-    'guarantee_amount',
-    'currency',
-    'tax_rate',
-    'capacity',
-    'venue_capacity',
-    'expected_attendance',
-    'additional_notes',
-    'merch_space_fee',
-    'seller_cost',
-    'tables_provided',
-    'hanging_grids_provided',
-    'shore_power',
-    'parking_arrangements',
-    'age_restriction',
-    'wifi_network',
-    'wifi_password',
-    'merch_call_time',
-    'soundcheck_time',
-    'dinner_arrangements',
-    'local_food_notes',
-    'emergency_medical_info',
-    'local_pharmacy_info',
-    'stage_name',
-    'creator_id',
-    'headliner',
-    'flyer_url',
-    'external_ticket_url',
-    'ticket_url',
-    'support_lineup',
-    'support_bands',
-    'is_time_24h',
-    'is_community_submitted',
-    'safety_code',
-    'presale_price',
-    'day_of_show_price',
-    'price',
-    'ticket_price',
-    'revenue',
-    'age',
-    'show_name',
-    'show_date',
-    'is_managed_client_booking',
-    'tm_commission_rate',
-    'executive_contact_info',
-    'management_notes'
-  ];
+  if (!show || typeof show !== 'object') return {};
 
   const dbShow: any = {};
-  for (const key of allowedKeys) {
-    if (show[key] !== undefined) {
-      dbShow[key] = show[key];
-    }
-  }
 
   // Map legacy / input fields to live schema columns (including show_name, venue, and show_date)
-  const headlinerName = show.headliner || show.name || show.band_name || 'Live Show';
+  const headlinerName = (show.headliner || show.name || show.band_name || 'Live Show').trim();
   const inputTitle = show.show_name || show.festival_name || show.title || show.name || show.headliner;
   const fallbackShowName = `${headlinerName} Live`;
 
-  if (!dbShow.show_name) {
-    dbShow.show_name = inputTitle || fallbackShowName;
+  dbShow.show_name = show.show_name || inputTitle || fallbackShowName;
+  dbShow.headliner = headlinerName;
+  dbShow.venue_name = show.venue_name || show.venue || 'Live Venue';
+  dbShow.venue = show.venue || show.venue_name || 'Live Venue';
+
+  if (show.festival_name || show.tour_name || show.tourTitle || show.tour_title) {
+    dbShow.festival_name = show.festival_name || show.tour_name || show.tourTitle || show.tour_title;
   }
-  if (!dbShow.name) {
-    dbShow.name = show.name || inputTitle || fallbackShowName;
+
+  if (show.venue_address || show.address) {
+    dbShow.venue_address = show.venue_address || show.address;
   }
-  if (!dbShow.headliner) {
-    dbShow.headliner = headlinerName;
-  }
-  if (!dbShow.venue_name) {
-    dbShow.venue_name = show.venue_name || show.venue || 'Live Venue';
-  }
-  if (!dbShow.venue) {
-    dbShow.venue = show.venue || show.venue_name || 'Live Venue';
-  }
-  if (!dbShow.venue_address && show.venue_address) {
-    dbShow.venue_address = show.venue_address;
-  }
-  if (show.capacity !== undefined && dbShow.capacity === undefined) {
+  if (show.capacity !== undefined) {
     dbShow.capacity = show.capacity;
+    if (dbShow.expected_attendance === undefined) {
+      dbShow.expected_attendance = show.capacity;
+    }
   }
-  if (show.capacity !== undefined && dbShow.expected_attendance === undefined) {
-    dbShow.expected_attendance = show.capacity;
+  if (show.venue_capacity !== undefined) {
+    dbShow.venue_capacity = show.venue_capacity;
   }
-  if (!dbShow.show_date) {
-    dbShow.show_date = show.show_date || show.date || new Date().toISOString().split('T')[0];
-  }
-  if (!dbShow.date) {
-    dbShow.date = show.date || show.show_date || new Date().toISOString().split('T')[0];
-  }
-  if (show.revenue !== undefined && dbShow.guarantee_amount === undefined) {
-    dbShow.guarantee_amount = show.revenue;
-  }
-  if (!dbShow.price) {
-    dbShow.price = show.price || (show.presale_price ? (show.day_of_show_price ? `$${show.presale_price} / $${show.day_of_show_price}` : `$${show.presale_price}`) : (show.day_of_show_price ? `$${show.day_of_show_price}` : (show.ticket_price ? `$${show.ticket_price}` : undefined)));
+  if (show.expected_attendance !== undefined) {
+    dbShow.expected_attendance = show.expected_attendance;
   }
 
-  // ID Handling: Preserve deterministic UUID so client and database remain synchronized
-  if (dbShow.id) {
-    dbShow.id = ensureUUID(dbShow.id);
+  dbShow.show_date = show.show_date || show.date || new Date().toISOString().split('T')[0];
+  dbShow.date = show.date || show.show_date || dbShow.show_date;
+
+  if (show.guarantee_amount !== undefined || show.revenue !== undefined) {
+    dbShow.guarantee_amount = show.guarantee_amount !== undefined ? show.guarantee_amount : show.revenue;
+  }
+  if (show.settlement_currency || show.currency) {
+    dbShow.settlement_currency = show.settlement_currency || show.currency;
   }
 
-  // creator_id handling: Ensure creator_id is included and is a valid UUID
-  if (!dbShow.creator_id) {
-    dbShow.creator_id = show.creator_id || show.user_id || '00000000-0000-4000-a000-000000000000';
+  // Price formatting
+  if (show.price) {
+    dbShow.price = show.price;
+  } else if (show.presale_price || show.day_of_show_price || show.ticket_price) {
+    dbShow.price = show.presale_price
+      ? (show.day_of_show_price ? `$${show.presale_price} / $${show.day_of_show_price}` : `$${show.presale_price}`)
+      : (show.day_of_show_price ? `$${show.day_of_show_price}` : `$${show.ticket_price}`);
   }
-  if (dbShow.creator_id) {
-    dbShow.creator_id = ensureUUID(dbShow.creator_id);
+  if (show.presale_price) dbShow.presale_price = show.presale_price;
+  if (show.day_of_show_price) dbShow.day_of_show_price = show.day_of_show_price;
+
+  // Support Lineup
+  if (show.support_lineup) {
+    dbShow.support_lineup = show.support_lineup;
+  } else if (show.support_bands) {
+    const rawBands = typeof show.support_bands === 'string'
+      ? show.support_bands.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : Array.isArray(show.support_bands) ? show.support_bands : [];
+    dbShow.support_lineup = rawBands.map((b: string) => ({ band_name: b, set_duration: '35 mins' }));
+  } else if (Array.isArray(show.support)) {
+    dbShow.support_lineup = show.support.map((b: string) => ({ band_name: typeof b === 'string' ? b : (b as any).name || (b as any).band, set_duration: '35 mins' }));
   }
 
-  return dbShow;
+  // Additional scalar / boolean properties
+  if (show.doors_time) dbShow.doors_time = show.doors_time;
+  if (show.set_time) dbShow.set_time = show.set_time;
+  if (show.age_restriction) dbShow.age_restriction = show.age_restriction;
+  if (show.age) dbShow.age = show.age;
+  if (show.safety_code) dbShow.safety_code = show.safety_code;
+  if (show.flyer_url) {
+    if (typeof show.flyer_url === 'string' && show.flyer_url.startsWith('data:image/')) {
+      // Base64 image detected: Never write raw base64 string directly to Postgres column
+      dbShow.flyer_url = null;
+      if (typeof window !== 'undefined' && show.id) {
+        ensureImagesUploadedToStorage({ id: show.id, flyer_url: show.flyer_url }).then((cleaned) => {
+          if (cleaned?.flyer_url && !cleaned.flyer_url.startsWith('data:')) {
+            const client = getSupabase();
+            if (client) {
+              client.from('shows').update({ flyer_url: cleaned.flyer_url }).eq('id', show.id).then();
+            }
+          }
+        }).catch(() => {});
+      }
+    } else {
+      dbShow.flyer_url = show.flyer_url;
+    }
+  }
+  if (show.ticket_url) dbShow.ticket_url = show.ticket_url;
+  if (show.external_ticket_url) dbShow.external_ticket_url = show.external_ticket_url;
+  if (show.status) dbShow.status = show.status;
+  if (show.show_type) dbShow.show_type = show.show_type;
+  if (show.event_scope) dbShow.event_scope = show.event_scope;
+  if (show.promoter_contact) dbShow.promoter_contact = show.promoter_contact;
+  if (show.venue_cut_percentage !== undefined) dbShow.venue_cut_percentage = show.venue_cut_percentage;
+  if (show.merch_space_fee !== undefined) dbShow.merch_space_fee = show.merch_space_fee;
+  if (show.seller_cost !== undefined) dbShow.seller_cost = show.seller_cost;
+  if (show.tax_rate !== undefined) dbShow.tax_rate = show.tax_rate;
+  if (show.tables_provided !== undefined) dbShow.tables_provided = show.tables_provided;
+  if (show.hanging_grids_provided !== undefined) dbShow.hanging_grids_provided = show.hanging_grids_provided;
+  if (show.shore_power !== undefined) dbShow.shore_power = show.shore_power;
+  if (show.parking_arrangements) dbShow.parking_arrangements = show.parking_arrangements;
+  if (show.wifi_network) dbShow.wifi_network = show.wifi_network;
+  if (show.wifi_password) dbShow.wifi_password = show.wifi_password;
+  if (show.emergency_medical_info) dbShow.emergency_medical_info = show.emergency_medical_info;
+  if (show.local_pharmacy_info) dbShow.local_pharmacy_info = show.local_pharmacy_info;
+  if (show.is_time_24h !== undefined) dbShow.is_time_24h = show.is_time_24h;
+  if (show.is_community_submitted !== undefined) dbShow.is_community_submitted = show.is_community_submitted;
+  if (show.is_managed_client_booking !== undefined) dbShow.is_managed_client_booking = show.is_managed_client_booking;
+  if (show.tm_commission_rate !== undefined) dbShow.tm_commission_rate = show.tm_commission_rate;
+  if (show.executive_contact_info) dbShow.executive_contact_info = show.executive_contact_info;
+  if (show.management_notes) dbShow.management_notes = show.management_notes;
+  if (show.created_at) dbShow.created_at = show.created_at;
+
+  // Additional notes handling (clean JSON)
+  if (show.additional_notes) {
+    if (typeof show.additional_notes === 'object') {
+      dbShow.additional_notes = JSON.stringify(show.additional_notes);
+    } else if (typeof show.additional_notes === 'string' && !show.additional_notes.startsWith('data:')) {
+      dbShow.additional_notes = show.additional_notes;
+    }
+  }
+
+  // City handling: Postgres 'shows' table enforces a NOT NULL constraint on 'city'
+  let resolvedCity = (show.city || show.location || show.city_state || show.venue_city || '').trim();
+  if (!resolvedCity && (show.venue_address || show.address)) {
+    const rawAddr = String(show.venue_address || show.address).trim();
+    const parts = rawAddr.split(',');
+    if (parts.length >= 2) {
+      resolvedCity = parts[parts.length - 2].trim();
+    } else {
+      resolvedCity = rawAddr;
+    }
+  }
+  if (!resolvedCity && show.state_province) {
+    resolvedCity = String(show.state_province).trim();
+  }
+  if (!resolvedCity) {
+    resolvedCity = 'Austin, TX';
+  }
+  dbShow.city = resolvedCity;
+  if (show.state_province || show.state) {
+    dbShow.state_province = show.state_province || show.state;
+  }
+  if (show.country) {
+    dbShow.country = show.country;
+  }
+
+  // ID Handling: Deterministic UUID
+  if (show.id) {
+    dbShow.id = ensureUUID(show.id);
+  } else {
+    dbShow.id = generateUUID();
+  }
+
+  // creator_id handling
+  dbShow.creator_id = ensureUUID(show.creator_id || show.user_id || '5403162d-1947-43aa-b5f6-38a1bd2a1b80');
+
+  // STRICT WHITELIST FILTERING: Only return keys that exist in the PostgreSQL 'shows' schema
+  const allowedSet = new Set(VALID_SHOW_COLUMNS);
+  const cleanPruned: any = {};
+  for (const [k, v] of Object.entries(dbShow)) {
+    if (allowedSet.has(k) && v !== undefined) {
+      cleanPruned[k] = v;
+    }
+  }
+
+  return cleanPruned;
+}
+
+/**
+ * Strips properties from an ArchiveShow that are not present in the
+ * 'archive_shows' Postgres table schema, preventing column not found errors.
+ */
+export function sanitizeArchiveShowForDb(item: any): any {
+  const allowedKeys = [
+    'id',
+    'user_id',
+    'promoter_id',
+    'year',
+    'title',
+    'type',
+    'date',
+    'venue',
+    'city',
+    'lineup',
+    'attendance',
+    'milestone',
+    'historical_notes',
+    'notes',
+    'flyer_url',
+    'photo_count',
+    'is_deleted',
+    'created_at',
+    'updated_at'
+  ];
+
+  const dbItem: any = {};
+  for (const key of allowedKeys) {
+    if (item[key] !== undefined) {
+      dbItem[key] = item[key];
+    }
+  }
+  return dbItem;
 }
 
 /**
@@ -793,7 +922,7 @@ export function subscribeToTable(table: string, onEvent: (payload: any) => void)
   if (!supabase) return null;
 
   const channel = supabase
-    .channel(`${table}-realtime-changes-${Date.now()}-${Math.random()}`)
+    .channel(`realtime_sync_${table}`)
     .on(
       'postgres_changes',
       {
@@ -815,3 +944,108 @@ export function subscribeToTable(table: string, onEvent: (payload: any) => void)
     }
   };
 }
+
+/**
+ * One-time migration utility that scans public.shows, releases, bands, profiles, and nexus_posts
+ * for column values starting with 'data:image/', uploads the binary to Supabase Storage, and updates the row.
+ */
+export async function runBase64StorageMigration(): Promise<{ processed: number; errors: number }> {
+  const supabase = getSupabase();
+  if (!supabase) return { processed: 0, errors: 0 };
+
+  let processed = 0;
+  let errors = 0;
+
+  try {
+    // 1. Shows (flyer_url)
+    const { data: showsData } = await supabase.from('shows').select('id, flyer_url').ilike('flyer_url', 'data:image%');
+    if (showsData && showsData.length > 0) {
+      for (const show of showsData) {
+        if (show.flyer_url && show.flyer_url.startsWith('data:image/')) {
+          try {
+            const cleaned = await ensureImagesUploadedToStorage({ id: show.id, flyer_url: show.flyer_url });
+            if (cleaned?.flyer_url && !cleaned.flyer_url.startsWith('data:')) {
+              await supabase.from('shows').update({ flyer_url: cleaned.flyer_url }).eq('id', show.id);
+              processed++;
+            }
+          } catch { errors++; }
+        }
+      }
+    }
+
+    // 2. Releases (cover_image, cover_url)
+    const { data: relData } = await supabase.from('releases').select('id, cover_image, cover_url').or('cover_image.ilike.data:image%,cover_url.ilike.data:image%');
+    if (relData && relData.length > 0) {
+      for (const rel of relData) {
+        const rawImg = rel.cover_image || rel.cover_url;
+        if (rawImg && rawImg.startsWith('data:image/')) {
+          try {
+            const cleaned = await ensureImagesUploadedToStorage({ id: rel.id, cover_image: rawImg });
+            if (cleaned?.cover_image && !cleaned.cover_image.startsWith('data:')) {
+              await supabase.from('releases').update({ cover_image: cleaned.cover_image, cover_url: cleaned.cover_image }).eq('id', rel.id);
+              processed++;
+            }
+          } catch { errors++; }
+        }
+      }
+    }
+
+    // 3. Bands (avatar_url, logo_url, banner_url)
+    const { data: bandsData } = await supabase.from('bands').select('id, avatar_url, logo_url, banner_url').or('avatar_url.ilike.data:image%,logo_url.ilike.data:image%,banner_url.ilike.data:image%');
+    if (bandsData && bandsData.length > 0) {
+      for (const band of bandsData) {
+        const payload: any = { id: band.id };
+        if (band.avatar_url?.startsWith('data:image/')) payload.avatar_url = band.avatar_url;
+        if (band.logo_url?.startsWith('data:image/')) payload.logo_url = band.logo_url;
+        if (band.banner_url?.startsWith('data:image/')) payload.banner_url = band.banner_url;
+        if (Object.keys(payload).length > 1) {
+          try {
+            const cleaned = await ensureImagesUploadedToStorage(payload);
+            await supabase.from('bands').update(cleaned).eq('id', band.id);
+            processed++;
+          } catch { errors++; }
+        }
+      }
+    }
+
+    // 4. Profiles (avatar_url, avatar, banner_url)
+    const { data: profData } = await supabase.from('profiles').select('id, avatar_url, avatar, banner_url').or('avatar_url.ilike.data:image%,avatar.ilike.data:image%,banner_url.ilike.data:image%');
+    if (profData && profData.length > 0) {
+      for (const prof of profData) {
+        const payload: any = { id: prof.id };
+        if (prof.avatar_url?.startsWith('data:image/')) payload.avatar_url = prof.avatar_url;
+        if (prof.avatar?.startsWith('data:image/')) payload.avatar = prof.avatar;
+        if (prof.banner_url?.startsWith('data:image/')) payload.banner_url = prof.banner_url;
+        if (Object.keys(payload).length > 1) {
+          try {
+            const cleaned = await ensureImagesUploadedToStorage(payload);
+            await supabase.from('profiles').update(cleaned).eq('id', prof.id);
+            processed++;
+          } catch { errors++; }
+        }
+      }
+    }
+
+    // 5. Posts (media_url, image_url, avatar_url)
+    const { data: postsData } = await supabase.from('nexus_posts').select('id, media_url, image_url').or('media_url.ilike.data:image%,image_url.ilike.data:image%');
+    if (postsData && postsData.length > 0) {
+      for (const post of postsData) {
+        const payload: any = { id: post.id };
+        if (post.media_url?.startsWith('data:image/')) payload.media_url = post.media_url;
+        if (post.image_url?.startsWith('data:image/')) payload.image_url = post.image_url;
+        if (Object.keys(payload).length > 1) {
+          try {
+            const cleaned = await ensureImagesUploadedToStorage(payload);
+            await supabase.from('nexus_posts').update(cleaned).eq('id', post.id);
+            processed++;
+          } catch { errors++; }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[runBase64StorageMigration] Migration warning:', err);
+  }
+
+  return { processed, errors };
+}
+

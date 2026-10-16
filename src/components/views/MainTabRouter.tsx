@@ -20,6 +20,7 @@ import CreativeDashboardViewV2 from '../portals/Creative/CreativeDashboardViewV2
 import MerchandisePrintersView from '../portals/Band/MerchandisePrintersView';
 import OnRouteEssentialsView from '../portals/Band/OnRouteEssentialsView';
 import { UniversalSocialFeed } from '../social/UniversalSocialFeed';
+import { saveInventoryItem, deleteInventoryItem } from '../../services/inventoryService';
 
 import ChecklistView from './ChecklistView';
 import HelpDeskView from './HelpDeskView';
@@ -334,7 +335,7 @@ export const MainTabRouter: React.FC<MainTabRouterProps> = (props) => {
             inventory={inventory}
             setInventory={setInventory}
             commitInventoryMutation={commitInventoryMutation}
-            shows={shows}
+            shows={filteredShows || shows}
             setShows={setShows}
             onSubmitSale={handleDataSubmit}
             onBack={() => setActiveTab('home-v2')}
@@ -363,30 +364,33 @@ export const MainTabRouter: React.FC<MainTabRouterProps> = (props) => {
           <AddItemView
             isOffline={isOfflineSimActive || !isOnline}
             initialItem={editingItem || undefined}
-            onBack={() => setActiveTab('inventory')}
+            onBack={() => {
+              setEditingItem(null);
+              if (props.setDashboardV2ActiveNav) props.setDashboardV2ActiveNav('MERCH');
+              setActiveTab('home-v2');
+            }}
             onSave={async (savedItem) => {
               const completeItem = { ...savedItem, band_id: activeBandId } as InventoryItem;
-              commitInventoryMutation(completeItem);
+              const saveRes = await saveInventoryItem(completeItem);
+              const finalItem = saveRes.data || completeItem;
+              commitInventoryMutation(finalItem);
               processingGlobalSyncQueue();
               setEditingItem(null);
+              if (props.setDashboardV2ActiveNav) props.setDashboardV2ActiveNav('MERCH');
+              setActiveTab('home-v2');
               return true;
             }}
             onDelete={async (itemId) => {
-              const supabase = getSupabase();
-              if (supabase && isOnline) {
-                try {
-                  await supabase.from('inventory').delete().eq('id', itemId);
-                  addLog(`Successfully deleted inventory item ${itemId} from Supabase.`);
-                } catch (e: any) {
-                  console.error('Failed to delete item from Supabase:', e);
-                }
-              }
+              await deleteInventoryItem(itemId);
               setInventory(prev => {
                 const updated = prev.filter(inv => inv.id !== itemId);
                 inventoryStore.setItem('nexus_master_inventory', JSON.stringify(updated)).catch(console.warn);
                 return updated;
               });
+              addLog(`Successfully deleted inventory item ${itemId}.`);
               setEditingItem(null);
+              if (props.setDashboardV2ActiveNav) props.setDashboardV2ActiveNav('MERCH');
+              setActiveTab('home-v2');
             }}
             triggerNotification={triggerNotification}
           />
@@ -487,10 +491,12 @@ export const MainTabRouter: React.FC<MainTabRouterProps> = (props) => {
       return (
         <div className="flex-grow overflow-y-auto">
           <SetlistsView
-            shows={shows}
+            shows={filteredShows || shows}
             onBack={() => setActiveTab('home-v2')}
             triggerNotification={triggerNotification}
             addLog={addLog}
+            bandName={activeBand?.name || 'Artist'}
+            activeBandId={activeBand?.id}
           />
         </div>
       );
@@ -499,13 +505,14 @@ export const MainTabRouter: React.FC<MainTabRouterProps> = (props) => {
       return (
         <div className="flex-grow overflow-y-auto">
           <GuestlistsView
-            shows={shows}
+            shows={filteredShows || shows}
             setShows={setShows}
             onBack={() => setActiveTab('home-v2')}
             triggerNotification={triggerNotification}
             addLog={addLog}
             initialShowId={selectedGuestlistShowId}
             bandName={activeBand?.name || 'Artist'}
+            activeBandId={activeBand?.id}
           />
         </div>
       );
@@ -734,6 +741,8 @@ export const MainTabRouter: React.FC<MainTabRouterProps> = (props) => {
             activeBand={activeBand}
             bands={bands}
             setBands={setBands}
+            shows={shows}
+            setShows={setShows}
             onLogout={() => {
               localStorage.removeItem('nexus_core_user_profile');
               setUserProfile(null);

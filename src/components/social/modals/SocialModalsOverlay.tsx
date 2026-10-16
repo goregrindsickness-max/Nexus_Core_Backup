@@ -31,7 +31,7 @@ import { FanPitWallDrawer } from '../drawers/FanPitWallDrawer';
 import { InteractiveCropperModal } from '../../InteractiveCropperModal';
 import { MetalArchivesImportModal } from './MetalArchivesImportModal';
 import { profileStore } from '../../../utils/indexedDB';
-import { uploadBase64ToStorage, normalizeLoadedProfile as defaultNormalizeLoadedProfile, sanitizeCreativePayload, formatCreativePayload, extractGlobalProfilePayload, executeWithSchemaResilience, sanitizeBandPayload } from '../../../supabase';
+import { uploadBase64ToStorage, normalizeLoadedProfile as defaultNormalizeLoadedProfile, sanitizeCreativePayload, formatCreativePayload, extractGlobalProfilePayload, executeWithSchemaResilience, sanitizeBandPayload, executeSanitizedProfileUpsert } from '../../../supabase';
 import { FeedItem } from '../../../data/socialFeedMockData';
 
 export interface SocialModalsOverlayProps {
@@ -300,7 +300,7 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
         triggerNotification={triggerNotification}
       />
 
-      {/* Gig Map Modal / Social Map Overlay */}
+      {/* Events Directory Modal / Gig Map Modal / Social Map Overlay */}
       <SocialMapOverlay
         isOpen={showMapModal}
         onClose={() => { setShowMapModal(false); setSelectedGigOnMap(null); }}
@@ -311,8 +311,18 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
         mapFilterGenre={mapFilterGenre}
         setMapFilterGenre={setMapFilterGenre}
         userProfile={userProfile}
+        promoterProfile={props.promoterProfile || props.profile}
         triggerNotification={triggerNotification}
         liveEvents={props.liveEvents}
+        setLiveEvents={props.setLiveEvents}
+        shows={props.shows}
+        setShows={props.setShows}
+        onImportShowsFromTable={props.onImportShowsFromTable}
+        onOpenShowCreator={props.onOpenShowCreator}
+        onEditShow={props.onEditShow}
+        onDeleteShow={props.onDeleteShow}
+        onSelectEvent={props.onSelectEvent}
+        onOpenEventPage={props.onOpenEventPage}
       />
 
       {/* Poll Creation Modal */}
@@ -342,6 +352,18 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
         setMerchDropName={setMerchDropName}
         merchDropPrice={merchDropPrice}
         setMerchDropPrice={setMerchDropPrice}
+        merchDropCategory={props.merchDropCategory}
+        setMerchDropCategory={props.setMerchDropCategory}
+        merchDropDescription={props.merchDropDescription}
+        setMerchDropDescription={props.setMerchDropDescription}
+        merchDropVariants={props.merchDropVariants}
+        setMerchDropVariants={props.setMerchDropVariants}
+        merchDropStock={props.merchDropStock}
+        setMerchDropStock={props.setMerchDropStock}
+        merchDropIsUnlimited={props.merchDropIsUnlimited}
+        setMerchDropIsUnlimited={props.setMerchDropIsUnlimited}
+        merchDropAllowNegotiation={props.merchDropAllowNegotiation}
+        setMerchDropAllowNegotiation={props.setMerchDropAllowNegotiation}
         merchDropIsTimed={merchDropIsTimed}
         setMerchDropIsTimed={setMerchDropIsTimed}
         merchDropTimerHours={merchDropTimerHours}
@@ -350,6 +372,8 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
         setMerchDropTimerMinutes={setMerchDropTimerMinutes}
         merchDropThumbnail={merchDropThumbnail}
         setMerchDropThumbnail={setMerchDropThumbnail}
+        merchDropImages={props.merchDropImages}
+        setMerchDropImages={props.setMerchDropImages}
         triggerNotification={triggerNotification}
       />
 
@@ -652,16 +676,18 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
           try {
             triggerNotification?.("⏳ Saving and optimizing cropped image...");
             const userProfileId = userProfile?.id || 'profile_anonymous';
-            const bucket = 'community-bands';
-            const token = cropperType === 'avatar' ? 'profile-avatar' : 'cover-banner';
+            const bucket = cropperType === 'avatar' ? 'avatars' : 'bannersv2';
+            const token = cropperType === 'avatar' ? 'profile-avatar' : 'profile-banner';
             
             const publicUrl = await uploadBase64ToStorage(croppedBase64, bucket, userProfileId, token);
             const finalUrl = publicUrl || croppedBase64;
 
             if (cropperType === 'avatar') {
               setProfileAvatarUrl(finalUrl);
+              if (typeof window !== 'undefined') localStorage.setItem('nexus_user_avatar', finalUrl);
             } else {
               setProfileCoverUrl(finalUrl);
+              if (typeof window !== 'undefined') localStorage.setItem('nexus_user_banner', finalUrl);
             }
 
             // Immediately save to database profiles table to persist instantly
@@ -670,22 +696,15 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
               const columnToUpdate: Record<string, string> = {};
               
               if (cropperType === 'avatar') {
-                columnToUpdate.avatar_url = publicUrl;
+                columnToUpdate.avatar_url = finalUrl;
               } else {
-                columnToUpdate.banner_url = publicUrl;
+                columnToUpdate.banner_url = finalUrl;
               }
 
-              const globalPayload = extractGlobalProfilePayload({
+              await executeSanitizedProfileUpsert(supabase, {
                 id: userProfile.id,
                 ...columnToUpdate
-              }, userProfile.id);
-
-              const { data: updatedProf, error: updateErr } = await supabase
-                .from('profiles')
-                .update(globalPayload)
-                .eq('id', userProfile.id)
-                .select()
-                .single();
+              });
 
               // If portal is band or user is linked to band, sync to bands table too
               if (portalRole === 'band' || userProfile?.band_id || band?.id) {
@@ -763,34 +782,6 @@ export const SocialModalsOverlay: React.FC<SocialModalsOverlayProps> = (props) =
 
             if (cropperType === 'avatar') {
               triggerNotification?.("✨ Profile avatar updated & synchronized!");
-              
-              const authorName = isEmbedded ? (userProfile?.bandName || userProfile?.companyName || userProfile?.label_company_name || userProfile?.name || 'Pro Account') : (profileHandle || userProfile?.name || 'User');
-              const authorRole = isEmbedded ? portalRole.charAt(0).toUpperCase() + portalRole.slice(1) : (profileSceneRoles.join(' • ') || 'Fan');
-              const postedByValue = isEmbedded ? (profileFullLegalName.split(' ')[0] || userProfile?.name?.split(' ')[0]) : undefined;
-
-              const autoAvatarPost: FeedItem = {
-                id: `avatar_update_${Date.now()}`,
-                type: 'post',
-                author: {
-                  name: authorName,
-                  avatar: publicUrl,
-                  role: authorRole,
-                  postedBy: postedByValue
-                },
-                timeAgo: 'Just now',
-            timestamp: new Date().toISOString(),
-                content: '✨ Updated profile picture! Check out the new look.',
-                tag: 'PROFILE SIGNAL',
-                image: publicUrl,
-                images: [publicUrl],
-                reactions: [
-                  { type: 'flame', count: 1, active: true }
-                ],
-                comments: []
-              };
-
-              setFeed(prev => [autoAvatarPost, ...prev]);
-              syncPostToSupabase(autoAvatarPost);
             } else {
               triggerNotification?.("✨ Profile cover banner updated & synchronized!");
             }

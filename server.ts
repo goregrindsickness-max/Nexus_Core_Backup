@@ -7,6 +7,7 @@ import { Resend } from "resend";
 import fs from "fs";
 import webpush from "web-push";
 import { GoogleGenAI, Type } from "@google/genai";
+import { BUILT_IN_BLACK_BOOK_VENUES } from "./src/services/venueSearchService";
 
 // Load environment variables (mostly for local testing, platform handles deployment env vars)
 dotenv.config();
@@ -18,7 +19,7 @@ let supabaseServiceClient: any = null;
 function getSupabaseService() {
   if (!supabaseServiceClient) {
     const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
     if (url && serviceRoleKey) {
       supabaseServiceClient = createClient(url, serviceRoleKey, {
         auth: {
@@ -285,6 +286,18 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Enable CORS for all incoming origins (critical for Android APK WebView, Capacitor, iOS, and Web)
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin");
+    res.setHeader("Access-Control-Max-Age", "86400");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   // Stripe webhook needs raw body parser, so place it BEFORE express.json()
   app.post("/api/webhooks/stripe", express.raw({ type: 'application/json' }), async (req: express.Request, res: express.Response) => {
     const signature = req.headers["stripe-signature"];
@@ -367,9 +380,9 @@ async function startServer() {
     }
   });
 
-  // We need JSON parsing for our API routes (with larger size limit to allow base64 uploads)
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  // We need JSON parsing for our API routes (with larger size limit to allow video & audio uploads up to 500MB)
+  app.use(express.json({ limit: '500mb' }));
+  app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
   // Ensure and serve local uploads directory for robust file persistence
   const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -493,9 +506,10 @@ async function startServer() {
             const bucketExists = buckets.some((b: any) => b.name === bucketName);
             if (!bucketExists) {
               console.info(`[SERVER UPLOAD] Creating public bucket: ${bucketName}`);
+              const limitBytes = bucketName === 'clips' ? 524288000 : 104857600; // 500MB for clips, 100MB for others
               await supabase.storage.createBucket(bucketName, {
                 public: true,
-                fileSizeLimit: 10485760, // 10MB
+                fileSizeLimit: limitBytes,
               });
             }
           }
@@ -551,11 +565,13 @@ async function startServer() {
     try {
       if (fs.existsSync(storiesCacheFile)) {
         const content = await fs.promises.readFile(storiesCacheFile, 'utf8');
-        const parsed = JSON.parse(content);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((s: any) => {
-            if (s && s.id) storiesMap.set(s.id, s);
-          });
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((s: any) => {
+              if (s && s.id) storiesMap.set(s.id, s);
+            });
+          }
         }
       }
     } catch (e) {
@@ -718,6 +734,167 @@ async function startServer() {
     } catch (err: any) {
       console.error('[SERVER STORIES DELETE ERROR]', err);
       res.status(500).json({ error: err.message || 'Failed to delete story' });
+    }
+  });
+
+  /**
+   * CLIPS PERSISTENCE & SYNC ENDPOINTS
+   * Synchronizes short-form performance and reel clips across devices and web sessions.
+   * Backed by local persistent cache and Supabase Storage clips/clips_manifest.json.
+   */
+  const clipsCacheFile = path.join(uploadsDir, 'clips_cache.json');
+
+  async function loadCachedClips(): Promise<any[]> {
+    const clipsMap = new Map<string, any>();
+    // 1. Read from local disk cache
+    try {
+      if (fs.existsSync(clipsCacheFile)) {
+        const content = await fs.promises.readFile(clipsCacheFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((c: any) => {
+              if (c && c.id) clipsMap.set(String(c.id), c);
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[SERVER CLIPS] Local cache read warning:', e);
+    }
+
+    // 2. Read from Supabase Storage manifest
+    const supabase = getSupabaseService();
+    if (supabase) {
+      try {
+        const { data: dData, error: dErr } = await supabase.storage
+          .from('clips')
+          .download('clips_manifest.json');
+        if (!dErr && dData) {
+          const text = await dData.text();
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((c: any) => {
+              if (c && c.id && !clipsMap.has(String(c.id))) {
+                clipsMap.set(String(c.id), c);
+              }
+            });
+          }
+        }
+      } catch (storageErr) {
+        // Silently skip if bucket or file doesn't exist yet
+      }
+    }
+
+    return Array.from(clipsMap.values());
+  }
+
+  async function persistClipsList(list: any[]): Promise<void> {
+    try {
+      await fs.promises.writeFile(clipsCacheFile, JSON.stringify(list, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[SERVER CLIPS] Local cache write warning:', e);
+    }
+
+    const supabase = getSupabaseService();
+    if (supabase) {
+      try {
+        await supabase.storage
+          .from('clips')
+          .upload('clips_manifest.json', Buffer.from(JSON.stringify(list, null, 2)), {
+            contentType: 'application/json',
+            upsert: true,
+          });
+      } catch (storageErr) {
+        // ignore
+      }
+    }
+  }
+
+  app.get('/api/clips', async (req, res) => {
+    try {
+      const clips = await loadCachedClips();
+      res.json(clips);
+    } catch (err: any) {
+      console.error('[SERVER CLIPS GET ERROR]', err);
+      res.status(500).json({ error: err.message || 'Failed to fetch clips' });
+    }
+  });
+
+  app.post('/api/clips', async (req, res) => {
+    try {
+      const clip = req.body;
+      if (!clip || !clip.id) {
+        return res.status(400).json({ error: 'Invalid clip payload' });
+      }
+
+      // If video or thumbnail is a base64 string, persist it to disk
+      let videoUrl = clip.videoUrl || clip.video_url || '';
+      if (typeof videoUrl === 'string' && videoUrl.startsWith('data:')) {
+        const matches = videoUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          const mime = matches[1];
+          const ext = mime.includes('video') ? 'mp4' : (mime.split('/')[1] || 'mp4');
+          const fileName = `clip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+          const buffer = Buffer.from(matches[2], 'base64');
+
+          const localFile = path.join(uploadsDir, fileName);
+          await fs.promises.writeFile(localFile, buffer);
+          const savedUrl = `/uploads/${fileName}`;
+          clip.videoUrl = savedUrl;
+          clip.video_url = savedUrl;
+        }
+      }
+
+      const existing = await loadCachedClips();
+      const updated = [clip, ...existing.filter((c: any) => String(c.id) !== String(clip.id))];
+      await persistClipsList(updated);
+
+      res.json({ success: true, clip });
+    } catch (err: any) {
+      console.error('[SERVER CLIPS POST ERROR]', err);
+      res.status(500).json({ error: err.message || 'Failed to save clip' });
+    }
+  });
+
+  app.post('/api/clips/sync', async (req, res) => {
+    try {
+      const incomingClips = Array.isArray(req.body) ? req.body : req.body?.clips;
+      if (!Array.isArray(incomingClips)) {
+        return res.status(400).json({ error: 'Array of clips required' });
+      }
+
+      const current = await loadCachedClips();
+      const currentMap = new Map<string, any>(current.map((c: any) => [String(c.id), c]));
+
+      for (const item of incomingClips) {
+        if (!item || !item.id) continue;
+        const idKey = String(item.id);
+        if (!currentMap.has(idKey)) {
+          currentMap.set(idKey, item);
+        }
+      }
+
+      const merged = Array.from(currentMap.values());
+      await persistClipsList(merged);
+
+      res.json({ success: true, count: merged.length, clips: merged });
+    } catch (err: any) {
+      console.error('[SERVER CLIPS SYNC ERROR]', err);
+      res.status(500).json({ error: err.message || 'Failed to sync clips' });
+    }
+  });
+
+  app.delete('/api/clips/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const current = await loadCachedClips();
+      const filtered = current.filter((c: any) => String(c.id) !== String(id));
+      await persistClipsList(filtered);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[SERVER CLIPS DELETE ERROR]', err);
+      res.status(500).json({ error: err.message || 'Failed to delete clip' });
     }
   });
 
@@ -1104,8 +1281,17 @@ Return a valid JSON object matching the requested schema. If any field is not fo
 
   if (vapidKeys.publicKey && vapidKeys.privateKey) {
     try {
+      let vapidSubject = process.env.VAPID_SUBJECT || "mailto:admin@thenexuscoreapp.com";
+      if (vapidSubject && !vapidSubject.startsWith("mailto:") && !vapidSubject.startsWith("http://") && !vapidSubject.startsWith("https://")) {
+        if (vapidSubject.includes("@")) {
+          vapidSubject = `mailto:${vapidSubject}`;
+        } else {
+          vapidSubject = `https://${vapidSubject}`;
+        }
+      }
+
       webpush.setVapidDetails(
-        process.env.VAPID_SUBJECT || "mailto:admin@thenexuscoreapp.com",
+        vapidSubject,
         vapidKeys.publicKey,
         vapidKeys.privateKey
       );
@@ -1292,6 +1478,337 @@ Return a valid JSON object matching the requested schema. If any field is not fo
       res.status(500).json({ error: err.message || "Failed to send push" });
     }
   });
+
+  // ============================================================
+  // SHOW RSVPS & 24-HOUR VAPID PUSH REMINDER SERVICE ENGINE
+  // ============================================================
+  const SHOW_RSVPS_FILE = path.join(process.cwd(), "data", "show_rsvps.json");
+
+  interface ShowRsvp {
+    id: string;
+    show_id: string;
+    user_id?: string;
+    user_email?: string;
+    show_title: string;
+    show_date: string;
+    venue_name?: string;
+    city?: string;
+    reminder_sent_24h?: boolean;
+    created_at: string;
+  }
+
+  function readShowRsvps(): ShowRsvp[] {
+    try {
+      if (fs.existsSync(SHOW_RSVPS_FILE)) {
+        return JSON.parse(fs.readFileSync(SHOW_RSVPS_FILE, "utf-8")) || [];
+      }
+    } catch (e) {
+      console.warn("[SHOW RSVPS] Could not read file:", e);
+    }
+    return [];
+  }
+
+  function writeShowRsvps(rsvps: ShowRsvp[]) {
+    try {
+      const dir = path.dirname(SHOW_RSVPS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(SHOW_RSVPS_FILE, JSON.stringify(rsvps, null, 2), "utf-8");
+    } catch (e) {
+      console.warn("[SHOW RSVPS] Could not write file:", e);
+    }
+  }
+
+  async function syncRsvpToSupabase(rsvp: ShowRsvp) {
+    const supabase = getSupabaseService();
+    if (supabase) {
+      try {
+        await supabase.from('show_rsvps').upsert({
+          id: rsvp.id,
+          show_id: rsvp.show_id,
+          user_id: rsvp.user_id || null,
+          user_email: rsvp.user_email || null,
+          show_title: rsvp.show_title,
+          show_date: rsvp.show_date,
+          venue_name: rsvp.venue_name || null,
+          city: rsvp.city || null,
+          reminder_sent_24h: rsvp.reminder_sent_24h || false,
+          created_at: rsvp.created_at
+        }, { onConflict: 'id' });
+      } catch (err: any) {
+        console.warn("[SHOW RSVPS SUPABASE SYNC NOTICE]", err?.message || err);
+      }
+    }
+  }
+
+  async function checkAndSend24hShowReminders() {
+    console.log("[SHOW REMINDERS SERVICE] Executing 24h VAPID push reminder check for show RSVPs...");
+    let rsvps = readShowRsvps();
+
+    // Sync with Supabase show_rsvps table if present
+    const supabase = getSupabaseService();
+    if (supabase) {
+      try {
+        const { data: dbRsvps, error: dbErr } = await supabase.from('show_rsvps').select('*');
+        if (!dbErr && Array.isArray(dbRsvps)) {
+          const map = new Map(rsvps.map(r => [r.id, r]));
+          dbRsvps.forEach((item: any) => {
+            const itemKey = item.id || `rsvp_${item.show_id}_${item.user_id || item.user_email || 'anon'}`;
+            map.set(itemKey, {
+              id: itemKey,
+              show_id: String(item.show_id),
+              user_id: item.user_id,
+              user_email: item.user_email,
+              show_title: item.show_title || item.title || "Live Concert",
+              show_date: item.show_date || item.date || new Date().toISOString().split('T')[0],
+              venue_name: item.venue_name || item.venue,
+              city: item.city,
+              reminder_sent_24h: Boolean(item.reminder_sent_24h),
+              created_at: item.created_at || new Date().toISOString()
+            });
+          });
+          rsvps = Array.from(map.values());
+          writeShowRsvps(rsvps);
+        }
+      } catch (err: any) {
+        console.warn("[SHOW REMINDERS SERVICE] Supabase query notice:", err?.message || err);
+      }
+    }
+
+    const now = new Date();
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    const todayStr = now.toISOString().split('T')[0];
+
+    let sentCount = 0;
+    const allSubs = readPushSubscriptions();
+
+    for (const rsvp of rsvps) {
+      if (rsvp.reminder_sent_24h) continue;
+
+      const rawDateStr = rsvp.show_date || '';
+      const cleanDateStr = rawDateStr.split('T')[0];
+
+      let is24hWindow = false;
+      if (cleanDateStr === tomorrowStr || cleanDateStr === todayStr) {
+        is24hWindow = true;
+      } else {
+        const showTimeMs = new Date(rawDateStr).getTime();
+        if (!isNaN(showTimeMs)) {
+          const hoursDiff = (showTimeMs - now.getTime()) / (1000 * 60 * 60);
+          if (hoursDiff >= -2 && hoursDiff <= 32) {
+            is24hWindow = true;
+          }
+        }
+      }
+
+      if (!is24hWindow) continue;
+
+      // Find matching subscriptions for the fan who RSVP'd
+      let targetSubs = allSubs.filter(s => {
+        if (rsvp.user_id && (s.userId === rsvp.user_id || s.userEmail === rsvp.user_id)) return true;
+        if (rsvp.user_email && s.userEmail?.toLowerCase() === rsvp.user_email.toLowerCase()) return true;
+        return false;
+      });
+
+      // Broadcast to active push endpoints if no direct user ID is tied to subscription
+      if (targetSubs.length === 0 && allSubs.length > 0) {
+        targetSubs = allSubs;
+      }
+
+      if (targetSubs.length === 0) {
+        console.log(`[SHOW REMINDERS SERVICE] No active push subscriptions found for RSVP ${rsvp.id} ("${rsvp.show_title}")`);
+        continue;
+      }
+
+      const payload = JSON.stringify({
+        title: `🔥 Concert Tomorrow: ${rsvp.show_title}`,
+        body: `Reminder: You have an RSVP for ${rsvp.show_title}${rsvp.venue_name ? ` at ${rsvp.venue_name}` : ''}${rsvp.city ? ` (${rsvp.city})` : ''} tomorrow! Your digital pass is ready in your pit list.`,
+        icon: "/icon-192.png",
+        badge: "/icon-192.png",
+        tag: `nexus-rsvp-24h-${rsvp.show_id}`,
+        targetTab: "social",
+        category: "vip_guestlist_access",
+        workspace: "fan_only",
+        data: {
+          showId: rsvp.show_id,
+          showTitle: rsvp.show_title,
+          venueName: rsvp.venue_name,
+          city: rsvp.city,
+          type: "24h_show_reminder"
+        },
+        timestamp: Date.now()
+      });
+
+      let pushDelivered = false;
+      for (const subEntry of targetSubs) {
+        try {
+          if (subEntry.subscription?.endpoint?.startsWith('native://')) {
+            pushDelivered = true;
+            continue;
+          }
+          await webpush.sendNotification(subEntry.subscription, payload);
+          pushDelivered = true;
+        } catch (pushErr: any) {
+          console.warn(`[SHOW REMINDERS SERVICE] Push delivery exception for ${subEntry.id}:`, pushErr?.message || pushErr);
+        }
+      }
+
+      if (pushDelivered || targetSubs.length > 0) {
+        rsvp.reminder_sent_24h = true;
+        sentCount++;
+        console.log(`[SHOW REMINDERS SERVICE SUCCESS] Sent 24h VAPID push notification to ${targetSubs.length} device(s) for "${rsvp.show_title}" (ID: ${rsvp.show_id})`);
+
+        recordEmailLog(
+          "/api/push/show-reminders-24h",
+          rsvp.user_email || "fan@nexuscore.app",
+          "push-gateway@nexuscore.app",
+          `24h Show Push Reminder: ${rsvp.show_title}`,
+          "SUCCESS",
+          { showId: rsvp.show_id, venue: rsvp.venue_name, devicesNotified: targetSubs.length }
+        );
+
+        if (supabase) {
+          try {
+            await supabase.from('show_rsvps').update({ reminder_sent_24h: true }).eq('show_id', rsvp.show_id);
+          } catch (_) {}
+        }
+      }
+    }
+
+    writeShowRsvps(rsvps);
+    return { checked: rsvps.length, remindersSent: sentCount, timestamp: new Date().toISOString() };
+  }
+
+  // API ROUTE: Get all RSVPs for current user or show
+  app.get("/api/shows/rsvps", (req, res) => {
+    try {
+      const { userId, userEmail, showId } = req.query;
+      let rsvps = readShowRsvps();
+      if (userId) {
+        rsvps = rsvps.filter(r => r.user_id === userId || r.user_email === userId);
+      }
+      if (userEmail) {
+        rsvps = rsvps.filter(r => r.user_email?.toLowerCase() === String(userEmail).toLowerCase());
+      }
+      if (showId) {
+        rsvps = rsvps.filter(r => r.show_id === showId);
+      }
+      res.json({ success: true, count: rsvps.length, rsvps });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to load RSVPs" });
+    }
+  });
+
+  // API ROUTE: Add or update RSVP in show_rsvps table & local cache
+  app.post("/api/shows/rsvp", express.json(), async (req, res) => {
+    try {
+      const { show_id, show_title, show_date, venue_name, city, user_id, user_email, pushSubscription } = req.body;
+      if (!show_id || !show_title) {
+        return res.status(400).json({ error: "show_id and show_title are required" });
+      }
+
+      const rsvps = readShowRsvps();
+      const rsvpKey = `rsvp_${show_id}_${user_id || user_email || 'anon'}`;
+      const existingIdx = rsvps.findIndex(r => r.id === rsvpKey || (r.show_id === String(show_id) && (r.user_id === user_id || r.user_email === user_email)));
+
+      const rsvpRecord: ShowRsvp = {
+        id: existingIdx >= 0 ? rsvps[existingIdx].id : rsvpKey,
+        show_id: String(show_id),
+        user_id: user_id || (existingIdx >= 0 ? rsvps[existingIdx].user_id : undefined),
+        user_email: user_email || (existingIdx >= 0 ? rsvps[existingIdx].user_email : undefined),
+        show_title: String(show_title),
+        show_date: String(show_date || new Date().toISOString().split('T')[0]),
+        venue_name: venue_name || (existingIdx >= 0 ? rsvps[existingIdx].venue_name : undefined),
+        city: city || (existingIdx >= 0 ? rsvps[existingIdx].city : undefined),
+        reminder_sent_24h: false,
+        created_at: existingIdx >= 0 ? rsvps[existingIdx].created_at : new Date().toISOString()
+      };
+
+      if (existingIdx >= 0) {
+        rsvps[existingIdx] = rsvpRecord;
+      } else {
+        rsvps.push(rsvpRecord);
+      }
+
+      writeShowRsvps(rsvps);
+      await syncRsvpToSupabase(rsvpRecord);
+
+      // Register push subscription if provided in body
+      if (pushSubscription && pushSubscription.endpoint) {
+        const subs = readPushSubscriptions();
+        const subEndpoint = pushSubscription.endpoint;
+        const subIdx = subs.findIndex(s => s.subscription?.endpoint === subEndpoint);
+        const subEntry = {
+          id: subIdx >= 0 ? subs[subIdx].id : `sub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          subscription: pushSubscription,
+          userId: user_id || user_email,
+          userEmail: user_email,
+          created_at: new Date().toISOString(),
+          last_used_at: new Date().toISOString()
+        };
+        if (subIdx >= 0) subs[subIdx] = subEntry; else subs.push(subEntry);
+        writePushSubscriptions(subs);
+      }
+
+      console.log(`[SHOW RSVP SUCCESS] Registered RSVP for "${show_title}" (ID: ${show_id}, User: ${user_email || user_id || 'anon'})`);
+      res.json({ success: true, rsvp: rsvpRecord });
+    } catch (err: any) {
+      console.error("[SHOW RSVP ERROR]", err);
+      res.status(500).json({ error: err.message || "Failed to register RSVP" });
+    }
+  });
+
+  // API ROUTE: Cancel RSVP
+  app.delete("/api/shows/rsvp/:showId", express.json(), async (req, res) => {
+    try {
+      const { showId } = req.params;
+      const { userId, userEmail } = req.body || {};
+
+      let rsvps = readShowRsvps();
+      rsvps = rsvps.filter(r => {
+        if (r.show_id !== showId) return true;
+        if (userId && r.user_id === userId) return false;
+        if (userEmail && r.user_email?.toLowerCase() === String(userEmail).toLowerCase()) return false;
+        if (!userId && !userEmail) return false; // delete all matching showId
+        return true;
+      });
+
+      writeShowRsvps(rsvps);
+
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          let q = supabase.from('show_rsvps').delete().eq('show_id', showId);
+          if (userId) q = q.eq('user_id', userId);
+          else if (userEmail) q = q.eq('user_email', userEmail);
+          await q;
+        } catch (_) {}
+      }
+
+      res.json({ success: true, showId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to cancel RSVP" });
+    }
+  });
+
+  // API ROUTE: Manually trigger 24h VAPID push reminder dispatch for show RSVPs
+  app.post("/api/push/trigger-show-reminders", async (req, res) => {
+    try {
+      const result = await checkAndSend24hShowReminders();
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      console.error("[TRIGGER SHOW REMINDERS ERROR]", err);
+      res.status(500).json({ error: err.message || "Failed to trigger show reminders" });
+    }
+  });
+
+  // Start background service timer: checks show RSVPs for 24h push reminders every 15 minutes
+  setTimeout(() => {
+    checkAndSend24hShowReminders().catch(err => console.warn("[BACKGROUND SHOW REMINDERS STARTUP NOTICE]", err));
+  }, 5000);
+  setInterval(() => {
+    checkAndSend24hShowReminders().catch(err => console.warn("[BACKGROUND SHOW REMINDERS CRON NOTICE]", err));
+  }, 15 * 60 * 1000);
 
   // Bandcamp URL resolver API: resolves any Bandcamp track or album URL into an embed player URL & metadata
   app.post("/api/bandcamp/resolve", async (req, res) => {
@@ -2816,20 +3333,42 @@ Return a valid JSON object matching the requested schema. If any field is not fo
    * Extracts 100% genuine release discography, real song titles, track durations (mm:ss),
    * record labels, catalog IDs / numbers, and official cover art.
    */
-  app.post('/api/scrape/metal-archives', async (req: express.Request, res: express.Response) => {
+  /**
+   * UNIVERSAL DISCOGRAPHY & MUSIC CATALOG METADATA ENGINE
+   * Multi-source scraper and metadata aggregator across:
+   * 1. Google & Web Metadata (Wikipedia, Wikidata Open Knowledge Graph)
+   * 2. Apple Music / iTunes Catalog API (100% genuine release dates, labels, HD cover art, and tracklists)
+   * 3. MusicBrainz & Cover Art Archive (underground metal releases, splits, demos, catalog numbers)
+   * 4. Encyclopaedia Metallum (Metal-Archives) & Discogs direct table/text paste
+   */
+  app.post(['/api/scrape/metal-archives', '/api/scrape/discography'], async (req: express.Request, res: express.Response) => {
     try {
-      const { query, rawText } = req.body || {};
-      
-      // 1. If raw text / table paste is provided, parse directly with track & label recognition
+      const { query, rawText, source = 'all' } = req.body || {};
+      const requestedSource = String(source || 'all').toLowerCase();
+
+      // Helper to normalize release type
+      const normalizeRelType = (raw: string): string => {
+        const lower = (raw || '').toLowerCase();
+        if (lower.includes('live')) return 'Live';
+        if (lower.includes('demo')) return 'Demo';
+        if (lower.includes('split')) return 'Split';
+        if (lower.includes('compilation') || lower.includes('anthology')) return 'Compilation';
+        if (lower.includes('ep') || lower.includes('extended play')) return 'EP';
+        if (lower.includes('single')) return 'Single';
+        if (lower.includes('full') || lower.includes('album') || lower.includes('lp')) return 'Full-length';
+        return 'Full-length';
+      };
+
+      // 1. If raw text / table paste is provided, parse directly
       if (rawText && typeof rawText === 'string' && rawText.trim().length > 0) {
         const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
         const parsedReleases: any[] = [];
         let currentTracks: any[] = [];
-        
+
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          if (/Tools\s+Name\s+Type|Discography|Complete discography/i.test(line)) continue;
-          
+          if (/Tools\s+Name\s+Type|Discography|Complete discography|Encyclopaedia Metallum/i.test(line)) continue;
+
           // Check for release header: Title [Type] [Year] [Optional Label/CatID]
           const relMatch = line.match(/^(.*?)(Full-length|Live album|Live|EP|Single|Demo|Split|Compilation|Boxed set|Collaboration)\s+(\d{4})(.*)$/i);
           if (relMatch) {
@@ -2837,17 +3376,8 @@ Return a valid JSON object matching the requested schema. If any field is not fo
             const rawType = relMatch[2].trim();
             const year = relMatch[3].trim();
             const extra = relMatch[4]?.trim() || '';
-            
-            let normalizedType = 'Full-length';
-            const lowerType = rawType.toLowerCase();
-            if (lowerType.includes('single')) normalizedType = 'Single';
-            else if (lowerType.includes('ep')) normalizedType = 'EP';
-            else if (lowerType.includes('demo')) normalizedType = 'Demo';
-            else if (lowerType.includes('live')) normalizedType = 'Live';
-            else if (lowerType.includes('split')) normalizedType = 'Split';
-            else if (lowerType.includes('compilation')) normalizedType = 'Compilation';
+            const normalizedType = normalizeRelType(rawType);
 
-            // Extract potential label & catalog ID from extra string e.g. "Century Media / CM-9872" or "8 (80%)"
             let detectedLabel = 'Underground Label';
             let detectedCatId = `CAT-${year}-${parsedReleases.length + 1}`;
             let reviewNote: string | undefined = undefined;
@@ -2863,7 +3393,7 @@ Return a valid JSON object matching the requested schema. If any field is not fo
                 detectedLabel = extra;
               }
             }
-            
+
             if (title) {
               parsedReleases.push({
                 id: 'ma-' + Math.random().toString(36).substring(2, 9),
@@ -2871,12 +3401,13 @@ Return a valid JSON object matching the requested schema. If any field is not fo
                 type: normalizedType,
                 release_date: year,
                 releaseDate: year,
-                genre: 'Death Metal / Underground',
+                genre: 'Extreme Metal / Underground',
                 label: detectedLabel,
                 catalog_id: detectedCatId,
                 catalogId: detectedCatId,
                 cover_image: null,
                 cover_url: null,
+                source: 'Direct Paste',
                 tracks: [
                   { id: 't1', num: '1', title: `${title}`, duration: '3:45' }
                 ],
@@ -2891,7 +3422,7 @@ Return a valid JSON object matching the requested schema. If any field is not fo
               const tNum = trackMatch[1].trim();
               const tTitle = trackMatch[2].trim();
               const tDur = trackMatch[3].trim();
-              
+
               if (lastRel.tracks.length === 1 && lastRel.tracks[0].title === lastRel.title) {
                 lastRel.tracks = [];
               }
@@ -2904,23 +3435,23 @@ Return a valid JSON object matching the requested schema. If any field is not fo
             }
           }
         }
-        
+
         if (parsedReleases.length > 0) {
           return res.json({
             bandName: query || 'Parsed Artist',
-            genre: 'Death Metal / Grindcore',
-            country: 'United States',
+            genre: 'Death Metal / Extreme Music',
+            country: 'Global',
             releases: parsedReleases
           });
         }
       }
 
-      // 2. Query Metal Archives Knowledge Base & MusicBrainz Open Music Archives
       const rawQuery = (query || '').trim();
       if (!rawQuery) {
-        return res.status(400).json({ error: 'Query or URL is required' });
+        return res.status(400).json({ error: 'Query or band name is required' });
       }
 
+      // Clean band query
       let cleanName = rawQuery;
       if (cleanName.includes('metal-archives.com/bands/')) {
         const parts = cleanName.split('/bands/')[1]?.split('/');
@@ -2931,330 +3462,1171 @@ Return a valid JSON object matching the requested schema. If any field is not fo
       cleanName = cleanName.replace(/https?:\/\/[^\s]+/g, '').trim() || cleanName;
       const lowerClean = cleanName.toLowerCase();
 
-      // Master Knowledge Base of iconic metal bands
-      const METAL_ARCHIVES_KNOWLEDGE_BASE: Record<string, any> = {
-        'necrophagist': {
-          bandName: 'Necrophagist',
-          genre: 'Technical Death Metal',
-          country: 'Germany',
-          releases: [
-            { id: 'ma-nec-1', title: 'Epitaph', type: 'Full-length', release_date: '2004', label: 'Relapse Records', catalog_id: 'RR-6623', tracks: [{ id: 't1', num: '1', title: 'Stabwound', duration: '2:48' }, { id: 't2', num: '2', title: 'Advanced Corpse Vapor', duration: '3:50' }, { id: 't3', num: '3', title: 'Ignominious & Pale', duration: '4:01' }] },
-            { id: 'ma-nec-2', title: 'Onset of Putrefaction', type: 'Full-length', release_date: '1999', label: 'Willowtip Records', catalog_id: 'WT-014', tracks: [{ id: 't1', num: '1', title: 'Foul Body Autopsy', duration: '1:53' }, { id: 't2', num: '2', title: 'Fermented Offal Discharge', duration: '4:43' }] }
-          ]
-        },
-        'sanguisugabogg': {
-          bandName: 'Sanguisugabogg',
-          genre: 'Death Metal',
-          country: 'United States',
-          releases: [
-            { id: 'ma-sang-1', title: 'Tortured Whole', type: 'Full-length', release_date: '2021', label: 'Century Media Records', catalog_id: 'CM-1948', tracks: [{ id: 't1', num: '1', title: 'Menstrual Envy', duration: '1:38' }, { id: 't2', num: '2', title: 'Dickhead', duration: '2:07' }, { id: 't3', num: '3', title: 'Dragged by a Truck', duration: '3:05' }] },
-            { id: 'ma-sang-2', title: 'Homicidal Ecstasy', type: 'Full-length', release_date: '2023', label: 'Century Media Records', catalog_id: 'CM-2104', tracks: [{ id: 't1', num: '1', title: 'Black Market Vasectomy', duration: '2:56' }, { id: 't2', num: '2', title: 'Face Rotted', duration: '2:41' }] }
-          ]
-        },
-        'mortician': {
-          bandName: 'Mortician',
-          genre: 'Brutal Death Metal / Grindcore',
-          country: 'United States',
-          releases: [
-            { id: 'ma-mort-1', title: 'Darkest Day of Horror', type: 'Full-length', release_date: '2002', label: 'Relapse Records', catalog_id: 'RR-6521', tracks: [{ id: 't1', num: '1', title: 'Introduction', duration: '0:52' }, { id: 't2', num: '2', title: 'The Dead Pit', duration: '1:33' }, { id: 't3', num: '3', title: 'Casket', duration: '2:27' }] },
-            { id: 'ma-mort-2', title: 'Hacked Up for Barbecue', type: 'Full-length', release_date: '1996', label: 'Relapse Records', catalog_id: 'RR-6410', tracks: [{ id: 't1', num: '1', title: 'Mortician', duration: '2:31' }, { id: 't2', num: '2', title: 'Brutally Mutilated', duration: '0:42' }] }
-          ]
-        },
-        'dying fetus': {
-          bandName: 'Dying Fetus',
-          genre: 'Technical Death Metal / Grindcore',
-          country: 'United States',
-          releases: [
-            { id: 'ma-df-1', title: 'Make Them Beg for Death', type: 'Full-length', release_date: '2023', label: 'Relapse Records', catalog_id: 'RR-7502', tracks: [{ id: 't1', num: '1', title: 'Enlighten Through Torture', duration: '4:15' }, { id: 't2', num: '2', title: 'Compulsion for Cruelty', duration: '3:50' }] },
-            { id: 'ma-df-2', title: 'Reign Supreme', type: 'Full-length', release_date: '2012', label: 'Relapse Records', catalog_id: 'RR-7109', tracks: [{ id: 't1', num: '1', title: 'Invert the Idols', duration: '4:30' }, { id: 't2', num: '2', title: 'Subjected to a Beating', duration: '4:11' }] }
-          ]
-        },
-        'cannibal corpse': {
-          bandName: 'Cannibal Corpse',
-          genre: 'Death Metal',
-          country: 'United States',
-          releases: [
-            { id: 'ma-cc-1', title: 'Tomb of the Mutilated', type: 'Full-length', release_date: '1992', label: 'Metal Blade Records', catalog_id: '3984-14022', tracks: [{ id: 't1', num: '1', title: 'Hammer Smashed Face', duration: '4:04' }, { id: 't2', num: '2', title: 'I Cum Blood', duration: '3:41' }] },
-            { id: 'ma-cc-2', title: 'Violence Unimagined', type: 'Full-length', release_date: '2021', label: 'Metal Blade Records', catalog_id: '3984-15822', tracks: [{ id: 't1', num: '1', title: 'Murderous Rampage', duration: '4:07' }, { id: 't2', num: '2', title: 'Inhumane Harvest', duration: '4:32' }] }
-          ]
-        }
-      };
+      // --- SUB-ENGINE 1: Apple Music / iTunes Store Catalog API ---
+      const fetchITunesCatalog = async (band: string): Promise<any[]> => {
+        try {
+          let results: any[] = [];
+          const bLower = band.toLowerCase().trim();
 
-      for (const [key, val] of Object.entries(METAL_ARCHIVES_KNOWLEDGE_BASE)) {
-        if (lowerClean.includes(key) || key.includes(lowerClean)) {
-          return res.json(val);
-        }
-      }
+          // 1. First attempt: Search for artist and lookup official albums
+          const artistRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(band)}&entity=musicArtist&limit=3`);
+          if (artistRes.ok) {
+            const artistData = await artistRes.json() as any;
+            const matchingArtist = (artistData.results || []).find((a: any) => {
+              const aName = (a.artistName || '').toLowerCase().trim();
+              return aName === bLower || aName.includes(bLower) || bLower.includes(aName);
+            }) || artistData.results?.[0];
 
-      // Resilient MusicBrainz fetch helper with auto-retry and backoff
-      const fetchMB = async (url: string, retries = 2): Promise<Response> => {
-        for (let attempt = 0; attempt <= retries; attempt++) {
-          try {
-            const res = await fetch(url, {
-              headers: { 'User-Agent': 'NexusMetalArchivist/1.0 ( support@nexuscore.fm )' }
-            });
-            if (res.status === 503 || res.status === 429) {
-              await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
-              continue;
-            }
-            return res;
-          } catch (e) {
-            if (attempt === retries) throw e;
-            await new Promise((resolve) => setTimeout(resolve, 800));
-          }
-        }
-        return fetch(url, {
-          headers: { 'User-Agent': 'NexusMetalArchivist/1.0 ( support@nexuscore.fm )' }
-        });
-      };
-
-      const artistRes = await fetchMB(`https://musicbrainz.org/ws/2/artist/?query=artist:${encodeURIComponent(cleanName)}&fmt=json`);
-
-      let artist: any = null;
-      if (artistRes.ok) {
-        const artistData = await artistRes.json() as any;
-        artist = artistData.artists?.[0];
-      }
-
-      // If MusicBrainz doesn't find the artist, generate a robust authentic metal catalog fallback
-      if (!artist) {
-        const fallbackReleases = [
-          {
-            id: 'ma-gen-1',
-            title: `${cleanName} - Demo I`,
-            type: 'Demo',
-            release_date: '2021',
-            label: 'Independent',
-            catalog_id: 'DEMO-01',
-            tracks: [{ id: 't1', num: '1', title: 'Intro / Putrid Awakening', duration: '2:15' }, { id: 't2', num: '2', title: 'Subterranean Dismemberment', duration: '3:45' }]
-          },
-          {
-            id: 'ma-gen-2',
-            title: `Pathology of the Damned`,
-            type: 'Full-length',
-            release_date: '2023',
-            label: 'Underground Death Records',
-            catalog_id: 'UDR-666',
-            tracks: [{ id: 't1', num: '1', title: 'Catacomb Necropsy', duration: '4:10' }, { id: 't2', num: '2', title: 'Visceral Slaughter', duration: '3:50' }, { id: 't3', num: '3', title: 'Infected Cranium', duration: '4:25' }]
-          }
-        ];
-        return res.json({
-          bandName: cleanName,
-          genre: 'Death Metal / Extreme Underground',
-          country: 'United States',
-          releases: fallbackReleases
-        });
-      }
-
-      const bandName = artist.name || cleanName;
-      const country = artist.country ? (artist.country === 'US' ? 'United States' : artist.country) : 'Global';
-      const genre = artist.tags?.map((t: any) => t.name).slice(0, 3).join(' / ') || 'Death Metal / Grindcore';
-
-      // Query releases with labels, recordings, and release groups in one request
-      const relRes = await fetchMB(`https://musicbrainz.org/ws/2/release?artist=${artist.id}&inc=labels+recordings+release-groups&limit=100&fmt=json`);
-
-      if (!relRes.ok) {
-        return res.json({ bandName, genre, country, releases: [] });
-      }
-
-      const relData = await relRes.json() as any;
-      const rawReleases = relData.releases || [];
-
-      const rgMap = new Map<string, { rg: any; releases: any[] }>();
-      const labelCounts: Record<string, number> = {};
-
-      for (const r of rawReleases) {
-        const lName = r['label-info']?.[0]?.label?.name;
-        if (lName && !lName.toLowerCase().includes('no label')) {
-          labelCounts[lName] = (labelCounts[lName] || 0) + 1;
-        }
-
-        const rg = r['release-group'];
-        if (!rg) continue;
-        if (!rgMap.has(rg.id)) {
-          rgMap.set(rg.id, { rg, releases: [] });
-        }
-        rgMap.get(rg.id)!.releases.push(r);
-      }
-
-      const topArtistLabel = Object.entries(labelCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Underground Label';
-
-      const typeMap = (primary?: string, secondary?: any) => {
-        const sec = Array.isArray(secondary) ? secondary.join(' ').toLowerCase() : (secondary || '').toLowerCase();
-        const prim = (primary || '').toLowerCase();
-        if (sec.includes('live') || prim.includes('live')) return 'Live';
-        if (sec.includes('demo') || prim.includes('demo')) return 'Demo';
-        if (sec.includes('split') || prim.includes('split')) return 'Split';
-        if (sec.includes('compilation') || prim.includes('compilation')) return 'Compilation';
-        if (prim === 'ep' || sec.includes('ep')) return 'EP';
-        if (prim === 'single' || sec.includes('single')) return 'Single';
-        if (prim === 'album') return 'Full-length';
-        return 'Full-length';
-      };
-
-      const releases: any[] = [];
-
-      for (const [rgId, { rg, releases: candList }] of rgMap.entries()) {
-        const sorted = [...candList].sort((a, b) => {
-          const aOfficial = a.status === 'Official' ? 3 : 1;
-          const bOfficial = b.status === 'Official' ? 3 : 1;
-          const aLabel = a['label-info']?.[0]?.label?.name ? 2 : 0;
-          const bLabel = b['label-info']?.[0]?.label?.name ? 2 : 0;
-          const aCat = a['label-info']?.[0]?.['catalog-number'] ? 2 : (a.barcode ? 1 : 0);
-          const bCat = b['label-info']?.[0]?.['catalog-number'] ? 2 : (b.barcode ? 1 : 0);
-          const aTracks = a.media?.[0]?.tracks?.length || 0;
-          const bTracks = b.media?.[0]?.tracks?.length || 0;
-          return (bOfficial + bLabel + bCat + bTracks) - (aOfficial + aLabel + aCat + aTracks);
-        });
-        const best = sorted[0];
-
-        // 1. Record Label
-        let labelName = topArtistLabel;
-        if (best?.['label-info']?.[0]?.label?.name) {
-          const extracted = best['label-info'][0].label.name;
-          if (!extracted.toLowerCase().includes('no label')) {
-            labelName = extracted;
-          }
-        }
-
-        // 2. Year & Release Date
-        const year = (best?.date || rg['first-release-date'] || '').split('-')[0] || '';
-        const normType = typeMap(rg['primary-type'], rg['secondary-types']);
-
-        // 3. Catalog ID
-        let catalogId = `CAT-${year || '2024'}-${String(releases.length + 1).padStart(3, '0')}`;
-        if (best?.['label-info']?.[0]?.['catalog-number']) {
-          catalogId = best['label-info'][0]['catalog-number'].trim();
-        } else if (best?.barcode) {
-          catalogId = best.barcode.trim();
-        }
-
-        // 4. Tracks & Durations
-        let tracks: any[] = [];
-        if (best?.media && best.media.length > 0) {
-          const allMediaTracks: any[] = [];
-          for (const media of best.media) {
-            if (media.tracks && media.tracks.length > 0) {
-              for (const t of media.tracks) {
-                const durMs = t.length || t.recording?.length;
-                const formattedDuration = durMs
-                  ? `${Math.floor(durMs / 60000)}:${Math.floor((durMs % 60000) / 1000).toString().padStart(2, '0')}`
-                  : '3:30';
-
-                allMediaTracks.push({
-                  id: t.id || `t_${releases.length}_${allMediaTracks.length + 1}`,
-                  num: String(t.number || allMediaTracks.length + 1),
-                  title: t.title || t.recording?.title || `${rg.title || best.title}`,
-                  duration: formattedDuration
-                });
+            if (matchingArtist?.artistId) {
+              const albRes = await fetch(`https://itunes.apple.com/lookup?id=${matchingArtist.artistId}&entity=album&limit=50`);
+              if (albRes.ok) {
+                const albData = await albRes.json() as any;
+                results = (albData.results || []).slice(1); // First result is artist wrapper
               }
             }
           }
-          if (allMediaTracks.length > 0) {
-            tracks = allMediaTracks;
+
+          // 2. Fallback attempt: Search by album entity directly
+          if (results.length === 0) {
+            const itRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(band)}&entity=album&limit=50`);
+            if (itRes.ok) {
+              const itData = await itRes.json() as any;
+              const filtered = (itData?.results || []).filter((a: any) => {
+                const aName = (a.artistName || '').toLowerCase().trim();
+                return aName === bLower || aName.includes(bLower) || bLower.includes(aName);
+              });
+              results = filtered.length > 0 ? filtered : (itData?.results || []);
+            }
           }
-        }
 
-        if (tracks.length === 0) {
-          tracks = [
-            { id: `t_${releases.length}_1`, num: '1', title: `${rg.title || best.title}`, duration: '3:45' }
-          ];
-        }
+          // 3. Batch song tracklist lookup for all found collectionIds
+          const collectionIds = results.map((item: any) => item.collectionId).filter(Boolean);
+          const songsByCollection = new Map<number, any[]>();
 
-        releases.push({
-          id: rg.id || `ma-rel-${releases.length}`,
-          bestReleaseId: best?.id || null,
-          title: rg.title || best.title,
-          type: normType,
-          release_date: year,
-          releaseDate: year,
-          genre: genre,
-          label: labelName,
-          catalog_id: catalogId,
-          catalogId: catalogId,
-          cover_image: null,
-          cover_url: null,
-          tracks
-        });
-      }
+          if (collectionIds.length > 0) {
+            const chunkSize = 8;
+            for (let i = 0; i < collectionIds.length; i += chunkSize) {
+              const chunk = collectionIds.slice(i, i + chunkSize);
+              try {
+                const songLookupRes = await fetch(`https://itunes.apple.com/lookup?id=${chunk.join(',')}&entity=song&limit=300`);
+                if (songLookupRes.ok) {
+                  const songLookupData = await songLookupRes.json() as any;
+                  (songLookupData.results || []).forEach((sItem: any) => {
+                    if (sItem.wrapperType === 'track' && sItem.collectionId) {
+                      const list = songsByCollection.get(sItem.collectionId) || [];
+                      list.push(sItem);
+                      songsByCollection.set(sItem.collectionId, list);
+                    }
+                  });
+                }
+              } catch (batchErr) {
+                console.warn('[iTunes batch track lookup notice]:', batchErr);
+              }
+            }
 
-      // Sort by newest release date first
-      releases.sort((a: any, b: any) => parseInt(b.release_date || '0') - parseInt(a.release_date || '0'));
+            // Fallback: If any album has 0 songs in map, do single lookup by collectionId
+            for (const item of results) {
+              if (item.collectionId && (!songsByCollection.has(item.collectionId) || songsByCollection.get(item.collectionId)!.length === 0)) {
+                try {
+                  const indRes = await fetch(`https://itunes.apple.com/lookup?id=${item.collectionId}&entity=song`);
+                  if (indRes.ok) {
+                    const indData = await indRes.json() as any;
+                    const indTracks = (indData.results || []).filter((r: any) => r.wrapperType === 'track');
+                    if (indTracks.length > 0) {
+                      songsByCollection.set(item.collectionId, indTracks);
+                    }
+                  }
+                } catch (_) {}
+              }
+            }
+          }
 
-      // If MusicBrainz returned 0 releases, add fallback releases
-      if (releases.length === 0) {
-        releases.push({
-          id: 'ma-fb-1',
-          title: `${bandName} - Discography Anthology`,
-          type: 'Full-length',
-          release_date: '2023',
-          label: 'Underground Records',
-          catalog_id: 'UGR-01',
-          tracks: [{ id: 't1', num: '1', title: `${bandName} Anthem`, duration: '3:45' }]
-        });
-      }
+          return results.map((item: any, idx: number) => {
+            const rawTitle = item.collectionName || 'Untitled Album';
+            const year = (item.releaseDate || '').substring(0, 4) || '';
+            const rawLabel = item.copyright?.replace(/^℗\s*\d{4}\s*/, '') || item.artistName || 'Independent';
+            const hdCover = item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : null;
+            const normType = normalizeRelType(rawTitle);
 
-      // 5. Enrich top releases with genuine high-resolution cover artwork via Deezer & Cover Art Archive
-      await Promise.all(releases.map(async (rel) => {
-        try {
-          // 1. Try Deezer Search API (1000x1000 crystal clear artwork)
-          const q = `${bandName} ${rel.title}`.trim();
-          const dRes = await fetch(`https://api.deezer.com/search/album?q=${encodeURIComponent(q)}`, {
-            headers: { 'User-Agent': 'NexusMetalArchivist/1.0' }
+            const rawSongs = songsByCollection.get(item.collectionId) || [];
+            rawSongs.sort((a: any, b: any) => (a.trackNumber || 0) - (b.trackNumber || 0));
+
+            const parsedTracks = rawSongs.length > 0
+              ? rawSongs.map((s: any, tIdx: number) => {
+                  const durMs = s.trackTimeMillis;
+                  const durationStr = durMs
+                    ? `${Math.floor(durMs / 60000)}:${Math.floor((durMs % 60000) / 1000).toString().padStart(2, '0')}`
+                    : '3:30';
+                  return {
+                    id: `s-${s.trackId || tIdx + 1}`,
+                    num: String(s.trackNumber || tIdx + 1),
+                    title: s.trackName || `Track ${tIdx + 1}`,
+                    duration: durationStr,
+                    previewUrl: s.previewUrl || s.preview_url || undefined
+                  };
+                })
+              : [
+                  { id: `t1`, num: '1', title: rawTitle, duration: '3:45' }
+                ];
+
+            return {
+              id: `it-${item.collectionId || idx}`,
+              collectionId: item.collectionId,
+              title: rawTitle,
+              type: normType,
+              release_date: year,
+              releaseDate: year,
+              genre: item.primaryGenreName || 'Metal',
+              label: rawLabel,
+              catalog_id: `IT-${item.collectionId}`,
+              catalogId: `IT-${item.collectionId}`,
+              cover_image: hdCover,
+              cover_url: hdCover,
+              coverImage: hdCover,
+              coverUrl: hdCover,
+              image_url: hdCover,
+              source: 'Apple Music',
+              trackCount: item.trackCount || parsedTracks.length,
+              tracks: parsedTracks
+            };
           });
-          if (dRes.ok) {
-            const dData = await dRes.json() as any;
-            const match = dData?.data?.[0];
-            const cover = match?.cover_xl || match?.cover_big || match?.cover_medium;
-            if (cover) {
-              rel.cover_url = cover;
-              rel.cover_image = cover;
-              rel.coverUrl = cover;
-              rel.coverImage = cover;
-              rel.image_url = cover;
-              return;
-            }
-          }
-        } catch (e) {}
-
-        try {
-          // 2. Try iTunes Search API
-          const itRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(bandName + ' ' + rel.title)}&entity=album&limit=3`);
-          if (itRes.ok) {
-            const itData = await itRes.json() as any;
-            const match = itData?.results?.[0];
-            if (match?.artworkUrl100) {
-              const cover = match.artworkUrl100.replace('100x100bb', '600x600bb');
-              rel.cover_url = cover;
-              rel.cover_image = cover;
-              rel.coverUrl = cover;
-              rel.coverImage = cover;
-              rel.image_url = cover;
-              return;
-            }
-          }
-        } catch (e) {}
-
-        // 3. Fallback to CoverArtArchive release ID
-        if (rel.bestReleaseId) {
-          const caaUrl = `https://coverartarchive.org/release/${rel.bestReleaseId}/front-500`;
-          rel.cover_url = caaUrl;
-          rel.cover_image = caaUrl;
-          rel.coverUrl = caaUrl;
-          rel.coverImage = caaUrl;
-          rel.image_url = caaUrl;
+        } catch (err) {
+          console.warn('[iTunes catalog fetch error]:', err);
+          return [];
         }
-      }));
+      };
+
+      // --- SUB-ENGINE 2: Google & Web Open Knowledge Graph (Wikipedia & Wikidata) ---
+      const fetchGoogleWebMetadata = async (band: string): Promise<any[]> => {
+        try {
+          const sRes = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(band)}&limit=3&namespace=0&format=json`, {
+            headers: { 'User-Agent': 'NexusMetalArchivist/1.0 (https://nexuscore.fm; support@nexuscore.fm)' }
+          });
+          if (!sRes.ok) return [];
+          const sData = await sRes.json() as any;
+          const candidatePages = sData?.[1] || [];
+          if (candidatePages.length === 0) return [];
+
+          const pageTitle = candidatePages[0];
+          const pRes = await fetch(`https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(pageTitle)}&prop=wikitext&format=json`, {
+            headers: { 'User-Agent': 'NexusMetalArchivist/1.0 (https://nexuscore.fm; support@nexuscore.fm)' }
+          });
+          if (!pRes.ok) return [];
+          const pData = await pRes.json() as any;
+          const wikitext = pData.parse?.wikitext?.['*'] || '';
+
+          const lines = wikitext.split('\n');
+          let currentType = 'Full-length';
+          const releases: any[] = [];
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (/studio albums/i.test(line)) currentType = 'Full-length';
+            else if (/ep|extended play/i.test(line)) currentType = 'EP';
+            else if (/demo/i.test(line)) currentType = 'Demo';
+            else if (/live album/i.test(line)) currentType = 'Live';
+            else if (/compilation/i.test(line)) currentType = 'Compilation';
+            else if (/single/i.test(line)) currentType = 'Single';
+
+            // Wikitable row header
+            const rowM = line.match(/!scope=[\"']row[\"']\|\s*''\[\[(?:[^\|\]]+\|)?([^\]']+)\]\]''/);
+            if (rowM) {
+              const title = rowM[1].trim();
+              let year = '';
+              let label = 'Underground Label';
+              for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
+                const nl = lines[j];
+                if (nl.startsWith('|-') || nl.startsWith('|}')) break;
+                const ym = nl.match(/Released:\s*(?:[A-Za-z]+\s+\d{1,2},\s*)?(\d{4})/i) || nl.match(/(\d{4})/);
+                if (ym && !year) year = ym[1];
+                const lm = nl.match(/Label:\s*\[\[?(?:[^\|\]]+\|)?([^\]'\*]+)\]?\]?/i);
+                if (lm && label === 'Underground Label') label = lm[1].trim();
+              }
+              releases.push({
+                id: `wiki-${releases.length + 1}`,
+                title,
+                type: currentType,
+                release_date: year,
+                releaseDate: year,
+                genre: 'Metal',
+                label,
+                catalog_id: `WIKI-${year || 'CAT'}-${releases.length + 1}`,
+                catalogId: `WIKI-${year || 'CAT'}-${releases.length + 1}`,
+                cover_image: null,
+                cover_url: null,
+                source: 'Google & Web',
+                tracks: [{ id: 't1', num: '1', title, duration: '3:30' }]
+              });
+              continue;
+            }
+
+            // Bullet list format: * ''[[Title]]'' (Year)
+            const bulletM = line.match(/\*.*?''\[\[?(?:[^\|\]]+\|)?([^\]']+)\]?\]?''\s*(?:\([^\)]*?(\d{4})[^\)]*?\)|.*?(\d{4}))/);
+            if (bulletM) {
+              const title = bulletM[1].replace(/\[\[|\]\]/g, '').trim();
+              const year = bulletM[2] || bulletM[3] || '';
+              releases.push({
+                id: `wiki-${releases.length + 1}`,
+                title,
+                type: currentType,
+                release_date: year,
+                releaseDate: year,
+                genre: 'Metal',
+                label: 'Underground Label',
+                catalog_id: `WIKI-${year || 'CAT'}-${releases.length + 1}`,
+                catalogId: `WIKI-${year || 'CAT'}-${releases.length + 1}`,
+                cover_image: null,
+                cover_url: null,
+                source: 'Google & Web',
+                tracks: [{ id: 't1', num: '1', title, duration: '3:30' }]
+              });
+            }
+          }
+
+          return releases;
+        } catch (err) {
+          console.warn('[Google / Web metadata fetch error]:', err);
+          return [];
+        }
+      };
+
+      // --- SUB-ENGINE 3: MusicBrainz & Cover Art Archive ---
+      const fetchMusicBrainzCatalog = async (band: string): Promise<any[]> => {
+        try {
+          const mbRes = await fetch(`https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent(band)}&fmt=json`, {
+            headers: { 'User-Agent': 'NexusMetalArchivist/1.0 (https://nexuscore.fm; support@nexuscore.fm)' }
+          });
+          if (!mbRes.ok) return [];
+          const mbData = await mbRes.json() as any;
+          const artist = mbData.artists?.[0];
+          if (!artist) return [];
+
+          const rgRes = await fetch(`https://musicbrainz.org/ws/2/release-group?artist=${artist.id}&limit=50&fmt=json`, {
+            headers: { 'User-Agent': 'NexusMetalArchivist/1.0 (https://nexuscore.fm; support@nexuscore.fm)' }
+          });
+          if (!rgRes.ok) return [];
+          const rgData = await rgRes.json() as any;
+          const groups = rgData['release-groups'] || [];
+
+          return groups.map((g: any, idx: number) => {
+            const year = (g['first-release-date'] || '').split('-')[0] || '';
+            const pType = g['primary-type'] || '';
+            const sType = Array.isArray(g['secondary-types']) ? g['secondary-types'].join(' ') : '';
+            const normType = normalizeRelType(`${pType} ${sType}`);
+            const caaUrl = `https://coverartarchive.org/release-group/${g.id}/front-500`;
+
+            return {
+              id: `mb-${g.id}`,
+              title: g.title,
+              type: normType,
+              release_date: year,
+              releaseDate: year,
+              genre: 'Metal / Heavy Underground',
+              label: 'Catalog Records',
+              catalog_id: `MB-${g.id.substring(0, 8)}`,
+              catalogId: `MB-${g.id.substring(0, 8)}`,
+              cover_image: caaUrl,
+              cover_url: caaUrl,
+              coverImage: caaUrl,
+              coverUrl: caaUrl,
+              image_url: caaUrl,
+              source: 'MusicBrainz',
+              tracks: [{ id: 't1', num: '1', title: g.title, duration: '3:30' }]
+            };
+          });
+        } catch (err) {
+          console.warn('[MusicBrainz catalog fetch error]:', err);
+          return [];
+        }
+      };
+
+      // Execute source lookups based on requestedSource
+      let allFoundReleases: any[] = [];
+      let detectedGenre = 'Extreme Metal / Deathcore / Grindcore';
+      let detectedCountry = 'United States';
+
+      if (requestedSource === 'itunes') {
+        allFoundReleases = await fetchITunesCatalog(cleanName);
+      } else if (requestedSource === 'google') {
+        allFoundReleases = await fetchGoogleWebMetadata(cleanName);
+      } else if (requestedSource === 'musicbrainz' || requestedSource === 'metal-archives') {
+        allFoundReleases = await fetchMusicBrainzCatalog(cleanName);
+      } else {
+        // ALL SOURCES (Default / Auto Aggregator)
+        const [itunesRes, googleRes, mbRes] = await Promise.allSettled([
+          fetchITunesCatalog(cleanName),
+          fetchGoogleWebMetadata(cleanName),
+          fetchMusicBrainzCatalog(cleanName)
+        ]);
+
+        const itunesList = itunesRes.status === 'fulfilled' ? itunesRes.value : [];
+        const googleList = googleRes.status === 'fulfilled' ? googleRes.value : [];
+        const mbList = mbRes.status === 'fulfilled' ? mbRes.value : [];
+
+        // Deduplication and cross-enrichment map
+        const mergedMap = new Map<string, any>();
+
+        // Priority 1: Apple Music (has HD covers & verified track counts)
+        for (const item of itunesList) {
+          const key = item.title.toLowerCase().trim().replace(/[\(\[\{].*?[\)\]\}]/g, '').trim();
+          mergedMap.set(key, item);
+        }
+
+        // Priority 2: Google & Web (fills missing historic studio albums / demos)
+        for (const item of googleList) {
+          const key = item.title.toLowerCase().trim().replace(/[\(\[\{].*?[\)\]\}]/g, '').trim();
+          if (mergedMap.has(key)) {
+            const existing = mergedMap.get(key);
+            if (item.label && item.label !== 'Underground Label') {
+              existing.label = item.label;
+            }
+          } else {
+            mergedMap.set(key, item);
+          }
+        }
+
+        // Priority 3: MusicBrainz (adds underground splits / EPs / vinyls)
+        for (const item of mbList) {
+          const key = item.title.toLowerCase().trim().replace(/[\(\[\{].*?[\)\]\}]/g, '').trim();
+          if (mergedMap.has(key)) {
+            const existing = mergedMap.get(key);
+            if (!existing.cover_url && item.cover_url) {
+              existing.cover_url = item.cover_url;
+              existing.coverImage = item.cover_url;
+            }
+          } else {
+            mergedMap.set(key, item);
+          }
+        }
+
+        allFoundReleases = Array.from(mergedMap.values());
+      }
+
+      // Sort newest to oldest release year
+      allFoundReleases.sort((a, b) => {
+        const yearA = parseInt(a.release_date || a.releaseDate || '0', 10);
+        const yearB = parseInt(b.release_date || b.releaseDate || '0', 10);
+        return yearB - yearA;
+      });
+
+      // Batch & individual enrich ALL releases missing full tracklists using Apple Music / iTunes collectionIds or title lookup
+      const missingTrackReleases = allFoundReleases.filter(r => !r.tracks || r.tracks.length <= 1);
+      if (missingTrackReleases.length > 0) {
+        for (const rel of missingTrackReleases) {
+          if (!rel.collectionId && rel.title) {
+            try {
+              const sr = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanName + ' ' + rel.title)}&entity=album&limit=1`);
+              if (sr.ok) {
+                const sd = await sr.json() as any;
+                if (sd.results?.[0]?.collectionId) {
+                  rel.collectionId = sd.results[0].collectionId;
+                  if (!rel.cover_url && sd.results[0].artworkUrl100) {
+                    const hd = sd.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
+                    rel.cover_url = hd;
+                    rel.cover_image = hd;
+                    rel.coverUrl = hd;
+                    rel.coverImage = hd;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (rel.collectionId) {
+            try {
+              const trRes = await fetch(`https://itunes.apple.com/lookup?id=${rel.collectionId}&entity=song`);
+              if (trRes.ok) {
+                const trData = await trRes.json() as any;
+                const rawSongs = (trData.results || []).filter((s: any) => s.wrapperType === 'track');
+                if (rawSongs.length > 0) {
+                  rawSongs.sort((a: any, b: any) => (a.trackNumber || 0) - (b.trackNumber || 0));
+                  rel.tracks = rawSongs.map((s: any, tIdx: number) => {
+                    const durMs = s.trackTimeMillis;
+                    const durationStr = durMs
+                      ? `${Math.floor(durMs / 60000)}:${Math.floor((durMs % 60000) / 1000).toString().padStart(2, '0')}`
+                      : '3:30';
+                    return {
+                      id: `s-${s.trackId || tIdx + 1}`,
+                      num: String(s.trackNumber || tIdx + 1),
+                      title: s.trackName || 'Untitled Track',
+                      duration: durationStr,
+                      previewUrl: s.previewUrl || s.preview_url || undefined
+                    };
+                  });
+                }
+              }
+            } catch (batchErr) {
+              console.warn('[Server album track individual enrichment notice]:', batchErr);
+            }
+          }
+        }
+      }
 
       return res.json({
-        bandName,
-        genre,
-        country,
-        releases
+        bandName: cleanName,
+        genre: detectedGenre,
+        country: detectedCountry,
+        releases: allFoundReleases,
+        totalFound: allFoundReleases.length
       });
     } catch (err: any) {
-      console.error('[METAL ARCHIVES SCRAPER ERROR]', err);
-      return res.status(500).json({ error: err.message || 'Internal scraping failure' });
+      console.error('[DISCOGRAPHY SCRAPER ERROR]', err);
+      return res.status(500).json({ error: err.message || 'Internal discography scraping failure' });
+    }
+  });
+
+  /**
+   * VENUES LOCAL PERSISTENCE & CACHE
+   * Retains discovered and custom venues in uploads/venues_cache.json
+   */
+  const venuesCacheFile = path.join(uploadsDir, 'venues_cache.json');
+
+  async function loadCachedVenues(): Promise<any[]> {
+    try {
+      if (fs.existsSync(venuesCacheFile)) {
+        const content = await fs.promises.readFile(venuesCacheFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[SERVER VENUES] Local cache read warning:', e);
+    }
+    return BUILT_IN_BLACK_BOOK_VENUES;
+  }
+
+  async function saveCachedVenues(venuesList: any[]): Promise<void> {
+    try {
+      const existing = await loadCachedVenues();
+      const map = new Map<string, any>();
+      existing.forEach((v: any) => {
+        if (v && (v.id || v.name)) {
+          const vId = v.id || `srv_${(v.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_')}_${(v.city || '').toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+          const normalized = { ...v, id: vId };
+          const key = vId;
+          map.set(key, normalized);
+        }
+      });
+      venuesList.forEach((v: any, idx: number) => {
+        if (v && (v.id || v.name)) {
+          const vId = v.id || `srv_${(v.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_')}_${(v.city || '').toLowerCase().replace(/[^a-z0-9]/g, '_')}_${idx}`;
+          const normalized = { ...v, id: vId };
+          const key = vId;
+          map.set(key, { ...(map.get(key) || {}), ...normalized });
+        }
+      });
+      await fs.promises.writeFile(venuesCacheFile, JSON.stringify(Array.from(map.values()), null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[SERVER VENUES] Local cache write warning:', e);
+    }
+  }
+
+  // API ROUTE: Get cached venues
+  app.get('/api/venues', async (_req: express.Request, res: express.Response) => {
+    try {
+      const venues = await loadCachedVenues();
+      res.json({ success: true, venues });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to load venues' });
+    }
+  });
+
+  // API ROUTE: Save single venue
+  app.post('/api/venues', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const venue = req.body?.venue || req.body;
+      if (!venue || !venue.name) {
+        return res.status(400).json({ error: 'Venue name is required' });
+      }
+      await saveCachedVenues([venue]);
+      const updated = await loadCachedVenues();
+      res.json({ success: true, count: updated.length, venue });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to save venue' });
+    }
+  });
+
+  // API ROUTE: Batch save venues
+  app.post('/api/venues/batch', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const venues = req.body?.venues || (Array.isArray(req.body) ? req.body : []);
+      if (!Array.isArray(venues) || venues.length === 0) {
+        return res.status(400).json({ error: 'Array of venues is required' });
+      }
+      await saveCachedVenues(venues);
+      const updated = await loadCachedVenues();
+      res.json({ success: true, count: updated.length, total: updated.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to batch save venues' });
+    }
+  });
+
+  // API ROUTE: Batch delete venues by IDs and/or Keys
+  app.post('/api/venues/batch-delete', async (req: express.Request, res: express.Response) => {
+    try {
+      const { ids = [], keys = [] } = req.body || {};
+      const idSet = new Set((ids as string[]).map((id: string) => String(id).trim().toLowerCase()));
+      const keySet = new Set((keys as string[]).map((k: string) => String(k).trim().toLowerCase()));
+
+      const existing = await loadCachedVenues();
+      const filtered = existing.filter((v: any) => {
+        if (!v) return false;
+        if (v.id && idSet.has(String(v.id).trim().toLowerCase())) return false;
+        const key = `${(v.name || '').trim().toLowerCase()}_${(v.city || '').trim().toLowerCase()}`;
+        if (keySet.has(key)) return false;
+        return true;
+      });
+
+      await fs.promises.writeFile(venuesCacheFile, JSON.stringify(filtered, null, 2), 'utf8');
+      res.json({ success: true, count: filtered.length, purgedCount: existing.length - filtered.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to batch delete venues' });
+    }
+  });
+
+  // API ROUTE: Delete single venue by ID and/or Name+City
+  app.delete('/api/venues/:id', async (req: express.Request, res: express.Response) => {
+    try {
+      const venueId = req.params.id;
+      const venueName = (req.query.name as string || '').trim().toLowerCase();
+      const venueCity = (req.query.city as string || '').trim().toLowerCase();
+
+      const existing = await loadCachedVenues();
+      const filtered = existing.filter((v: any) => {
+        if (!v) return false;
+        // Match by ID if valid
+        if (venueId && venueId !== 'undefined' && venueId !== 'null' && v.id === venueId) {
+          return false;
+        }
+        // Match by exact Name + City
+        if (venueName && venueCity && v.name && v.city) {
+          if (v.name.trim().toLowerCase() === venueName && v.city.trim().toLowerCase() === venueCity) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      await fs.promises.writeFile(venuesCacheFile, JSON.stringify(filtered, null, 2), 'utf8');
+      res.json({ success: true, count: filtered.length, deletedId: venueId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete venue' });
+    }
+  });
+
+  /**
+   * TOUR PACKAGES PERSISTENCE & CROSS-DEVICE SYNC APIS
+   */
+  const tourPackagesCacheFile = path.join(uploadsDir, 'tour_packages_cache.json');
+
+  function isServerCommunityTour(t: any): boolean {
+    if (!t) return false;
+    const title = (t.title || '').toLowerCase();
+    const headliner = (t.headlinerClientName || t.headliner_client_name || '').toLowerCase();
+    const id = (t.id || '').toLowerCase();
+    if (
+      title.includes('us and canada') || 
+      title.includes('canada tour') || 
+      headliner.includes('dying fetus') || 
+      headliner.includes('dying') ||
+      title.includes('dying') ||
+      id.includes('us-and-canada') || 
+      id.includes('us_and_canada') ||
+      id.includes('dying-fetus') ||
+      headliner.includes('vader') ||
+      title.includes('reign forever') ||
+      title.includes('kingdom of blood') ||
+      headliner.includes('nile') ||
+      headliner.includes('nekrogoblikon') ||
+      headliner.includes('havok')
+    ) {
+      return true;
+    }
+    if (Array.isArray(t.stops) && t.stops.some((s: any) => 
+      s.is_community_submitted === true || 
+      (typeof s.id === 'string' && (s.id.includes('df000') || s.id.includes('sh_comm_'))) ||
+      (typeof s.venueName === 'string' && s.venueName.toLowerCase().includes('dying fetus')) ||
+      (typeof s.name === 'string' && s.name.toLowerCase().includes('dying fetus'))
+    )) {
+      return true;
+    }
+    return false;
+  }
+
+  async function loadCachedTourPackages(): Promise<any[]> {
+    try {
+      if (fs.existsSync(tourPackagesCacheFile)) {
+        const content = await fs.promises.readFile(tourPackagesCacheFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed.filter((t: any) => !isServerCommunityTour(t));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[SERVER TOURS] Local cache read warning:', e);
+    }
+    return [];
+  }
+
+  async function saveCachedTourPackages(toursList: any[]): Promise<void> {
+    try {
+      const existing = await loadCachedTourPackages();
+      const map = new Map<string, any>();
+      existing.forEach((t: any) => {
+        if (t && t.id && !isServerCommunityTour(t)) map.set(t.id, t);
+      });
+      toursList.forEach((t: any) => {
+        if (t && t.id && !isServerCommunityTour(t)) {
+          map.set(t.id, { ...(map.get(t.id) || {}), ...t, updatedAt: new Date().toISOString() });
+        }
+      });
+      await fs.promises.writeFile(tourPackagesCacheFile, JSON.stringify(Array.from(map.values()), null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[SERVER TOURS] Local cache write warning:', e);
+    }
+  }
+
+  // API ROUTE: Get all tour packages
+  app.get('/api/tour-packages', async (_req: express.Request, res: express.Response) => {
+    try {
+      const tours = await loadCachedTourPackages();
+      res.json({ success: true, tours });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to load tour packages' });
+    }
+  });
+
+  // API ROUTE: Save or update tour package(s)
+  app.post('/api/tour-packages', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const payload = req.body?.tour || req.body?.tours || req.body;
+      const toursToSave = Array.isArray(payload) ? payload : [payload];
+      if (toursToSave.length === 0 || !toursToSave[0]?.id) {
+        return res.status(400).json({ error: 'Valid tour package is required' });
+      }
+
+      await saveCachedTourPackages(toursToSave);
+
+      // Async sync stops into Supabase shows table
+      const supabase = getSupabaseService();
+      if (supabase) {
+        for (const tour of toursToSave) {
+          if (Array.isArray(tour.stops)) {
+            for (const stop of tour.stops) {
+              try {
+                const hexId = (stop.id || '').replace(/[^a-f0-9]/gi, '').padEnd(32, '0').slice(0, 32);
+                const stopUuid = hexId.slice(0, 8) + '-' + hexId.slice(8, 12) + '-4' + hexId.slice(13, 16) + '-a' + hexId.slice(17, 20) + '-' + hexId.slice(20, 32);
+                const isPublished = tour.publicationStatus === 'public_announced';
+                const isEmbargoed = tour.publicationStatus === 'embargoed_private';
+                const showRecord = {
+                  id: stopUuid,
+                  creator_id: '24523979-7f72-422b-8fb6-85634345d81c',
+                  show_name: (tour.title || 'Tour') + ' - ' + (stop.city || 'Tour Stop'),
+                  headliner: tour.headlinerClientName || 'Headliner Band',
+                  date: stop.date,
+                  show_date: stop.date,
+                  venue_name: stop.venueName || 'Venue',
+                  venue: stop.venueName || 'Venue',
+                  city: stop.city || 'Tour City',
+                  state_province: stop.state || 'USA',
+                  country: 'USA',
+                  guarantee_amount: stop.grossDeal || 2000,
+                  doors_time: stop.doorsTime || '19:00',
+                  set_time: stop.showStartTime || '20:00',
+                  promoter_contact: stop.venueContactName || '',
+                  parking_arrangements: stop.parkingNotes || '',
+                  status: isEmbargoed ? 'Embargoed' : 'Active',
+                  is_managed_client_booking: true,
+                  additional_notes: JSON.stringify({
+                    tour_id: tour.id,
+                    tour_title: tour.title,
+                    stop_id: stop.id,
+                    load_in_time: stop.loadInTime,
+                    soundcheck_time: stop.soundcheckTime,
+                    curfew_time: stop.curfewTime,
+                    hospitality: stop.hospitalityNotes,
+                    venue_email: stop.venueContactEmail,
+                    venue_phone: stop.venueContactPhone,
+                    stop_status: stop.status,
+                    publication_status: tour.publicationStatus || 'embargoed_private',
+                    is_published: isPublished,
+                    embargo_until_date: tour.embargoUntilDate || ''
+                  }),
+                  support_lineup: Array.isArray(tour.bands) ? tour.bands.map((b: any) => b.name).join(', ') : ''
+                };
+                await supabase.from('shows').upsert(showRecord, { onConflict: 'id' });
+              } catch (_) {}
+            }
+          }
+        }
+      }
+
+      const updated = await loadCachedTourPackages();
+      res.json({ success: true, count: updated.length, tours: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to save tour package' });
+    }
+  });
+
+  // API ROUTE: Delete tour package
+  app.delete('/api/tour-packages/:id', async (req: express.Request, res: express.Response) => {
+    try {
+      const tourId = req.params.id;
+      const existing = await loadCachedTourPackages();
+      const filtered = existing.filter((t: any) => t.id !== tourId);
+      await fs.promises.writeFile(tourPackagesCacheFile, JSON.stringify(filtered, null, 2), 'utf8');
+      res.json({ success: true, count: filtered.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete tour package' });
+    }
+  });
+
+  /**
+   * INVENTORY & MERCH PERSISTENCE & CROSS-DEVICE SYNC APIS
+   */
+  const inventoryCacheFile = path.join(uploadsDir, 'inventory_cache.json');
+
+  function generateServerUuid(): string {
+    const chars = '0123456789abcdef';
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return chars[v];
+    });
+  }
+
+  async function loadCachedInventory(): Promise<any[]> {
+    try {
+      if (fs.existsSync(inventoryCacheFile)) {
+        const content = await fs.promises.readFile(inventoryCacheFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[SERVER INVENTORY] Cache read warning:', e);
+    }
+    return [];
+  }
+
+  async function saveCachedInventory(itemsList: any[]): Promise<void> {
+    try {
+      const existing = await loadCachedInventory();
+      const map = new Map<string, any>();
+      existing.forEach((item: any) => { if (item && item.id) map.set(item.id, item); });
+      itemsList.forEach((item: any) => {
+        if (item && item.id) {
+          map.set(item.id, { ...(map.get(item.id) || {}), ...item, updated_at: new Date().toISOString() });
+        }
+      });
+      await fs.promises.writeFile(inventoryCacheFile, JSON.stringify(Array.from(map.values()), null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[SERVER INVENTORY] Cache write warning:', e);
+    }
+  }
+
+  // GET /api/inventory
+  app.get('/api/inventory', async (req: express.Request, res: express.Response) => {
+    try {
+      const bandId = req.query.band_id as string;
+      const cached = await loadCachedInventory();
+      let dbItems: any[] = [];
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          let q = supabase.from('inventory').select('*');
+          if (bandId) q = q.eq('band_id', bandId);
+          const { data, error } = await q;
+          if (!error && data) dbItems = data;
+        } catch (_) {}
+      }
+
+      const map = new Map<string, any>();
+      cached.forEach(i => { if (i && i.id) map.set(i.id, i); });
+      dbItems.forEach(i => { if (i && i.id) map.set(i.id, { ...(map.get(i.id) || {}), ...i }); });
+
+      let list = Array.from(map.values());
+      if (bandId) {
+        list = list.filter(i => !i.band_id || i.band_id === bandId);
+      }
+      res.json({ success: true, items: list });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to load inventory' });
+    }
+  });
+
+  // POST /api/inventory
+  app.post('/api/inventory', express.json({ limit: '25mb' }), async (req: express.Request, res: express.Response) => {
+    try {
+      const payload = req.body?.item || req.body?.items || req.body;
+      const itemsToSave = Array.isArray(payload) ? payload : [payload];
+      if (itemsToSave.length === 0) {
+        return res.status(400).json({ error: 'Valid inventory item is required' });
+      }
+
+      const processedItems: any[] = [];
+      const supabase = getSupabaseService();
+
+      for (const rawItem of itemsToSave) {
+        if (!rawItem) continue;
+        let item = { ...rawItem };
+        if (!item.id || item.id.startsWith('temp_')) {
+          item.id = generateServerUuid();
+        }
+
+        // Process image base64 if present
+        if (item.image_url && (item.image_url.startsWith('data:') || item.image_url.startsWith('blob:'))) {
+          try {
+            const matches = item.image_url.match(/^data:([^;]+);base64,([\s\S]+)$/);
+            if (matches && matches.length === 3) {
+              const contentType = matches[1];
+              const buffer = Buffer.from(matches[2].replace(/\s+/g, ''), 'base64');
+              const fileExt = contentType.split('/')[1] || 'webp';
+              const cleanId = String(item.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+              const storagePath = `items/${cleanId}_${Date.now()}.${fileExt}`;
+
+              let uploadedPublicUrl = null;
+
+              if (supabase) {
+                try {
+                  const { data: buckets } = await supabase.storage.listBuckets();
+                  if (buckets && !buckets.some((b: any) => b.name === 'inventory-items')) {
+                    await supabase.storage.createBucket('inventory-items', { public: true });
+                  }
+                  const { error: upErr } = await supabase.storage.from('inventory-items').upload(storagePath, buffer, {
+                    contentType,
+                    upsert: true
+                  });
+                  if (!upErr) {
+                    const { data: pubData } = supabase.storage.from('inventory-items').getPublicUrl(storagePath);
+                    if (pubData?.publicUrl) uploadedPublicUrl = pubData.publicUrl;
+                  }
+                } catch (stErr) {
+                  console.warn('[SERVER INVENTORY STORAGE EXCEPTION]', stErr);
+                }
+              }
+
+              if (!uploadedPublicUrl) {
+                const fileName = `${cleanId}_${Date.now()}.${fileExt}`;
+                const localPath = path.join(uploadsDir, fileName);
+                await fs.promises.writeFile(localPath, buffer);
+                uploadedPublicUrl = `/uploads/${fileName}`;
+              }
+
+              item.image_url = uploadedPublicUrl;
+              item.image_path = storagePath;
+            }
+          } catch (imgErr) {
+            console.warn('[SERVER INVENTORY IMAGE PROC WARN]', imgErr);
+          }
+        }
+
+        // Persist into Supabase 'inventory' table
+        if (supabase) {
+          try {
+            const cleanDbItem = {
+              id: item.id,
+              name: item.name || 'Merchandise Item',
+              table_stock: item.table_stock || 0,
+              van_stock: item.van_stock || 0,
+              low_threshold: item.low_threshold || 10,
+              initial_batch_size: item.initial_batch_size || 100,
+              status: item.status || 'Healthy',
+              item_type: item.item_type || 'APPAREL',
+              price: item.price || 0,
+              image_url: item.image_url || null,
+              image_path: item.image_path || null,
+              border_color: item.border_color || '#00ffcc',
+              band_id: item.band_id || null,
+              cost: item.cost || 0,
+              sku: item.sku || null,
+              barcode: item.barcode || null,
+              variants: item.variants || null
+            };
+            const { data: savedDbData, error: dbErr } = await supabase.from('inventory').upsert([cleanDbItem], { onConflict: 'id' }).select().single();
+            if (!dbErr && savedDbData) {
+              item = { ...item, ...savedDbData };
+            }
+          } catch (dbErr) {
+            console.warn('[SERVER INVENTORY DB UPSERT EXCEPTION]', dbErr);
+          }
+        }
+
+        processedItems.push(item);
+      }
+
+      await saveCachedInventory(processedItems);
+      res.json({ success: true, count: processedItems.length, items: processedItems });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to save inventory item' });
+    }
+  });
+
+  // DELETE /api/inventory/:id
+  app.delete('/api/inventory/:id', async (req: express.Request, res: express.Response) => {
+    try {
+      const itemId = req.params.id;
+      const existing = await loadCachedInventory();
+      const filtered = existing.filter((i: any) => i.id !== itemId);
+      await fs.promises.writeFile(inventoryCacheFile, JSON.stringify(filtered, null, 2), 'utf8');
+
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          await supabase.from('inventory').delete().eq('id', itemId);
+        } catch (_) {}
+      }
+
+      res.json({ success: true, itemId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete inventory item' });
+    }
+  });
+
+  /**
+   * RELEASES / DISCOGRAPHY LOCAL & SERVER PERSISTENCE
+   * Serves as reliable persistent fallback when Supabase table permissions are restricted
+   */
+  /**
+   * RELEASES / DISCOGRAPHY LOCAL & SERVER PERSISTENCE
+   * Guaranteed persistence in data/releases_cache.json with uploads fallback
+   * Serves as reliable persistent fallback when Supabase table permissions are restricted (42501)
+   */
+  const primaryReleasesFile = path.join(process.cwd(), 'data', 'releases_cache.json');
+  const uploadsReleasesFile = path.join(uploadsDir, 'releases_cache.json');
+
+  async function loadCachedReleases(): Promise<any[]> {
+    try {
+      if (fs.existsSync(primaryReleasesFile)) {
+        const content = await fs.promises.readFile(primaryReleasesFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      }
+      if (fs.existsSync(uploadsReleasesFile)) {
+        const content = await fs.promises.readFile(uploadsReleasesFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[SERVER RELEASES] Local cache read warning:', e);
+    }
+    return [];
+  }
+
+  async function saveCachedReleases(releasesList: any[]): Promise<void> {
+    try {
+      const existing = await loadCachedReleases();
+      const map = new Map<string, any>();
+      existing.forEach((r: any) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+      releasesList.forEach((r: any) => {
+        if (r && r.id) {
+          map.set(r.id, { ...(map.get(r.id) || {}), ...r, updated_at: new Date().toISOString() });
+        }
+      });
+      const merged = Array.from(map.values());
+      const serialized = JSON.stringify(merged, null, 2);
+
+      // Save to primary data directory
+      const dataDir = path.dirname(primaryReleasesFile);
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      await fs.promises.writeFile(primaryReleasesFile, serialized, 'utf8');
+
+      // Save to uploads directory as backup
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      await fs.promises.writeFile(uploadsReleasesFile, serialized, 'utf8');
+    } catch (e) {
+      console.warn('[SERVER RELEASES] Local cache write warning:', e);
+    }
+  }
+
+  // GET /api/releases
+  app.get('/api/releases', async (req: express.Request, res: express.Response) => {
+    try {
+      const bandId = (req.query.band_id as string || '').trim().toLowerCase();
+      const bandName = (req.query.band_name as string || '').trim().toLowerCase();
+      const cached = await loadCachedReleases();
+      let dbReleases: any[] = [];
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          let q = supabase.from('releases').select('*');
+          if (bandId) q = q.eq('band_id', bandId);
+          const { data, error } = await q;
+          if (!error && Array.isArray(data)) dbReleases = data;
+        } catch (_) {}
+      }
+
+      const map = new Map<string, any>();
+      cached.forEach(r => { if (r && r.id) map.set(r.id, r); });
+      dbReleases.forEach(r => { if (r && r.id) map.set(r.id, { ...(map.get(r.id) || {}), ...r }); });
+
+      let list = Array.from(map.values());
+      if (bandId || bandName) {
+        list = list.filter(r => {
+          if (!r) return false;
+          const rBandId = String(r.band_id || '').toLowerCase().trim();
+          const rBandName = String(r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
+          const rTitle = String(r.title || '').toLowerCase().trim();
+
+          if (bandId && (rBandId === bandId || rBandId.replace(/-/g, '') === bandId.replace(/-/g, ''))) return true;
+          if (bandName && rBandName && (rBandName === bandName || rBandName.includes(bandName) || bandName.includes(rBandName))) return true;
+          if (bandName && r.label && r.label.toLowerCase() === bandName) return true;
+          return false;
+        });
+      }
+      res.json({ success: true, releases: list, total: list.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to load releases' });
+    }
+  });
+
+  // GET /api/releases/band/:idOrName
+  app.get('/api/releases/band/:idOrName', async (req: express.Request, res: express.Response) => {
+    try {
+      const target = decodeURIComponent(req.params.idOrName || '').trim().toLowerCase();
+      const cached = await loadCachedReleases();
+      const matched = cached.filter(r => {
+        if (!r) return false;
+        const bId = String(r.band_id || '').toLowerCase().trim();
+        const bName = String(r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
+        return bId === target || bId.replace(/-/g, '') === target.replace(/-/g, '') || bName === target || bName.includes(target) || target.includes(bName);
+      });
+      res.json({ success: true, releases: matched, count: matched.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to load band releases' });
+    }
+  });
+
+  // POST /api/releases
+  app.post('/api/releases', express.json({ limit: '25mb' }), async (req: express.Request, res: express.Response) => {
+    try {
+      const payload = req.body?.release || req.body?.releases || req.body;
+      const listToSave = Array.isArray(payload) ? payload : (payload ? [payload] : []);
+      if (listToSave.length === 0) {
+        return res.status(400).json({ error: 'Valid release payload is required' });
+      }
+
+      await saveCachedReleases(listToSave);
+
+      // Opportunistically sync to Supabase if permissions allow
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          const sanitizedForDb = listToSave.map(r => ({
+            id: r.id,
+            band_id: r.band_id,
+            title: r.title,
+            type: r.type || 'album',
+            release_date: r.release_date || r.releaseDate || r.year || String(new Date().getFullYear()),
+            cover_image: r.cover_image || r.cover_url || r.coverImage || r.coverUrl || null,
+            cover_url: r.cover_url || r.cover_image || r.coverUrl || r.coverImage || null,
+            label: r.label || null,
+            catalog_id: r.catalog_id || r.catalogId || null,
+            tracks: Array.isArray(r.tracks) ? r.tracks : [],
+            genre: r.genre || null,
+            status: r.status || 'active',
+            updated_at: new Date().toISOString()
+          }));
+          await supabase.from('releases').upsert(sanitizedForDb, { onConflict: 'id' });
+        } catch (dbErr: any) {
+          console.warn('[SERVER RELEASES] Supabase opportunistic sync notice (42501 or constraint):', dbErr?.message || dbErr);
+        }
+      }
+
+      const updated = await loadCachedReleases();
+      res.json({ success: true, count: listToSave.length, total: updated.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to save releases' });
+    }
+  });
+
+  // DELETE /api/releases/:id
+  app.delete('/api/releases/:id', async (req: express.Request, res: express.Response) => {
+    try {
+      const releaseId = req.params.id;
+      const existing = await loadCachedReleases();
+      const filtered = existing.filter((r: any) => r && r.id !== releaseId);
+      const serialized = JSON.stringify(filtered, null, 2);
+      if (fs.existsSync(path.dirname(primaryReleasesFile))) {
+        await fs.promises.writeFile(primaryReleasesFile, serialized, 'utf8');
+      }
+      if (fs.existsSync(uploadsDir)) {
+        await fs.promises.writeFile(uploadsReleasesFile, serialized, 'utf8');
+      }
+
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          await supabase.from('releases').delete().eq('id', releaseId);
+        } catch (_) {}
+      }
+
+      res.json({ success: true, releaseId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete release' });
+    }
+  });
+
+  // POST /api/releases/delete (Deletes by ID or Title & Band)
+  app.post('/api/releases/delete', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const { id, bandId, bandName, title } = req.body || {};
+      const releaseId = (id || '').trim();
+      const relTitle = (title || '').toLowerCase().trim();
+      const bId = (bandId || '').toLowerCase().trim();
+      const bName = (bandName || '').toLowerCase().trim();
+
+      const existing = await loadCachedReleases();
+      const filtered = existing.filter((r: any) => {
+        if (!r) return false;
+        if (releaseId && r.id === releaseId) return false;
+        if (relTitle) {
+          const rTitle = (r.title || '').toLowerCase().trim();
+          const rBandId = String(r.band_id || '').toLowerCase().trim();
+          const rBandName = String(r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
+
+          const matchesBand = (!bId && !bName)
+            ? true
+            : (bId && (rBandId === bId || rBandId.replace(/-/g, '') === bId.replace(/-/g, ''))) ||
+              (bName && (rBandName === bName || rBandName.includes(bName) || bName.includes(rBandName)));
+
+          if (rTitle === relTitle && matchesBand) return false;
+        }
+        return true;
+      });
+
+      const serialized = JSON.stringify(filtered, null, 2);
+      if (fs.existsSync(path.dirname(primaryReleasesFile))) {
+        await fs.promises.writeFile(primaryReleasesFile, serialized, 'utf8');
+      }
+      if (fs.existsSync(uploadsDir)) {
+        await fs.promises.writeFile(uploadsReleasesFile, serialized, 'utf8');
+      }
+
+      const supabase = getSupabaseService();
+      if (supabase) {
+        try {
+          if (releaseId) {
+            await supabase.from('releases').delete().eq('id', releaseId);
+          } else if (relTitle && bId) {
+            await supabase.from('releases').delete().eq('band_id', bId).ilike('title', relTitle);
+          }
+        } catch (_) {}
+      }
+
+      res.json({ success: true, releaseId, title: relTitle });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete release' });
     }
   });
 
@@ -3437,7 +4809,7 @@ Return a valid JSON object matching the requested schema. If any field is not fo
             }
 
             const venueItem = {
-              id: place.id || `mb_${place.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${city.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+              id: place.id || `mb_${(place.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_')}_${city.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${citySeeded}`,
               name: place.name,
               address: place.address || null,
               city: city,
@@ -3459,58 +4831,46 @@ Return a valid JSON object matching the requested schema. If any field is not fo
             };
 
             allSeededVenues.push(venueItem);
+            citySeeded++;
 
+            // Optional Supabase synchronization if credentials and table write permissions permit
             if (supabase) {
               try {
-                // Check if existing venue in Supabase
-                const { data: existing } = await supabase
+                const { error: upsertErr } = await supabase
                   .from('venues')
-                  .select('id')
-                  .ilike('name', venueItem.name)
-                  .ilike('city', venueItem.city)
-                  .maybeSingle();
+                  .upsert(venueItem, { onConflict: 'id' });
 
-                if (existing?.id) {
-                  const { error: updateErr } = await supabase
-                    .from('venues')
-                    .update({
-                      address: venueItem.address,
+                if (upsertErr) {
+                  const errMsg = (upsertErr.message || '').toLowerCase();
+                  if (!errMsg.includes('permission denied') && upsertErr.code !== '42501') {
+                    // Try fallback base structure
+                    const baseItem = {
+                      id: venueItem.id,
+                      name: venueItem.name,
+                      city: venueItem.city,
                       state_province: venueItem.state_province,
-                      lat: venueItem.lat,
-                      lng: venueItem.lng,
-                      place_type: venueItem.place_type,
+                      country: venueItem.country,
                       capacity: venueItem.capacity,
-                      source: 'MusicBrainz',
-                      intel_entries: venueItem.intel_entries
-                    })
-                    .eq('id', existing.id);
+                      email: venueItem.email || null,
+                      buyers: venueItem.buyers,
+                      genre_fit: venueItem.genre_fit,
+                      payout_rating: venueItem.payout_rating,
+                      load_in_rating: venueItem.load_in_rating,
+                      intel_entries: [
+                        ...(venueItem.intel_entries || []),
+                        `Address: ${venueItem.address || 'Inquire with promoter'}`,
+                        venueItem.lat && venueItem.lng ? `Coordinates: [${venueItem.lat}, ${venueItem.lng}]` : ''
+                      ].filter(Boolean)
+                    };
 
-                  if (!updateErr) {
-                    citySeeded++;
-                  }
-                } else {
-                  const { error: insertErr } = await supabase
-                    .from('venues')
-                    .insert([venueItem]);
-
-                  if (!insertErr) {
-                    citySeeded++;
-                  } else {
-                    // Fallback to upsert by id
-                    const { error: upsertErr } = await supabase
+                    await supabase
                       .from('venues')
-                      .upsert(venueItem, { onConflict: 'id' });
-
-                    if (!upsertErr) {
-                      citySeeded++;
-                    }
+                      .upsert(baseItem, { onConflict: 'id' });
                   }
                 }
-              } catch (dbErr) {
-                // Non-blocking database upsert fallback
+              } catch (_) {
+                // Supabase sync failure is gracefully ignored in favor of local persistence
               }
-            } else {
-              citySeeded++;
             }
           }
 
@@ -3526,6 +4886,11 @@ Return a valid JSON object matching the requested schema. If any field is not fo
         }
       }
 
+      // Persist all newly seeded places to the local persistent cache file
+      if (allSeededVenues.length > 0) {
+        await saveCachedVenues(allSeededVenues);
+      }
+
       return res.json({
         success: true,
         message: `Successfully processed ${requestedCities.length} cities. Discovered ${allSeededVenues.length} venues.`,
@@ -3536,6 +4901,289 @@ Return a valid JSON object matching the requested schema. If any field is not fo
     } catch (err: any) {
       console.error('[MUSICBRAINZ SEEDER ERROR]', err);
       return res.status(500).json({ error: err.message || 'Seeding failed' });
+    }
+  });
+
+  /**
+   * AI FLYER & SHOW ANNOUNCEMENT PARSER ENDPOINT
+   * Uses Gemini 3.8 Flash to extract structured event details from flyer images or pasted text
+   */
+  app.post("/api/parse-show-flyer", async (req, res) => {
+    try {
+      const { imageBase64, mimeType, rawText } = req.body;
+      if (!imageBase64 && !rawText) {
+        return res.status(400).json({ error: "Missing imageBase64 or rawText input." });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY || await getVaultSecret("GEMINI_API_KEY");
+      if (!apiKey) {
+        return res.status(500).json({ error: "Gemini API key is unavailable." });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const parts: any[] = [];
+      if (imageBase64) {
+        parts.push({
+          inlineData: {
+            data: imageBase64.replace(/^data:image\/[a-z]+;base64,/, ""),
+            mimeType: mimeType || "image/jpeg"
+          }
+        });
+      }
+      if (rawText) {
+        parts.push({ text: `Raw Show Announcement Copy:\n${rawText}` });
+      }
+
+      parts.push({
+        text: "Extract all concert/show event details from this flyer image or copy. Return a JSON object with headliner, support_lineup array, venue_name, venue_address, city, state_province, country, show_date (YYYY-MM-DD), doors_time (e.g. '7:00 PM'), set_time, presale_price, day_of_show_price, external_ticket_url, and micro_genres array."
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: { parts },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              headliner: { type: Type.STRING },
+              support_lineup: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              venue_name: { type: Type.STRING },
+              venue_address: { type: Type.STRING },
+              city: { type: Type.STRING },
+              state_province: { type: Type.STRING },
+              country: { type: Type.STRING },
+              show_date: { type: Type.STRING },
+              doors_time: { type: Type.STRING },
+              set_time: { type: Type.STRING },
+              presale_price: { type: Type.STRING },
+              day_of_show_price: { type: Type.STRING },
+              external_ticket_url: { type: Type.STRING },
+              micro_genres: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            }
+          }
+        }
+      });
+
+      const jsonText = response.text || "{}";
+      const parsed = JSON.parse(jsonText);
+      return res.json({ success: true, data: parsed });
+    } catch (err: any) {
+      console.error("Flyer AI Parser Error:", err);
+      return res.status(500).json({ error: err.message || "Failed to parse flyer with Gemini AI" });
+    }
+  });
+
+  // ==========================================
+  // SHAKE / INSTABUG AUTOMATED BUG REPORTS API
+  // ==========================================
+  const primaryBugReportsFile = path.join(process.cwd(), 'data', 'bug_reports.json');
+  const uploadsBugReportsFile = path.join(uploadsDir, 'bug_reports.json');
+
+  async function loadCachedBugReports(): Promise<any[]> {
+    try {
+      if (fs.existsSync(primaryBugReportsFile)) {
+        const content = await fs.promises.readFile(primaryBugReportsFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) {
+            return parsed.filter((r: any) => {
+              const str = ((r.message || '') + ' ' + (r.title || '') + ' ' + (r.stack || '')).toLowerCase();
+              return !str.includes('websocket') && !str.includes('@vite/client');
+            });
+          }
+        }
+      }
+      if (fs.existsSync(uploadsBugReportsFile)) {
+        const content = await fs.promises.readFile(uploadsBugReportsFile, 'utf8');
+        if (content && content.trim()) {
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) {
+            return parsed.filter((r: any) => {
+              const str = ((r.message || '') + ' ' + (r.title || '') + ' ' + (r.stack || '')).toLowerCase();
+              return !str.includes('websocket') && !str.includes('@vite/client');
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[BUG REPORTS CACHE] Local cache read warning:', err);
+    }
+    return [];
+  }
+
+  async function saveCachedBugReports(reports: any[]) {
+    try {
+      const serialized = JSON.stringify(reports, null, 2);
+      const dataDir = path.dirname(primaryBugReportsFile);
+      if (!fs.existsSync(dataDir)) await fs.promises.mkdir(dataDir, { recursive: true });
+      await fs.promises.writeFile(primaryBugReportsFile, serialized, 'utf8');
+
+      if (fs.existsSync(uploadsDir)) {
+        await fs.promises.writeFile(uploadsBugReportsFile, serialized, 'utf8');
+      }
+    } catch (err) {
+      console.warn('[BUG REPORTS CACHE] Write error:', err);
+    }
+  }
+
+  // GET /api/bug-reports
+  app.get('/api/bug-reports', async (req: express.Request, res: express.Response) => {
+    try {
+      const reports = await loadCachedBugReports();
+      const { status, category, search } = req.query;
+      let filtered = [...reports];
+      if (status && typeof status === 'string' && status !== 'all') {
+        filtered = filtered.filter(r => r.status === status);
+      }
+      if (category && typeof category === 'string' && category !== 'all') {
+        filtered = filtered.filter(r => r.category === category);
+      }
+      if (search && typeof search === 'string') {
+        const q = search.toLowerCase();
+        filtered = filtered.filter(r =>
+          (r.message && r.message.toLowerCase().includes(q)) ||
+          (r.title && r.title.toLowerCase().includes(q)) ||
+          (r.endpoint && r.endpoint.toLowerCase().includes(q))
+        );
+      }
+      filtered.sort((a, b) => new Date(b.lastSeenAt || b.timestamp || 0).getTime() - new Date(a.lastSeenAt || a.timestamp || 0).getTime());
+      res.json({ success: true, count: filtered.length, reports: filtered });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get bug reports' });
+    }
+  });
+
+  // POST /api/bug-reports
+  app.post('/api/bug-reports', express.json({ limit: '10mb' }), async (req: express.Request, res: express.Response) => {
+    try {
+      const newReport = req.body;
+      if (!newReport || !newReport.message) {
+        return res.status(400).json({ error: 'Invalid bug report: message is required' });
+      }
+
+      // Ignore benign development environment WebSocket noise
+      const combinedCheck = ((newReport.message || '') + ' ' + (newReport.title || '') + ' ' + (newReport.stack || '')).toLowerCase();
+      if (combinedCheck.includes('websocket') || combinedCheck.includes('@vite/client')) {
+        return res.json({ success: true, ignored: true });
+      }
+
+      const reports = await loadCachedBugReports();
+      const fingerprint = newReport.fingerprint || `${newReport.category || 'unknown'}-${newReport.message.slice(0, 80)}`;
+
+      const existingIdx = reports.findIndex((r: any) => r.fingerprint === fingerprint || (r.id && r.id === newReport.id));
+
+      if (existingIdx >= 0) {
+        const existing = reports[existingIdx];
+        existing.occurrences = (existing.occurrences || 1) + 1;
+        existing.lastSeenAt = newReport.lastSeenAt || new Date().toISOString();
+        if (newReport.breadcrumbs && Array.isArray(newReport.breadcrumbs) && newReport.breadcrumbs.length > 0) {
+          existing.breadcrumbs = newReport.breadcrumbs;
+        }
+        if (newReport.stack && !existing.stack) existing.stack = newReport.stack;
+        if (newReport.httpStatus) existing.httpStatus = newReport.httpStatus;
+        if (newReport.httpResponseBody) existing.httpResponseBody = newReport.httpResponseBody;
+        reports.splice(existingIdx, 1);
+        reports.unshift(existing);
+      } else {
+        const reportToSave = {
+          id: newReport.id || `bug-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          fingerprint,
+          title: newReport.title || newReport.message.slice(0, 60),
+          message: newReport.message,
+          category: newReport.category || 'runtime_exception',
+          severity: newReport.severity || 'medium',
+          isNonUiBreaking: newReport.isNonUiBreaking !== undefined ? newReport.isNonUiBreaking : true,
+          occurrences: newReport.occurrences || 1,
+          firstSeenAt: newReport.firstSeenAt || new Date().toISOString(),
+          lastSeenAt: newReport.lastSeenAt || new Date().toISOString(),
+          status: newReport.status || 'new',
+          stack: newReport.stack || '',
+          componentStack: newReport.componentStack || '',
+          endpoint: newReport.endpoint || '',
+          httpMethod: newReport.httpMethod || '',
+          httpStatus: newReport.httpStatus,
+          httpResponseBody: newReport.httpResponseBody,
+          url: newReport.url || '',
+          routeOrTab: newReport.routeOrTab || '',
+          activeBandName: newReport.activeBandName || '',
+          activeBandId: newReport.activeBandId || '',
+          userEmail: newReport.userEmail || '',
+          userId: newReport.userId || '',
+          userAgent: newReport.userAgent || '',
+          viewport: newReport.viewport || { width: 0, height: 0 },
+          online: newReport.online !== undefined ? newReport.online : true,
+          breadcrumbs: Array.isArray(newReport.breadcrumbs) ? newReport.breadcrumbs.slice(-35) : []
+        };
+        reports.unshift(reportToSave);
+      }
+
+      const capped = reports.slice(0, 200);
+      await saveCachedBugReports(capped);
+
+      res.json({ success: true, count: capped.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to save bug report' });
+    }
+  });
+
+  // PATCH /api/bug-reports/:id
+  app.patch('/api/bug-reports/:id', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const reports = await loadCachedBugReports();
+      const report = reports.find((r: any) => r.id === id);
+      if (!report) return res.status(404).json({ error: 'Report not found' });
+      if (status) report.status = status;
+      await saveCachedBugReports(reports);
+      res.json({ success: true, report });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to update bug report' });
+    }
+  });
+
+  // DELETE /api/bug-reports/:id
+  app.delete('/api/bug-reports/:id', async (req: express.Request, res: express.Response) => {
+    try {
+      const { id } = req.params;
+      let reports = await loadCachedBugReports();
+      reports = reports.filter((r: any) => r.id !== id);
+      await saveCachedBugReports(reports);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete bug report' });
+    }
+  });
+
+  // POST /api/bug-reports/clear
+  app.post('/api/bug-reports/clear', express.json(), async (req: express.Request, res: express.Response) => {
+    try {
+      const { mode } = req.body || {};
+      let reports = await loadCachedBugReports();
+      if (mode === 'resolved_only') {
+        reports = reports.filter((r: any) => r.status !== 'resolved');
+      } else {
+        reports = [];
+      }
+      await saveCachedBugReports(reports);
+      res.json({ success: true, remaining: reports.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to clear bug reports' });
     }
   });
 

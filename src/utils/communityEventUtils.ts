@@ -184,7 +184,8 @@ export function normalizeDate(dateStr?: string): string {
 }
 
 /**
- * Retrieves all registered community events from local storage (with fallback seeds)
+ * Retrieves all registered community events from local storage (with fallback seeds),
+ * filtering out any embargoed or unconfirmed events (e.g. Molested Divinity).
  */
 export function getExistingCommunityEvents(): CommunityEventRecord[] {
   try {

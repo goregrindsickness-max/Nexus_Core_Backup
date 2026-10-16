@@ -78,6 +78,7 @@ export function useSocialFeedState({
   const [newPostText, setNewPostText] = useState('');
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editingPostText, setEditingPostText] = useState('');
+  const [editingPostImages, setEditingPostImages] = useState<string[]>([]);
   const [deleteConfirmPostId, setDeleteConfirmPostId] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [newPostTag, setNewPostTag] = useState('');
@@ -106,6 +107,13 @@ export function useSocialFeedState({
   const [merchDropName, setMerchDropName] = useState('');
   const [merchDropPrice, setMerchDropPrice] = useState('25');
   const [merchDropThumbnail, setMerchDropThumbnail] = useState('https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500');
+  const [merchDropImages, setMerchDropImages] = useState<string[]>(['https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500']);
+  const [merchDropCategory, setMerchDropCategory] = useState('Apparel');
+  const [merchDropDescription, setMerchDropDescription] = useState('');
+  const [merchDropVariants, setMerchDropVariants] = useState<string[]>(['S', 'M', 'L', 'XL', '2XL']);
+  const [merchDropStock, setMerchDropStock] = useState('50');
+  const [merchDropIsUnlimited, setMerchDropIsUnlimited] = useState(false);
+  const [merchDropAllowNegotiation, setMerchDropAllowNegotiation] = useState(true);
   const [merchDropIsTimed, setMerchDropIsTimed] = useState(false);
   const [merchDropTimerHours, setMerchDropTimerHours] = useState('24');
   const [merchDropTimerMinutes, setMerchDropTimerMinutes] = useState('0');
@@ -136,6 +144,16 @@ export function useSocialFeedState({
   const [eventDescription, setEventDescription] = useState('');
   const [eventCost, setEventCost] = useState('Free / Donation');
   const [eventTicketUrl, setEventTicketUrl] = useState('');
+
+  // Classifieds & Gear Swap Notice states
+  const [classifiedType, setClassifiedType] = useState<'gear' | 'classifieds'>('gear');
+  const [classifiedTitle, setClassifiedTitle] = useState('');
+  const [classifiedPrice, setClassifiedPrice] = useState('150');
+  const [classifiedCondition, setClassifiedCondition] = useState('Good');
+  const [classifiedBrand, setClassifiedBrand] = useState('');
+  const [classifiedYear, setClassifiedYear] = useState('');
+  const [classifiedLocation, setClassifiedLocation] = useState('');
+  const [classifiedDescription, setClassifiedDescription] = useState('');
 
   // Shop & Category Filter states
   const [shopCategory, setShopCategory] = useState<string>('all');
@@ -454,20 +472,38 @@ export function useSocialFeedState({
 
         // 4. Notifications:
         // When reacting to someone else's content, ONLY send notification to the author.
-        // The reacting user does NOT need a notification toast or notification inbox entry.
+        // The reacting user does NOT receive any notification toast or notification entry.
         if (!wasActive && targetPost) {
-          const targetUserId = (targetPost as any).authorId || (targetPost.author as any)?.id || (targetPost.author as any)?.email;
-          const validReceiverUUID = (targetUserId && extractUUID(targetUserId)) || null;
+          const myIds = new Set(
+            [activeUserId, userProfile?.id, userProfile?.email, userProfile?.username, userProfile?.name, profileHandle]
+              .filter(Boolean)
+              .map(x => String(x).toLowerCase().trim())
+          );
 
-          // Only notify author if they are a different user!
-          const isReactingToSomeoneElse = validReceiverUUID && validReceiverUUID !== activeUserId && validReceiverUUID !== userProfile?.id;
-          if (isReactingToSomeoneElse) {
+          const targetAuthorRaw = (targetPost as any).authorId || (targetPost as any).profile_id || (targetPost as any).user_id || (targetPost.author as any)?.id || (targetPost.author as any)?.email;
+          const targetAuthorEmail = (targetPost.author as any)?.email;
+          const targetAuthorName = (targetPost.author as any)?.name || (targetPost as any).authorName;
+
+          const isTargetMyself = 
+            (targetAuthorRaw && myIds.has(String(targetAuthorRaw).toLowerCase().trim())) ||
+            (targetAuthorEmail && myIds.has(String(targetAuthorEmail).toLowerCase().trim())) ||
+            (targetAuthorName && myIds.has(String(targetAuthorName).toLowerCase().trim()));
+
+          const validReceiverUUID = (targetAuthorRaw && extractUUID(targetAuthorRaw)) || null;
+          const isReactingToSomeoneElse = !isTargetMyself && Boolean(validReceiverUUID && !myIds.has(validReceiverUUID.toLowerCase().trim()));
+
+          if (isReactingToSomeoneElse && validReceiverUUID) {
             const actorName = userProfile?.name || userProfile?.console_handle || profileHandle || 'A user';
             const postSnippet = (targetPost.content || (targetPost as any).message || (targetPost as any).text || 'transmission').substring(0, 50);
             const notifId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (extractUUID(postId) || '00000000-0000-0000-0000-000000000000');
+            const currentActorId = activeUserId || userProfile?.id || null;
+            const currentActorEmail = userProfile?.email || null;
+
             const notifItem = {
               id: notifId,
               user_id: validReceiverUUID,
+              actor_id: currentActorId,
+              actor_email: currentActorEmail,
               title: `🔥 NEW REACTION`,
               message: `${actorName} reacted (${reactionKey.toUpperCase()}) to your transmission: "${postSnippet}"`,
               content: `${actorName} reacted (${reactionKey.toUpperCase()}) to your transmission: "${postSnippet}"`,
@@ -487,12 +523,18 @@ export function useSocialFeedState({
               {
                 id: notifItem.id,
                 user_id: validReceiverUUID,
+                actor_id: currentActorId,
+                actor_email: currentActorEmail,
                 title: notifItem.title,
                 message: notifItem.message,
                 category: 'REACTION',
                 type: 'post_reaction',
                 is_read: false,
-                data: notifItem,
+                data: {
+                  ...notifItem,
+                  actor_id: currentActorId,
+                  actor_email: currentActorEmail,
+                },
                 created_at: new Date().toISOString(),
               },
             ]);
@@ -504,28 +546,88 @@ export function useSocialFeedState({
     }
   };
 
-  const handleEditPost = (postId: string, currentText: string) => {
+  const handleEditPost = (postId: string, currentText: string, currentImages?: string[]) => {
     setEditingPostId(postId);
     setEditingPostText(currentText);
+    setEditingPostImages(currentImages || []);
   };
 
-  const handleSaveEdit = async (postId: string) => {
-    const updatedText = editingPostText.trim();
-    setFeed((prev) => prev.map((post) => (post.id === postId ? { ...post, content: updatedText } : post)));
+  const handleSaveEdit = async (postId: string, customText?: string, customImages?: string[]) => {
+    const updatedText = (customText !== undefined ? customText : editingPostText).trim();
+    const updatedImages = (customImages !== undefined ? customImages : editingPostImages).filter(Boolean);
+    const primaryMediaUrl = updatedImages.length > 0 ? updatedImages[0] : null;
+
+    setFeed((prev) =>
+      prev.map((post) =>
+        post.id === postId
+          ? {
+              ...post,
+              content: updatedText,
+              message: updatedText,
+              text: updatedText,
+              images: updatedImages,
+              image: primaryMediaUrl,
+              image_url: primaryMediaUrl || undefined,
+              mediaUrl: primaryMediaUrl || undefined,
+              media_url: primaryMediaUrl || undefined,
+            }
+          : post
+      )
+    );
     setEditingPostId(null);
     setEditingPostText('');
+    setEditingPostImages([]);
 
     const supabase = getSupabase();
     if (supabase) {
       try {
-        const { error } = await supabase.from('nexus_posts').update({ content: updatedText }).eq('id', postId);
-        if (error) {
-          const { data: existing } = await supabase.from('nexus_posts').select('*').or(`id.eq.${postId},id.eq.nexus_post_${postId}`).limit(1);
-          if (existing && existing[0]) {
-            const row = existing[0];
-            const postObj = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {};
-            await supabase.from('nexus_posts').update({ data: { ...postObj, content: updatedText } }).eq('id', row.id);
+        const { data: existing } = await supabase
+          .from('nexus_posts')
+          .select('*')
+          .or(`id.eq.${postId},id.eq.nexus_post_${postId}`)
+          .limit(1);
+
+        const existingRow = existing && existing[0];
+        const postObj = existingRow
+          ? (typeof existingRow.data === 'string' ? JSON.parse(existingRow.data) : (existingRow.data || {}))
+          : {};
+
+        const fullPostData = {
+          ...postObj,
+          content: updatedText,
+          message: updatedText,
+          text: updatedText,
+          images: updatedImages,
+          image: primaryMediaUrl,
+          image_url: primaryMediaUrl,
+          media_url: primaryMediaUrl,
+          mediaUrl: primaryMediaUrl,
+        };
+
+        if (existingRow) {
+          await supabase
+            .from('nexus_posts')
+            .update({
+              media_url: primaryMediaUrl,
+              content: updatedText,
+              data: fullPostData,
+            })
+            .eq('id', existingRow.id);
+        } else {
+          let activeUserId = userProfile?.id;
+          if (!activeUserId) {
+            activeUserId = localStorage.getItem('nexus_active_profile_id') || localStorage.getItem('nexus_user_profile_id') || '00000000-0000-0000-0000-000000000000';
           }
+          await supabase
+            .from('nexus_posts')
+            .upsert([{
+              id: postId,
+              profile_id: activeUserId,
+              content: updatedText,
+              media_url: primaryMediaUrl,
+              data: fullPostData,
+              created_at: new Date().toISOString()
+            }], { onConflict: 'id' });
         }
       } catch (e) {
         console.warn('Failed to sync edit to Supabase:', e);
@@ -665,6 +767,7 @@ export function useSocialFeedState({
         profileAvatarUrl,
       });
 
+      const activeAuthorId = userProfile?.id || (userProfile as any)?.profile_id;
       const authorName = resolvedPersona.name;
       const authorAvatar = resolvedPersona.avatarUrl;
       const authorRole = resolvedPersona.roleBadge;
@@ -714,29 +817,50 @@ export function useSocialFeedState({
       const totalMs = (timerHoursNum * 3600 + timerMinsNum * 60) * 1000;
       const expiresAtValue = merchDropIsTimed && totalMs > 0 ? new Date(Date.now() + totalMs).toISOString() : undefined;
 
+      const parsedStock = merchDropIsUnlimited ? undefined : (Math.max(1, parseInt(merchDropStock) || 50));
+      const resolvedSizes = merchDropVariants && merchDropVariants.length > 0 ? merchDropVariants : ['Standard'];
+
+      const resolvedImages = (merchDropImages && merchDropImages.length > 0 ? merchDropImages : [merchDropThumbnail])
+        .filter(Boolean)
+        .slice(0, 3);
+      const primaryThumb = resolvedImages[0] || merchDropThumbnail.trim() || 'https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500';
+
       const merchDataValue = merchDropName.trim()
         ? {
             name: merchDropName.trim(),
             price: Number(merchDropPrice.trim()) || 25,
-            thumbnail: merchDropThumbnail.trim() || 'https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500',
-            sizes: ['S', 'M', 'L', 'XL', 'XXL'],
-            isTimed: merchDropIsTimed,
-            durationHours: timerHoursNum + timerMinsNum / 60,
+            thumbnail: primaryThumb,
+            images: resolvedImages.length > 0 ? resolvedImages : [primaryThumb],
+            sizes: resolvedSizes,
+            isTimed: Boolean(merchDropIsTimed),
+            durationHours: merchDropIsTimed ? (timerHoursNum + timerMinsNum / 60) : undefined,
             expiresAt: expiresAtValue,
+            stock: parsedStock,
+            totalStock: parsedStock,
+            isUnlimited: Boolean(merchDropIsUnlimited),
+            category: merchDropCategory || 'Apparel',
+            description: merchDropDescription.trim() || undefined,
+            allowNegotiation: merchDropAllowNegotiation,
           }
         : undefined;
 
       if (merchDataValue) {
+        const sellerId = isBandRole ? (activeBand?.id || resolvedPersona.id || activeAuthorId) : (resolvedPersona.id || activeAuthorId);
         createShopMerchItem({
           name: merchDataValue.name,
           price: merchDataValue.price,
           thumbnail: merchDataValue.thumbnail,
+          images: merchDataValue.images,
           sizes: merchDataValue.sizes,
           is_timed: merchDataValue.isTimed,
           expires_at: merchDataValue.expiresAt,
           duration_hours: merchDataValue.durationHours,
           seller_name: authorName,
-        });
+          category: merchDataValue.category,
+          description: merchDataValue.description,
+          stock: merchDataValue.stock,
+          allow_negotiation: merchDataValue.allowNegotiation,
+        }, sellerId);
       }
 
       // Deduplicated & Persistent Event Page Integration (Completely Optional)
@@ -806,11 +930,48 @@ export function useSocialFeedState({
         ? crypto.randomUUID()
         : 'f' + Date.now().toString(16) + '-4000-8000-8000-' + Math.floor(Math.random() * 1e12).toString(16).padStart(12, '0');
 
-      const activeAuthorId = userProfile?.id || (userProfile as any)?.profile_id;
-
       const ytId = youtubeUrl ? getYouTubeId(youtubeUrl) : undefined;
       const ytUrl = youtubeUrl || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : undefined);
       const mediaUrlToUse = mediaUrl || ytUrl || tapeDataValue?.audioUrl || tapeAudioUrl || finalImage || undefined;
+
+      const classifiedDataValue = classifiedTitle.trim()
+        ? {
+            listingType: classifiedType,
+            title: classifiedTitle.trim(),
+            price: classifiedType === 'gear' ? (parseFloat(classifiedPrice) || 0) : 0,
+            condition: classifiedCondition || 'Good',
+            brand: classifiedBrand.trim() || undefined,
+            year: classifiedYear.trim() || undefined,
+            location: classifiedLocation.trim() || taggedVenue || 'Local Community',
+            description: classifiedDescription.trim() || newPostText.trim(),
+            image: finalImage || undefined,
+            seller: authorName
+          }
+        : undefined;
+
+      if (classifiedDataValue) {
+        try {
+          const sb = getSupabase();
+          if (sb) {
+            await sb.from('nexus_shop_items').insert([{
+              id: `comm_${Date.now()}`,
+              profile_id: userProfile?.id,
+              name: classifiedDataValue.title,
+              price: classifiedDataValue.price,
+              category: classifiedDataValue.listingType,
+              condition: classifiedDataValue.condition,
+              brand_name: classifiedDataValue.brand,
+              description: classifiedDataValue.description,
+              fallback_thumbnail: classifiedDataValue.image || 'https://images.unsplash.com/photo-1598514982205-f36b96d1e8d4?w=600',
+              seller: authorName,
+              is_user_listed: true,
+              created_at: new Date().toISOString()
+            }]);
+          }
+        } catch (shopErr) {
+          console.warn('Could not insert classified shop item:', shopErr);
+        }
+      }
 
       let resolvedBandcampData: any = undefined;
       if (isBandcampMedia && mediaUrlToUse) {
@@ -844,7 +1005,8 @@ export function useSocialFeedState({
 
       const newPost: any = {
         id: postUuid,
-        type: merchDataValue ? 'merch_drop' : tapeDataValue ? 'tape_share' : pollDataValue ? 'poll' : eventDataValue ? 'event' : 'post',
+        type: classifiedDataValue ? classifiedType : merchDataValue ? 'merch_drop' : tapeDataValue ? 'tape_share' : pollDataValue ? 'poll' : eventDataValue ? 'event' : 'post',
+        category: classifiedDataValue ? classifiedType : undefined,
         workspace_type: activeWorkspace,
         workspaceType: activeWorkspace,
         persona_id: resolvedPersona.id,
@@ -869,7 +1031,7 @@ export function useSocialFeedState({
         timestamp: new Date().toISOString(),
         created_at: new Date().toISOString(),
         content: newPostText,
-        tag: newPostTag,
+        tag: classifiedDataValue ? (classifiedType === 'gear' ? 'GEAR SWAP' : 'CLASSIFIED') : newPostTag,
         image: finalImage,
         mediaUrl: mediaUrlToUse,
         media_url: mediaUrlToUse,
@@ -900,6 +1062,8 @@ export function useSocialFeedState({
         merchData: merchDataValue,
         tapeData: tapeDataValue,
         eventData: eventDataValue,
+        classifiedData: classifiedDataValue,
+        classified_data: classifiedDataValue,
       };
 
       await syncPostToSupabase(newPost, activeAuthorId);
@@ -917,6 +1081,13 @@ export function useSocialFeedState({
       setMerchDropName('');
       setMerchDropPrice('25');
       setMerchDropThumbnail('https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500');
+      setMerchDropImages(['https://images.unsplash.com/photo-1572913017567-02f06497f1f9?w=500']);
+      setMerchDropCategory('Apparel');
+      setMerchDropDescription('');
+      setMerchDropVariants(['S', 'M', 'L', 'XL', '2XL']);
+      setMerchDropStock('50');
+      setMerchDropIsUnlimited(false);
+      setMerchDropAllowNegotiation(true);
       setMerchDropIsTimed(false);
       setMerchDropTimerHours('24');
       setMerchDropTimerMinutes('0');
@@ -940,6 +1111,13 @@ export function useSocialFeedState({
       setEventDescription('');
       setEventCost('Free / Donation');
       setEventTicketUrl('');
+      setClassifiedTitle('');
+      setClassifiedPrice('150');
+      setClassifiedCondition('Good');
+      setClassifiedBrand('');
+      setClassifiedYear('');
+      setClassifiedLocation('');
+      setClassifiedDescription('');
       setShowTapeInput(false);
       setShowMediaInput(false);
       setShowYoutubeInput(false);
@@ -970,6 +1148,8 @@ export function useSocialFeedState({
     setEditingPostId,
     editingPostText,
     setEditingPostText,
+    editingPostImages,
+    setEditingPostImages,
     deleteConfirmPostId,
     setDeleteConfirmPostId,
     mentionQuery,
@@ -1024,6 +1204,20 @@ export function useSocialFeedState({
     setMerchDropPrice,
     merchDropThumbnail,
     setMerchDropThumbnail,
+    merchDropImages,
+    setMerchDropImages,
+    merchDropCategory,
+    setMerchDropCategory,
+    merchDropDescription,
+    setMerchDropDescription,
+    merchDropVariants,
+    setMerchDropVariants,
+    merchDropStock,
+    setMerchDropStock,
+    merchDropIsUnlimited,
+    setMerchDropIsUnlimited,
+    merchDropAllowNegotiation,
+    setMerchDropAllowNegotiation,
     merchDropIsTimed,
     setMerchDropIsTimed,
     merchDropTimerHours,
@@ -1079,6 +1273,24 @@ export function useSocialFeedState({
     setEventCost,
     eventTicketUrl,
     setEventTicketUrl,
+
+    // Classifieds & Gear Swap
+    classifiedType,
+    setClassifiedType,
+    classifiedTitle,
+    setClassifiedTitle,
+    classifiedPrice,
+    setClassifiedPrice,
+    classifiedCondition,
+    setClassifiedCondition,
+    classifiedBrand,
+    setClassifiedBrand,
+    classifiedYear,
+    setClassifiedYear,
+    classifiedLocation,
+    setClassifiedLocation,
+    classifiedDescription,
+    setClassifiedDescription,
 
     // Filters
     shopCategory,

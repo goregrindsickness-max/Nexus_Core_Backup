@@ -1,25 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Check, Pencil, X, ArrowLeft, Edit2, AlertTriangle, Briefcase, Plus, Ticket, MapPin, Disc, Tag, Pause, Play, Search, Volume2, ChevronDown, Music, Download, PlayCircle, ShoppingCart, SkipBack, Square, SkipForward, UserCheck, UserPlus, MessageSquare, Shield, ShoppingBag, Calendar, Award, Network, Activity, Camera, ArrowUpRight, FileUp, Users, CheckCircle, Flame, Shirt, Building2, ShieldCheck, Sparkles, Lock, Unlock } from 'lucide-react';
+import { Check, Pencil, X, ArrowLeft, Edit2, AlertTriangle, Briefcase, Plus, Ticket, MapPin, Disc, Tag, Pause, Play, Search, Volume2, ChevronDown, Music, Download, PlayCircle, ShoppingCart, SkipBack, Square, SkipForward, UserCheck, UserPlus, MessageSquare, Shield, ShoppingBag, Calendar, Award, Network, Activity, Camera, ArrowUpRight, FileUp, Users, CheckCircle, Flame, Shirt, Building2, ShieldCheck, Sparkles, Lock, Unlock, Radio, History } from 'lucide-react';
 import { hasRegisteredWorkspace } from '../../../types';
 import { getProfileGlowInfo } from '../../../utils/profileGlow';
 import { formatLocationDisplay } from '../../../constants/location';
 import { useUserPresence } from '../../../lib/presence';
 import { ROSTER_CATALOGS } from '../../../data/socialFeedMockData';
 import { normalizeLoadedProfile, getSupabase, executeWithSchemaResilience, executeSanitizedProfileUpsert, upsertBandToDatabase, generateUUID } from '../../../supabase';
+import { formatCleanLocation, isPromoterAvatarUrl, isPromoterCoverUrl, DEFAULT_PERSONAL_AVATAR, DEFAULT_PERSONAL_COVER, resolvePromoterLogo, resolveCreativeLogo, VORTEX_GRAPHICS_DEFAULT_COVER } from '../../../utils/bandProfileUtils';
 import { getEmbedUrl, getCollectionsTrackDuration, extractUUID } from '../../../utils/socialFeedUtils';
-import { communityBandManager, CommunityBandRecord, isCommunityBandRecord } from '../../../lib/communityBands';
+import { communityBandManager, CommunityBandRecord, isCommunityBandRecord, loadBandDiscographyFromCache } from '../../../lib/communityBands';
 import { isMiguelNameOrProfile } from '../../social/utils/profileUtils';
 import CommunityBandCuratorModal from '../../social/modals/CommunityBandCuratorModal';
 import BandClaimHandoverModal from '../../social/modals/BandClaimHandoverModal';
+import BandBookingModal from '../../social/modals/BandBookingModal';
+import SubmitBandToPromoterModal from '../../social/modals/SubmitBandToPromoterModal';
+import PromoterEventsModal from '../../social/modals/PromoterEventsModal';
+import PromoterArchivesModal from '../../social/modals/PromoterArchivesModal';
 import MarqueeText from '../../MarqueeText';
 import { SonicFootprint, ListenerMetric, calculateListenerMetrics } from '../../profile/SonicFootprint';
 import { TimelineTab } from '../../profile/TimelineTab';
+import { BandcampEmbedCard } from '../../social/embeds/BandcampEmbedCard';
 import { ProfileMarketplaceTab } from '../../profile/ProfileMarketplaceTab';
 import { GalleryTab } from '../../profile/GalleryTab';
 import { CrtTvFrame } from '../../profile/CrtTvFrame';
 import { ReleaseDetailsModal } from './ReleaseDetailsModal';
+import PublicStorefrontView from '../../sales/PublicStorefrontView';
 import { fetchReleasesFromDatabase } from '../../../services/releasesService';
+import { VORTEX_GRAPHICS_SVG_AVATAR, PROMOTER_SVG_AVATAR } from '../../../utils/imageFallbacks';
 
 export type { ListenerMetric };
 export { calculateListenerMetrics };
@@ -139,7 +147,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   const [dbReleases, setDbReleases] = useState<any[]>([]);
   const [showClaimModal, setShowClaimModal] = useState(false);
   const [showCuratorModal, setShowCuratorModal] = useState(false);
+  const [showBandBookingModal, setShowBandBookingModal] = useState(false);
+  const [showSubmitBandModal, setShowSubmitBandModal] = useState(false);
+  const [showEventsModal, setShowEventsModal] = useState(false);
+  const [showArchivesModal, setShowArchivesModal] = useState(false);
   const [selectedRelease, setSelectedRelease] = React.useState<any>(null);
+  const [isIsolatedStorefrontOpen, setIsIsolatedStorefrontOpen] = useState(false);
+  const [storefrontBandData, setStorefrontBandData] = useState<any>(null);
 
   // Synchronous sync of communityArchiveMatch on profile selection changes
   React.useEffect(() => {
@@ -166,25 +180,35 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         const validBandUUID = bandIdToUse ? extractUUID(bandIdToUse) : null;
         const bandName = fetchedBandData?.name || selectedUserProfile?.name || targetProfile?.name || '';
 
+        const targetName = bandName.toLowerCase().trim();
+
         const matching = allDbReleases.filter(r => {
           if (!r) return false;
-          if (bandIdToUse && (r.band_id === bandIdToUse || (validBandUUID && r.band_id === validBandUUID))) return true;
-          if (bandName && r.label && r.label.toLowerCase() === bandName.toLowerCase()) return true;
-          if (bandName && r.title && r.title.toLowerCase().includes(bandName.toLowerCase())) return true;
+          const rBandId = String(r.band_id || '').toLowerCase().trim();
+          const rBandName = String(r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
+
+          if (bandIdToUse && (rBandId === bandIdToUse.toLowerCase() || (validBandUUID && rBandId === validBandUUID.toLowerCase()))) return true;
+          if (targetName && rBandName) {
+            const normT = targetName.replace(/[^a-z0-9]/g, '');
+            const normR = rBandName.replace(/[^a-z0-9]/g, '');
+            if (normT.length > 2 && normR.length > 2 && normT === normR) return true;
+          }
           return false;
         });
 
         const matchedCommunityBand = communityBandManager.findMatch(bandName || selectedUserProfile?.name || '');
         const communityDisco = matchedCommunityBand?.discography || [];
+        const cachedDisco = loadBandDiscographyFromCache(bandIdToUse, bandName);
 
-        // STRICT SCOPING: Only use matching releases for this band or this band's community discography
-        let finalReleases: any[] = [];
-        if (matching.length > 0) {
-          finalReleases = matching;
-        } else if (communityDisco.length > 0) {
-          finalReleases = communityDisco.map((cd: any) => ({
+        // Resiliently combine matching releases, community archive discography, and local cache
+        const allCandidates: any[] = [];
+        if (matching.length > 0) allCandidates.push(...matching);
+        if (communityDisco.length > 0) {
+          allCandidates.push(...communityDisco.map((cd: any) => ({
             id: cd.id,
             band_id: validBandUUID || bandIdToUse,
+            band_name: bandName,
+            artist: bandName,
             title: cd.title,
             type: cd.type || 'album',
             release_date: cd.year || '',
@@ -194,10 +218,44 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
             cover_url: cd.cover_url || cd.cover_image || cd.coverUrl || cd.coverImage || cd.image_url || '',
             cover_image: cd.cover_url || cd.cover_image || cd.coverUrl || cd.coverImage || cd.image_url || '',
             tracks: cd.tracks || []
-          }));
-        } else {
-          finalReleases = [];
+          })));
         }
+        if (cachedDisco.length > 0) {
+          allCandidates.push(...cachedDisco.map((cd: any) => ({
+            id: cd.id,
+            band_id: validBandUUID || bandIdToUse,
+            band_name: bandName,
+            artist: bandName,
+            title: cd.title,
+            type: cd.type || 'album',
+            release_date: cd.year || '',
+            release_year: cd.year || '',
+            label: cd.label || cd.release_info || '',
+            catalog_id: cd.catalog_id || '',
+            cover_url: cd.cover_url || cd.cover_image || cd.coverUrl || cd.coverImage || cd.image_url || '',
+            cover_image: cd.cover_url || cd.cover_image || cd.coverUrl || cd.coverImage || cd.image_url || '',
+            tracks: cd.tracks || []
+          })));
+        }
+
+        // Deduplicate releases by title to prevent duplicate entries while retaining richest artwork
+        const seenReleaseTitles = new Map<string, any>();
+        for (const rel of allCandidates) {
+          if (!rel || !rel.title) continue;
+          const norm = rel.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!norm) continue;
+          if (!seenReleaseTitles.has(norm)) {
+            seenReleaseTitles.set(norm, rel);
+          } else {
+            const existing = seenReleaseTitles.get(norm)!;
+            const existingCover = existing.cover_url || existing.cover_image || existing.coverUrl;
+            const newCover = rel.cover_url || rel.cover_image || rel.coverUrl;
+            if (!existingCover && newCover) {
+              seenReleaseTitles.set(norm, { ...existing, cover_url: newCover, cover_image: newCover, coverUrl: newCover, coverImage: newCover });
+            }
+          }
+        }
+        const finalReleases = Array.from(seenReleaseTitles.values());
 
         if (isMounted && finalReleases.length > 0) {
           const mapped = finalReleases.map((row: any) => {
@@ -246,8 +304,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       }
     }
     fetchReleases();
-    return () => { isMounted = false; };
-  }, [selectedUserProfile?.id, targetProfile?.id, fetchedBandData?.id]);
+
+    const handleDiscoUpdate = () => {
+      if (isMounted) fetchReleases();
+    };
+    window.addEventListener('nexus_band_discography_updated', handleDiscoUpdate);
+    window.addEventListener('nexus_community_bands_updated', handleDiscoUpdate);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('nexus_band_discography_updated', handleDiscoUpdate);
+      window.removeEventListener('nexus_community_bands_updated', handleDiscoUpdate);
+    };
+  }, [selectedUserProfile?.id, targetProfile?.id, fetchedBandData?.id, selectedUserProfile?.name, targetProfile?.name, fetchedBandData?.name]);
   const [tickerUpdateText, setTickerUpdateText] = React.useState<string>(() => {
     const targetId = selectedUserProfile?.id || 'guest';
     const stored = localStorage.getItem(`nexus_active_ticker_${targetId}`);
@@ -311,13 +380,17 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     (selectedUserProfile?.email && userProfile?.email && selectedUserProfile.email.toLowerCase() === userProfile.email.toLowerCase())
   );
 
-  const isOwnerMiguel = isMiguelNameOrProfile(selectedUserProfile) || isMiguelNameOrProfile(targetProfile) || (isTargetExplicitSelf && isMiguelNameOrProfile(userProfile)) || isMiguelNameOrProfile(userProfile);
+  const isOwnerMiguel = (isTargetExplicitSelf && isMiguelNameOrProfile(userProfile)) || (!isTargetExplicitSelf && (isMiguelNameOrProfile(selectedUserProfile) || isMiguelNameOrProfile(targetProfile)));
 
   React.useEffect(() => {
     let isMounted = true;
     async function loadProfileBandDataAndShows() {
       const base = selectedUserProfile || targetProfile;
       if (!base) return;
+
+      if (isMounted) {
+        setFetchedBandData(null);
+      }
 
       const targetRoleStr = (base?.role || base?.portalRole || '').toLowerCase();
       const isBand = !!(
@@ -393,60 +466,54 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
             targetId === 'my_band_id'
           );
 
-          // If the profile has a specific band assigned, fetch that band (unless it's a community archive in user workspace)
-          if (targetBandId && extractUUID(targetBandId) && (!isOwnerMiguel || !isCommunityBandRecord(targetBandId))) {
+          // Fetch band from Supabase 'bands' table as primary source of truth
+          if (targetBandId && extractUUID(targetBandId)) {
             try {
               const { data } = await supabase.from('bands').select('*').eq('id', extractUUID(targetBandId)).maybeSingle();
-              if (data && (!isOwnerMiguel || (!isCommunityBandRecord(data.id) && !isCommunityBandRecord(data.name || data.band_name)))) {
-                record = data;
-              }
+              if (data) record = data;
+            } catch (_) {}
+          } else if (validUUID) {
+            try {
+              const { data } = await supabase.from('bands').select('*').eq('id', validUUID).maybeSingle();
+              if (data) record = data;
             } catch (_) {}
           }
 
           if (!record && validUUID) {
             try {
               const { data } = await supabase.from('bands').select('*').eq('creator_id', validUUID).order('created_at', { ascending: false });
-              if (Array.isArray(data)) {
-                const userBand = data.find((b: any) => {
-                  const bId = String(b.id || '').trim();
-                  const bName = String(b.name || b.band_name || '').trim();
-                  if (bId === 'cbddb810-259b-4230-9968-3d402dfdb872' || bName.toLowerCase() === 'virulent excision') return true;
-                  return !isCommunityBandRecord(bId) && !isCommunityBandRecord(bName);
-                });
-                if (userBand) record = userBand;
+              if (Array.isArray(data) && data.length > 0) {
+                record = data[0];
               }
             } catch (_) {}
           }
 
           if (!record && (targetBandName || targetName)) {
-            const queryName = targetBandName || targetName;
-            if (!isCommunityBandRecord(queryName)) {
-              try {
-                const { data } = await supabase.from('bands').select('*').ilike('band_name', `%${queryName.trim()}%`).maybeSingle();
-                if (data && (!isOwnerMiguel || (!isCommunityBandRecord(data.id) && !isCommunityBandRecord(data.name || data.band_name)))) {
-                  record = data;
-                }
-              } catch (_) {}
-            }
+            const queryName = (targetBandName || targetName).trim();
+            try {
+              const { data } = await supabase.from('bands').select('*').ilike('band_name', `%${queryName}%`).maybeSingle();
+              if (data) {
+                record = data;
+              } else {
+                const slugCandidate = queryName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+                const { data: slugData } = await supabase.from('bands').select('*').ilike('custom_slug', `%${slugCandidate}%`).maybeSingle();
+                if (slugData) record = slugData;
+              }
+            } catch (_) {}
           }
 
           if (!record && isViewingSelf) {
             try {
               const localBandStr = localStorage.getItem('nexus_my_band_profile');
               if (localBandStr) {
-                const parsed = JSON.parse(localBandStr);
-                if (parsed && (isCommunityBandRecord(parsed.id) || isCommunityBandRecord(parsed.name || parsed.band_name))) {
-                  localStorage.removeItem('nexus_my_band_profile');
-                } else {
-                  record = parsed;
-                }
+                record = JSON.parse(localBandStr);
               }
             } catch (_) {}
           }
 
-          // Virulent Excision is the founder's (Miguel's) band — force Virulent Excision ONLY when viewing Miguel's own profile
+          // Virulent Excision is the founder's (Miguel's) band — force Virulent Excision ONLY when viewing Miguel's own personal profile
           const recName = record ? String(record.name || record.band_name || '').toLowerCase() : '';
-          if ((!record || isCommunityBandRecord(record.id) || isCommunityBandRecord(record.name || record.band_name) || recName.includes('molested') || recName.includes('dying fetus')) && isViewingSelf && isOwnerMiguel && !isPersonal) {
+          if (!record && isViewingSelf && isOwnerMiguel && !isPersonal) {
             try {
               const { data } = await supabase.from('bands').select('*').eq('id', 'cbddb810-259b-4230-9968-3d402dfdb872').maybeSingle();
               if (data) record = data;
@@ -469,10 +536,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
           }
 
           if (isMounted && record) {
-            setFetchedBandData(record);
-            if ((record.bio || record.description) && setProfileBlurb) {
+            const normalizedRecord = {
+              ...record,
+              avatar_url: record.avatar_url || record.logo_url || record.avatar || record.image || '',
+              logo_url: record.logo_url || record.avatar_url || record.avatar || record.image || '',
+              cover_url: record.cover_url || record.banner_url || record.banner || record.cover || '',
+              banner_url: record.banner_url || record.cover_url || record.banner || record.cover || '',
+              name: record.band_name || record.name || '',
+              band_name: record.band_name || record.name || ''
+            };
+            setFetchedBandData(normalizedRecord);
+            if ((normalizedRecord.bio || normalizedRecord.description) && setProfileBlurb) {
               if (base?.isYou || selectedUserProfile?.isYou) {
-                setProfileBlurb(record.bio || record.description);
+                setProfileBlurb(normalizedRecord.bio || normalizedRecord.description);
               }
             }
           }
@@ -559,6 +635,54 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     return () => { isMounted = false; };
   }, [selectedUserProfile?.id, selectedUserProfile?.email, selectedUserProfile?.console_handle, selectedUserProfile?.name, targetProfile?.id, targetProfile?.name, supabase]);
 
+  // Realtime subscription on Supabase 'bands' table so profiles always update live when changed in DB
+  React.useEffect(() => {
+    let isMounted = true;
+    const base = selectedUserProfile || targetProfile;
+    const targetUuid = fetchedBandData?.id || extractUUID(base?.band_id) || extractUUID(selectedUserProfile?.band_id) || extractUUID(base?.id);
+    const targetNameQuery = base?.band_name || base?.bandName || selectedUserProfile?.band_name || selectedUserProfile?.bandName || base?.name || selectedUserProfile?.name;
+    if (!targetUuid && !targetNameQuery) return;
+
+    const channelName = `public:bands_card_${(targetUuid || targetNameQuery).toString().toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bands' },
+        (payload: any) => {
+          if (!isMounted) return;
+          const newBand = payload.new;
+          if (!newBand) return;
+
+          const matchesId = targetUuid && extractUUID(newBand.id) === extractUUID(targetUuid);
+          const matchesName = targetNameQuery && (
+            (newBand.band_name && newBand.band_name.toLowerCase() === targetNameQuery.toLowerCase()) ||
+            (newBand.name && newBand.name.toLowerCase() === targetNameQuery.toLowerCase())
+          );
+
+          if (matchesId || matchesName) {
+            const normalized = {
+              ...newBand,
+              avatar_url: newBand.avatar_url || newBand.logo_url || newBand.avatar || newBand.image || '',
+              logo_url: newBand.logo_url || newBand.avatar_url || newBand.avatar || newBand.image || '',
+              cover_url: newBand.cover_url || newBand.banner_url || newBand.banner || newBand.cover || '',
+              banner_url: newBand.banner_url || newBand.cover_url || newBand.banner || newBand.cover || '',
+              name: newBand.band_name || newBand.name || '',
+              band_name: newBand.band_name || newBand.name || ''
+            };
+            setFetchedBandData(normalized);
+            communityBandManager.upsertCommunityBand(normalized, { isNew: false });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, [fetchedBandData?.id, selectedUserProfile, targetProfile, supabase]);
+
   React.useEffect(() => {
     const handleBandUpdate = (evt: any) => {
       const updated = evt?.detail;
@@ -581,7 +705,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       );
 
       const isYouMatch = Boolean(
-        (base?.isYou || selectedUserProfile?.isYou) && (newAvatar || newBanner)
+        (base?.isYou || selectedUserProfile?.isYou || (userProfile?.id && (base?.id === userProfile.id || selectedUserProfile?.id === userProfile.id))) && (newAvatar || newBanner)
       );
 
       if (isIdMatch || isNameMatch || isYouMatch) {
@@ -624,11 +748,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
     window.addEventListener('nexus_community_bands_updated', handleBandUpdate);
     window.addEventListener('nexus_avatar_updated', handleBandUpdate);
+    window.addEventListener('nexus_cover_updated', handleBandUpdate);
     window.addEventListener('nexus_band_updated', handleBandUpdate);
     window.addEventListener('community_band_saved', handleBandUpdate);
     return () => {
       window.removeEventListener('nexus_community_bands_updated', handleBandUpdate);
       window.removeEventListener('nexus_avatar_updated', handleBandUpdate);
+      window.removeEventListener('nexus_cover_updated', handleBandUpdate);
       window.removeEventListener('nexus_band_updated', handleBandUpdate);
       window.removeEventListener('community_band_saved', handleBandUpdate);
     };
@@ -644,14 +770,18 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   const isExplicitPersonal = Boolean(
     baseTarget?.isIndustryProPersonal === true ||
     baseTarget?.isPersonal === true ||
-    (baseTarget?.isYou && baseTarget?.isBandProfile !== true && (portalRole === 'fan_only' || userProfile?.account_type === 'fan_only' || targetRole.includes('fan'))) ||
+    (baseTarget?.isYou && (portalRole === 'fan_only' || portalRole === 'industry_pro' || userProfile?.account_type === 'fan_only' || userProfile?.account_type === 'fan' || targetRole.includes('fan') || targetRole.includes('industry') || targetRole.includes('pro'))) ||
     baseTarget?.isBandProfile === false ||
     baseTarget?.account_type === 'fan' ||
     baseTarget?.account_type === 'fan_only' ||
+    baseTarget?.account_type === 'industry_pro' ||
+    baseTarget?.account_type === 'industry pro' ||
     targetRole.includes('fan') ||
+    targetRole.includes('industry') ||
+    targetRole.includes('pro') ||
     targetRole.includes('listener') ||
     targetRole.includes('supporter') ||
-    (baseTarget?.type === 'user' && !baseTarget?.isBandProfile && !baseTarget?.band_name && !baseTarget?.bandName)
+    (baseTarget?.type === 'user' && !baseTarget?.isBandProfile && (portalRole !== 'band' || !baseTarget?.band_name))
   );
 
   let localSavedBand: any = null;
@@ -668,10 +798,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     const directMatch = communityArchiveMatch || (candidateName ? (communityBandManager.findMatch(candidateName) || communityBandManager.findByName(candidateName)) : null);
     if (!fetchedBandData && !directMatch && !(isOwnBand && localSavedBand)) return null;
 
-    const rawLogo = fetchedBandData?.logo_url || fetchedBandData?.avatar_url || (isOwnBand ? localSavedBand?.logo_url : null) || directMatch?.logo_url || directMatch?.avatar_url;
-    const rawAvatar = fetchedBandData?.avatar_url || fetchedBandData?.logo_url || (isOwnBand ? localSavedBand?.avatar_url : null) || directMatch?.avatar_url || directMatch?.logo_url;
+    const customUserLogo = isOwnBand ? (userProfile?.band_logo || userProfile?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null)) : null;
+    const rawLogo = customUserLogo || fetchedBandData?.logo_url || fetchedBandData?.avatar_url || (isOwnBand ? localSavedBand?.logo_url : null) || directMatch?.logo_url || directMatch?.avatar_url;
+    const rawAvatar = customUserLogo || fetchedBandData?.avatar_url || fetchedBandData?.logo_url || (isOwnBand ? localSavedBand?.avatar_url : null) || directMatch?.avatar_url || directMatch?.logo_url;
 
-    let rawCover = fetchedBandData?.cover_url || fetchedBandData?.banner_url;
+    const targetBandUUID = userProfile?.band_id || fetchedBandData?.id || '';
+    const customUserCover = isOwnBand ? ((typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_core_band_cover_' + targetBandUUID)) : null) || userProfile?.band_cover || userProfile?.banner_url) : null;
+    let rawCover = customUserCover || fetchedBandData?.cover_url || fetchedBandData?.banner_url;
     if ((!rawCover || (typeof rawCover === 'string' && rawCover.includes('unsplash'))) && (directMatch?.cover_url || directMatch?.banner_url)) {
       rawCover = directMatch.cover_url || directMatch.banner_url;
     }
@@ -779,6 +912,75 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     );
   })();
 
+  const isSelfTarget = Boolean(
+    baseTarget.isYou ||
+    selectedUserProfile?.isYou ||
+    (userProfile?.id && (selectedUserProfile?.id === userProfile.id || baseTarget.id === userProfile.id)) ||
+    (userProfile?.email && (selectedUserProfile?.email === userProfile.email || baseTarget.email === userProfile.email)) ||
+    (baseTarget.name && String(baseTarget.name).toLowerCase().includes('goregrinder')) ||
+    (baseTarget.name && String(baseTarget.name).toLowerCase().includes('miguel'))
+  );
+
+  const localStoredAvatar = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null;
+  const localStoredBanner = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_banner')) : null;
+
+  const promoterLogo = (userProfile as any)?.promoter_logo || userProfile?.promoter_metadata?.logo_url || userProfile?.promoter_metadata?.avatar_url;
+  const promoterCover = (userProfile as any)?.promoter_cover_image || userProfile?.promoter_metadata?.cover_url || userProfile?.promoter_metadata?.banner_url;
+
+  const rawUserAvatarCandidates = [
+    localStoredAvatar,
+    (userProfile as any)?.profileAvatarUrl,
+    userProfile?.avatar_url,
+    userProfile?.avatar,
+    fetchedProfileData?.avatar_url,
+    fetchedProfileData?.avatar,
+    baseTarget?.avatar_url,
+    baseTarget?.avatar
+  ];
+  let liveUserAvatarCandidate: string | null = null;
+  if (isSelfTarget) {
+    for (const cand of rawUserAvatarCandidates) {
+      if (cand && typeof cand === 'string' && cand.trim() && !isPromoterAvatarUrl(cand, userProfile) && !cand.includes('undefined') && !cand.includes('null')) {
+        liveUserAvatarCandidate = cand.trim();
+        break;
+      }
+    }
+    if (!liveUserAvatarCandidate) {
+      liveUserAvatarCandidate = DEFAULT_PERSONAL_AVATAR;
+    }
+  } else {
+    liveUserAvatarCandidate = fetchedProfileData?.avatar_url || fetchedProfileData?.avatar || baseTarget.avatar_url || baseTarget.avatar || DEFAULT_PERSONAL_AVATAR;
+  }
+  const liveUserAvatar = liveUserAvatarCandidate;
+
+  const rawUserBannerCandidates = [
+    localStoredBanner,
+    (userProfile as any)?.profileCoverUrl,
+    userProfile?.banner_url,
+    userProfile?.banner,
+    userProfile?.cover_url,
+    fetchedProfileData?.banner_url,
+    fetchedProfileData?.cover_url,
+    baseTarget?.banner_url,
+    baseTarget?.cover_url,
+    baseTarget?.banner
+  ];
+  let liveUserBannerCandidate: string | null = null;
+  if (isSelfTarget) {
+    for (const cand of rawUserBannerCandidates) {
+      if (cand && typeof cand === 'string' && cand.trim() && !isPromoterCoverUrl(cand, userProfile) && !cand.includes('undefined') && !cand.includes('null')) {
+        liveUserBannerCandidate = cand.trim();
+        break;
+      }
+    }
+    if (!liveUserBannerCandidate) {
+      liveUserBannerCandidate = DEFAULT_PERSONAL_COVER;
+    }
+  } else {
+    liveUserBannerCandidate = fetchedProfileData?.banner_url || fetchedProfileData?.cover_url || baseTarget.banner_url || baseTarget.cover_url || baseTarget.banner || DEFAULT_PERSONAL_COVER;
+  }
+  const liveUserBanner = liveUserBannerCandidate;
+
   const effTarget = {
     ...baseTarget,
     ...(fetchedProfileData ? {
@@ -799,9 +1001,9 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       homebase: fetchedProfileData.homebase || baseTarget.homebase,
       location: formatLocationDisplay(fetchedProfileData) || baseTarget.location,
       bio: isBandTarget ? (resolvedBandBio || '') : (fetchedProfileData?.bio || baseTarget?.bio || ''),
-      avatar: isBandTarget && rawResolvedBandLogo ? rawResolvedBandLogo : (fetchedProfileData.avatar_url || fetchedProfileData.avatar || baseTarget.avatar),
-      avatar_url: isBandTarget && rawResolvedBandLogo ? rawResolvedBandLogo : (fetchedProfileData.avatar_url || fetchedProfileData.avatar || baseTarget.avatar_url),
-      logo_url: isBandTarget ? (rawResolvedBandLogo || baseTarget?.logo_url) : baseTarget?.logo_url,
+      avatar: isBandTarget && rawResolvedBandLogo ? rawResolvedBandLogo : liveUserAvatar,
+      avatar_url: isBandTarget && rawResolvedBandLogo ? rawResolvedBandLogo : liveUserAvatar,
+      logo_url: isBandTarget ? (rawResolvedBandLogo || baseTarget?.logo_url) : (isExplicitPersonal ? null : baseTarget?.logo_url),
       top_song_url: fetchedProfileData.top_song_url !== undefined && fetchedProfileData.top_song_url !== null && fetchedProfileData.top_song_url !== '' ? fetchedProfileData.top_song_url : baseTarget?.top_song_url,
       top_song_title: fetchedProfileData.top_song_title || fetchedProfileData.favoriteSong || baseTarget?.top_song_title || baseTarget?.favoriteSong,
       favoriteSong: fetchedProfileData.favoriteSong || fetchedProfileData.top_song_title || baseTarget?.favoriteSong || baseTarget?.top_song_title,
@@ -811,12 +1013,18 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     ...(bData ? {
       name: isBandTarget ? (bData.band_name || bData.name || baseTarget.name) : (fetchedProfileData?.full_name || fetchedProfileData?.name || baseTarget.name),
       band_name: bData.band_name || bData.name || baseTarget.band_name,
-      avatar: isBandTarget ? (bData.logo_url || bData.avatar_url || baseTarget.avatar || baseTarget.avatar_url) : (fetchedProfileData?.avatar_url || fetchedProfileData?.avatar || baseTarget.avatar),
-      avatar_url: isBandTarget ? (bData.logo_url || bData.avatar_url || baseTarget.avatar_url || baseTarget.avatar) : (fetchedProfileData?.avatar_url || fetchedProfileData?.avatar || baseTarget.avatar_url),
-      banner: isBandTarget ? (bData.cover_url || bData.banner_url || baseTarget.banner || baseTarget.banner_url) : (fetchedProfileData?.banner_url || fetchedProfileData?.banner || baseTarget.banner),
-      banner_url: isBandTarget ? (bData.cover_url || bData.banner_url || baseTarget.banner_url || baseTarget.banner) : (fetchedProfileData?.banner_url || fetchedProfileData?.banner || baseTarget.banner_url),
-      cover_url: isBandTarget ? (bData.cover_url || baseTarget.cover_url) : (fetchedProfileData?.cover_url || baseTarget.cover_url),
-      logo_url: isBandTarget ? (bData.logo_url || baseTarget.logo_url) : baseTarget.logo_url,
+      avatar: (isBandTarget && !isSelfTarget) ? (bData.logo_url || bData.avatar_url || baseTarget.avatar || baseTarget.avatar_url) : (liveUserAvatar || (isExplicitPersonal ? null : (bData.logo_url || bData.avatar_url))),
+      avatar_url: (isBandTarget && !isSelfTarget) ? (bData.logo_url || bData.avatar_url || baseTarget.avatar_url || baseTarget.avatar) : (liveUserAvatar || (isExplicitPersonal ? null : (bData.logo_url || bData.avatar_url))),
+      banner: (isBandTarget && !isSelfTarget) 
+        ? (bData.cover_url || bData.banner_url || baseTarget.banner || baseTarget.banner_url) 
+        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || bData.banner_url || baseTarget.banner))),
+      banner_url: (isBandTarget && !isSelfTarget) 
+        ? (bData.cover_url || bData.banner_url || baseTarget.banner_url || baseTarget.banner) 
+        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || bData.banner_url || baseTarget.banner_url))),
+      cover_url: (isBandTarget && !isSelfTarget) 
+        ? (bData.cover_url || baseTarget.cover_url) 
+        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || baseTarget.cover_url))),
+      logo_url: isBandTarget ? (bData.logo_url || baseTarget.logo_url) : (isExplicitPersonal ? null : baseTarget.logo_url),
       city: isBandTarget ? (bData.city || baseTarget.city) : (fetchedProfileData?.city || baseTarget.city),
       state_province: isBandTarget ? (bData.state_province || baseTarget.state_province) : (fetchedProfileData?.state_province || baseTarget.state_province),
       country: isBandTarget ? (bData.country || baseTarget.country) : (fetchedProfileData?.country || baseTarget.country),
@@ -845,6 +1053,11 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       booking_phone: bData.booking_phone || baseTarget.booking_phone,
     } : {
       name: isBandTarget && rawResolvedBandName ? rawResolvedBandName : (baseTarget?.name || baseTarget?.legalName || baseTarget?.full_name || 'User'),
+      avatar: (isBandTarget && !isSelfTarget && rawResolvedBandLogo) ? rawResolvedBandLogo : liveUserAvatar,
+      avatar_url: (isBandTarget && !isSelfTarget && rawResolvedBandLogo) ? rawResolvedBandLogo : liveUserAvatar,
+      banner: (isBandTarget && !isSelfTarget) ? baseTarget.banner : liveUserBanner,
+      banner_url: (isBandTarget && !isSelfTarget) ? baseTarget.banner_url : liveUserBanner,
+      cover_url: (isBandTarget && !isSelfTarget) ? baseTarget.cover_url : liveUserBanner,
       console_handle: isBandTarget && resolvedBandHandle 
         ? resolvedBandHandle 
         : resolvedPersonalHandle,
@@ -962,22 +1175,69 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
   const hasLineup = displayLineup.length > 0;
 
-  const handleLineupMemberClick = (mem: any) => {
-    const matchedProf = allProfiles.find((p: any) => {
+  const matchLineupMemberToProfile = (mem: any) => {
+    if (!mem || !Array.isArray(allProfiles)) return null;
+    return allProfiles.find((p: any) => {
       if (!p) return false;
       if (mem.id && p.id === mem.id) return true;
       const mName = (mem.name || '').toLowerCase().trim();
       const pName = (p.full_name || p.name || '').toLowerCase().trim();
       const pUser = (p.username || '').toLowerCase().trim();
       const pEmail = (p.email || '').toLowerCase().trim();
+
       if (isMiguelNameOrProfile(mem)) {
         return pEmail.includes('goregrindsickness') || pUser.includes('goregrinder') || pName.includes('miguel');
       }
-      if (mName && pName && (pName === mName || pName.includes(mName) || mName.includes(pName))) {
+
+      // Safeguard: Alexandre Brochu is in Necroticgorebeast, NEVER Andre Gonzalez in Cordyceps
+      if (mName.includes('alexandre') || mName.includes('brochu')) {
+        if (pEmail.includes('exposedentrails') || pName.includes('gonzal') || pUser.includes('cordyceps')) {
+          return false;
+        }
+      }
+
+      // Accurate check for Andre Gonzalez (Cordyceps)
+      const mWords = mName.split(/[\s._-]+/).filter(Boolean);
+      const isMemAndre = mWords.some((w: string) => w === 'andre' || w === 'andré');
+      const isMemGonzal = mName.includes('gonzal');
+      if (isMemAndre && isMemGonzal) {
+        if (pEmail.includes('exposedentrails') || (pName.includes('andre') && pName.includes('gonzal'))) {
+          return true;
+        }
+      }
+
+      // Christopher Wirstrom (Cranial Impalement)
+      if (pEmail.includes('wirstrom') && (mName.includes('christopher') || mName.includes('wirstrom'))) {
+        return true;
+      }
+
+      // Safeguard: Emmanuel Flores is NOT in Origin (Mike Flores is in Origin)
+      if (mName.includes('flores') && (mName.includes('mike') || mName.includes('michael'))) {
+        if (pName.includes('emmanuel') || pUser.includes('emmanuel') || pEmail.includes('emmanuel')) {
+          return false;
+        }
+      }
+      if (pName.includes('flores') && pName.includes('emmanuel')) {
+        if (mName.includes('mike') || mName.includes('michael')) {
+          return false;
+        }
+      }
+
+      if (mName && pName && (
+        pName === mName ||
+        pName.includes(mName) ||
+        mName.includes(pName) ||
+        pName.replace(/[^a-z0-9]/g, '') === mName.replace(/[^a-z0-9]/g, '') ||
+        (mName.split(' ')[0] === pName.split(' ')[0] && mName.replace(/[sz]$/, '') === pName.replace(/[sz]$/, ''))
+      )) {
         return true;
       }
       return false;
-    });
+    }) || null;
+  };
+
+  const handleLineupMemberClick = (mem: any) => {
+    const matchedProf = matchLineupMemberToProfile(mem);
 
     if (matchedProf) {
       setSelectedUserProfile(matchedProf);
@@ -1129,11 +1389,41 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       }}
                     >
                       {(() => {
-                        const activeAvatar = effTarget.logo_url || effTarget.avatar_url || effTarget.avatar || selectedUserProfile.logo_url || selectedUserProfile.avatar_url || selectedUserProfile.avatar;
+                        const activeAvatar = isBandTarget 
+                          ? (effTarget.logo_url || effTarget.avatar_url || effTarget.avatar || selectedUserProfile?.logo_url || selectedUserProfile?.avatar_url || selectedUserProfile?.avatar)
+                          : (effTarget.avatar_url || effTarget.avatar || selectedUserProfile?.avatar_url || selectedUserProfile?.avatar || (isExplicitPersonal ? null : (effTarget.logo_url || selectedUserProfile?.logo_url)));
+                        const fallbackName = isBandTarget 
+                          ? (effTarget.band_name || effTarget.name || 'B') 
+                          : (effTarget.full_name || effTarget.legalName || (effTarget.name && !effTarget.name.startsWith('@') ? effTarget.name : null) || 'Miguel Goregrinder Medina');
+                        const fallbackInitials = fallbackName
+                          .replace(/^@+/, '')
+                          .trim()
+                          .split(/\s+/)
+                          .map((part: string) => part[0])
+                          .filter(Boolean)
+                          .join('')
+                          .slice(0, 2)
+                          .toUpperCase() || 'M';
                         return activeAvatar && typeof activeAvatar === 'string' && (activeAvatar.startsWith('http') || activeAvatar.startsWith('data:image') || activeAvatar.startsWith('/')) ? (
-                          <img src={activeAvatar} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                          <img 
+                            src={activeAvatar} 
+                            className="w-full h-full object-cover" 
+                            alt="" 
+                            referrerPolicy="no-referrer" 
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.style.display = 'none';
+                              const parent = e.currentTarget.parentElement;
+                              if (parent && !parent.querySelector('.avatar-fallback-initials')) {
+                                const span = document.createElement('span');
+                                span.className = 'font-bold avatar-fallback-initials';
+                                span.innerText = fallbackInitials;
+                                parent.appendChild(span);
+                              }
+                            }}
+                          />
                         ) : (
-                          <span className="font-bold">{activeAvatar || (isBandTarget ? (effTarget.band_name || effTarget.name || 'B').slice(0, 2).toUpperCase() : 'U')}</span>
+                          <span className="font-bold">{activeAvatar || fallbackInitials}</span>
                         );
                       })()}
                       
@@ -1366,24 +1656,35 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       r === 'industry' || 
                       r === 'listener';
 
-                    const showJoinTeam = !isPersonalOrFan && (
-                      effTarget?.isBandProfile || 
-                      effTarget?.type === 'band' || 
-                      r.includes('band') || 
-                      r.includes('artist') || 
-                      r.includes('creative') || 
-                      r.includes('label') || 
-                      r.includes('promoter')
+                    const isTargetPromoter = !isPersonalOrFan && (
+                      effTarget?.type === 'promoter' ||
+                      effTarget?.account_type === 'promoter' ||
+                      effTarget?.isPromoterProfile === true ||
+                      effTarget?.is_promoter === true ||
+                      r.includes('promoter') ||
+                      r.includes('venue') ||
+                      Boolean(effTarget?.promoter_metadata) ||
+                      Boolean(effTarget?.promoter_agency) ||
+                      (typeof effTarget?.name === 'string' && (effTarget.name.toLowerCase().includes('nexus live') || effTarget.name.toLowerCase().includes('pure domination') || effTarget.name.toLowerCase().includes('domination fest'))) ||
+                      (typeof selectedUserProfile?.name === 'string' && (selectedUserProfile.name.toLowerCase().includes('nexus live') || selectedUserProfile.name.toLowerCase().includes('pure domination') || selectedUserProfile.name.toLowerCase().includes('domination fest')))
                     );
 
-                    const showStorefront = !isPersonalOrFan && (
+                    const showJoinTeam = !isPersonalOrFan && !isTargetPromoter && (
+                      effTarget?.isBandProfile || 
+                      effTarget?.type === 'band' || 
+                      r.includes('band') || 
+                      r.includes('artist') || 
+                      r.includes('creative') || 
+                      r.includes('label')
+                    );
+
+                    const showStorefront = !isPersonalOrFan && !isTargetPromoter && (
                       effTarget?.isBandProfile || 
                       effTarget?.type === 'band' || 
                       r.includes('band') || 
                       r.includes('artist') || 
                       r.includes('creative') || 
                       r.includes('label') || 
-                      r.includes('promoter') || 
                       effTarget?.hasStorefront === true || 
                       effTarget?.has_storefront === true
                     );
@@ -1452,7 +1753,26 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           )}
                         </button>
 
-                        {/* 2. Message Button */}
+                        {/* 2. Events Button (paired side-by-side with Follow on Row 1) */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setShowEventsModal(true);
+                            triggerNotification?.(isTargetPromoter ? "⚡ Loading upcoming events & festival schedule..." : "📅 Opening upcoming shows list...");
+                          }}
+                          className={`w-full py-2.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all uppercase font-mono cursor-pointer active:scale-95 ${
+                            isTargetPromoter
+                              ? "bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-black shadow-[0_0_15px_rgba(234,179,8,0.25)] hover:shadow-[0_0_20px_rgba(234,179,8,0.4)] border border-yellow-300/40"
+                              : "bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 hover:border-yellow-500/40 text-yellow-400 hover:text-yellow-300 shadow-md"
+                          }`}
+                          title="Upcoming shows, tours, and festivals"
+                        >
+                          <Calendar className={`w-3.5 h-3.5 ${isTargetPromoter ? 'text-black' : 'text-yellow-400'}`} /> EVENTS
+                        </button>
+
+                        {/* 3. Message Button (Full width col-span-2 with Purple Glow) */}
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
@@ -1490,56 +1810,43 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             );
                             openFloatingChat?.(targetId, effTarget);
                           }}
-                          className="w-full py-2.5 px-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors uppercase font-mono cursor-pointer"
+                          className="col-span-2 w-full py-2.5 px-4 bg-gradient-to-r from-purple-950/60 via-[#180a29] to-purple-950/60 hover:from-purple-900/70 hover:to-purple-900/70 border border-purple-500/50 hover:border-purple-400 text-purple-200 hover:text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-all uppercase font-mono cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_22px_rgba(168,85,247,0.55)] active:scale-98"
                           title="Secure Direct Message"
                         >
-                          <MessageSquare className="w-3.5 h-3.5" /> Message
+                          <MessageSquare className="w-4 h-4 text-purple-400" /> Message
                         </button>
 
-                        {/* 3. Join Team Button */}
-                        {showJoinTeam && (() => {
-                          const isPending = bandJoinRequests?.some((r: any) => r.band_name === selectedUserProfile.name && r.user_email === userProfile?.email && r.status === 'pending');
-                          if (isPending) {
-                            return (
-                              <button className="w-full py-2.5 px-3 bg-zinc-900 border border-zinc-700 text-zinc-500 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 uppercase font-mono cursor-not-allowed">
-                                <UserPlus className="w-3.5 h-3.5" /> Pending
-                              </button>
-                            );
-                          }
-                          return (
-                            <button
-                              onClick={() => {
-                                const newReq = {
-                                  id: `join_req_${Date.now()}`,
-                                  band_id: 'unknown_band_id',
-                                  band_name: selectedUserProfile.name,
-                                  user_id: userProfile?.id || `user_${Date.now()}`,
-                                  user_name: userProfile?.name || 'Unknown User',
-                                  user_email: userProfile?.email || 'unknown@example.com',
-                                  role_requested: userProfile?.role || 'Crew',
-                                  status: 'pending',
-                                  created_at: new Date().toISOString()
-                                };
-                                if (setBandJoinRequests) {
-                                  queueMicrotask(() => { setBandJoinRequests((prev: any) => [...(prev || []), newReq]); });
-                                  triggerNotification?.(`✉️ Sent request to join ${selectedUserProfile.name}!`);
-                                }
-                              }}
-                              className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors uppercase font-mono shadow-md"
-                            >
-                              <UserPlus className="w-3.5 h-3.5" /> Join Team
-                            </button>
-                          );
-                        })()}
+                        {/* 4. Promoter: ARCHIVES Button */}
+                        {isTargetPromoter && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setShowArchivesModal(true);
+                              triggerNotification?.("📜 Accessing promoter historical show archives...");
+                            }}
+                            className={`${showStorefront ? 'col-span-1' : 'col-span-2'} w-full py-2.5 px-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 hover:border-yellow-500/40 text-yellow-400 hover:text-yellow-300 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-all uppercase font-mono shadow-md cursor-pointer active:scale-95`}
+                            title="All past shows and historic festival archives"
+                          >
+                            <History className="w-3.5 h-3.5 text-yellow-400" /> ARCHIVES
+                          </button>
+                        )}
 
-                        {/* 4. Storefront Button */}
+                        {/* 5. Storefront Button (Non-promoter) */}
                         {showStorefront && (
                           <button
-                            onClick={() => {
-                              if (setShopBrandFilter) setShopBrandFilter(effTarget.name || selectedUserProfile.name);
-                              setProfileActiveTab('shop');
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const targetData = effTarget || selectedUserProfile;
+                              const targetBandName = effTarget?.band_name || effTarget?.name || selectedUserProfile?.band_name || selectedUserProfile?.name || 'Band';
+                              setStorefrontBandData(targetData);
+                              setIsIsolatedStorefrontOpen(true);
+                              triggerNotification?.(`🛒 Opening ${targetBandName}'s Official Storefront...`);
                             }}
-                            className="w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors uppercase font-mono shadow-md"
+                            className={`${isTargetPromoter ? 'col-span-1' : 'col-span-2'} w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors uppercase font-mono shadow-md cursor-pointer`}
                           >
                             <ShoppingCart className="w-3.5 h-3.5" /> Storefront
                           </button>
@@ -1553,7 +1860,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                 {/* Dynamic Workspace / Pro Badges */}
                 {(() => {
                   const prof = effTarget;
-                  const workspaces = prof?.registered_workspaces || [];
+                  const isTargetSelf = Boolean(
+                    effTarget?.isYou ||
+                    baseTarget?.isYou ||
+                    selectedUserProfile?.isYou ||
+                    (userProfile?.id && effTarget?.id && String(effTarget.id).toLowerCase() === String(userProfile.id).toLowerCase()) ||
+                    (userProfile?.id && baseTarget?.id && String(baseTarget.id).toLowerCase() === String(userProfile.id).toLowerCase()) ||
+                    (userProfile?.email && effTarget?.email && String(effTarget.email).toLowerCase() === String(userProfile.email).toLowerCase()) ||
+                    (userProfile?.email && baseTarget?.email && String(baseTarget.email).toLowerCase() === String(userProfile.email).toLowerCase())
+                  );
+                  const rawWs = prof?.registered_workspaces || prof?.allowed_workspaces || prof?.workspaces || (isTargetSelf ? (userProfile?.registered_workspaces || userProfile?.allowed_workspaces || userProfile?.workspaces) : []) || [];
+                  const workspaces = Array.isArray(rawWs)
+                    ? rawWs.map((w: any) => (typeof w === 'string' ? w.toLowerCase() : w?.type?.toLowerCase() || ''))
+                    : [];
                   const isPro = prof?.is_pro === true;
                   const badgesToRender: Array<{ label: string; classes: string }> = [];
 
@@ -1574,11 +1893,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     }
                   }
 
-                  const isMiguelProfile = !selectedUserProfile.isBandProfile && selectedUserProfile.type !== 'band' && !!(
-                    selectedUserProfile.name?.toLowerCase().includes('miguel') ||
-                    selectedUserProfile.name?.toLowerCase().includes('goregrinder') ||
-                    selectedUserProfile.email?.toLowerCase().includes('goregrindsickness')
-                  );
+                  const isMiguelProfile = !selectedUserProfile.isBandProfile && selectedUserProfile.type !== 'band' && isMiguelNameOrProfile(selectedUserProfile);
 
                   if (isMiguelProfile) {
                     badgesToRender.push({
@@ -1591,19 +1906,85 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     });
                   }
 
-                  if (workspaces.includes('promoter')) {
+                  // 🎸 Musician Badge: Associated with anyone tied to a band profile
+                  const isTiedToBand = Boolean(
+                    workspaces.includes('band') ||
+                    prof?.band_id ||
+                    prof?.band_profile_id ||
+                    (typeof prof?.band_name === 'string' && prof.band_name.trim()) ||
+                    prof?.is_musician === true ||
+                    prof?.isMusician === true ||
+                    (prof?.role && typeof prof.role === 'string' && (
+                      prof.role.toLowerCase() === 'musician' ||
+                      prof.role.toLowerCase().includes('guitar') ||
+                      prof.role.toLowerCase().includes('drum') ||
+                      prof.role.toLowerCase().includes('vocal') ||
+                      prof.role.toLowerCase().includes('bass')
+                    )) ||
+                    (isTargetSelf && (userProfile?.band_id || (typeof userProfile?.band_name === 'string' && userProfile.band_name.trim()) || userProfile?.band_profile_id)) ||
+                    (isTargetSelf && isMiguelProfile)
+                  );
+
+                  if (isTiedToBand) {
+                    badgesToRender.push({
+                      label: '🎸 Musician',
+                      classes: 'bg-emerald-950/80 border border-emerald-500 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
+                    });
+                  }
+
+                  const isProfMiguel = isMiguelNameOrProfile(prof);
+                  const hasPromoterBadge = Boolean(
+                    prof?.account_type === 'promoter' ||
+                    prof?.active_workspace === 'promoter' ||
+                    (prof?.promoter_metadata && typeof prof.promoter_metadata === 'object' && (
+                      prof.promoter_metadata.is_registered === true ||
+                      (isProfMiguel && (prof.promoter_metadata.brand_name || prof.promoter_agency)) ||
+                      (!isProfMiguel && prof.promoter_metadata.brand_name && prof.promoter_metadata.brand_name !== 'Nexus Live Productions')
+                    )) ||
+                    (isProfMiguel && (prof?.promoter_id || prof?.promoter_name)) ||
+                    (workspaces.includes('promoter') && (isProfMiguel || (prof?.promoter_metadata && prof.promoter_metadata.is_registered)))
+                  );
+
+                  if (hasPromoterBadge) {
                     badgesToRender.push({
                       label: '🏟️ Promoter',
                       classes: 'bg-yellow-950/80 border border-yellow-500 text-yellow-400 shadow-[0_0_8px_rgba(245,158,11,0.2)]'
                     });
                   }
-                  if (workspaces.includes('label')) {
+
+                  const hasLabelBadge = Boolean(
+                    workspaces.includes('label') ||
+                    prof?.label_id ||
+                    (typeof prof?.label_name === 'string' && prof.label_name.trim()) ||
+                    (typeof prof?.labelName === 'string' && prof.labelName.trim()) ||
+                    (prof?.label_metadata && typeof prof.label_metadata === 'object' && (
+                      (typeof prof.label_metadata.label_name === 'string' && prof.label_metadata.label_name.trim()) ||
+                      prof.label_metadata.is_registered === true
+                    ))
+                  );
+
+                  if (hasLabelBadge) {
                     badgesToRender.push({
                       label: '💿 Record Label',
                       classes: 'bg-orange-950/80 border border-orange-500 text-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.2)]'
                     });
                   }
-                  if (workspaces.includes('creative')) {
+
+                  const hasCreativeBadge = Boolean(
+                    workspaces.includes('creative') ||
+                    prof?.creative_id ||
+                    (typeof prof?.creative_name === 'string' && prof.creative_name.trim()) ||
+                    (typeof prof?.creative_business_name === 'string' && prof.creative_business_name.trim()) ||
+                    (typeof prof?.business_name === 'string' && prof.business_name.trim()) ||
+                    (prof?.category === 'creative') ||
+                    (prof?.creative_metadata && typeof prof.creative_metadata === 'object' && (
+                      (typeof prof.creative_metadata.business_name === 'string' && prof.creative_metadata.business_name.trim()) ||
+                      (typeof prof.creative_metadata.creative_name === 'string' && prof.creative_metadata.creative_name.trim()) ||
+                      prof.creative_metadata.is_registered === true
+                    ))
+                  );
+
+                  if (hasCreativeBadge) {
                     badgesToRender.push({
                       label: '🎨 Creative',
                       classes: 'bg-fuchsia-950/80 border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_8px_rgba(217,70,239,0.2)]'
@@ -1726,22 +2107,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           </div>
                           <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                             {displayLineup.map((mem: any, mIdx: number) => {
-                              const matchedProf = allProfiles.find((p: any) => {
-                                if (!p) return false;
-                                if (mem.id && p.id === mem.id) return true;
-                                const mName = (mem.name || '').toLowerCase().trim();
-                                const pName = (p.full_name || p.name || '').toLowerCase().trim();
-                                const pUser = (p.username || '').toLowerCase().trim();
-                                const pEmail = (p.email || '').toLowerCase().trim();
-                                if (isMiguelNameOrProfile(mem)) {
-                                  return pEmail.includes('goregrindsickness') || pUser.includes('goregrinder') || pName.includes('miguel');
-                                }
-                                if (mName && pName && (pName === mName || pName.includes(mName) || mName.includes(pName))) {
-                                  return true;
-                                }
-                                return false;
-                              });
-
+                              const matchedProf = matchLineupMemberToProfile(mem);
                               const isActive = !!matchedProf;
                               const avatarUrl = matchedProf?.avatar_url || matchedProf?.avatar;
 
@@ -1810,7 +2176,18 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     </div>
                   );
                 })() : (() => {
-                  const registeredWorkspaces = effTarget?.registered_workspaces || effTarget?.allowed_workspaces || effTarget?.workspaces || (effTarget?.isYou || effTarget?.id === userProfile?.id ? userProfile?.registered_workspaces || userProfile?.allowed_workspaces : []) || [];
+                  const isTargetSelf = Boolean(
+                    effTarget?.isYou ||
+                    baseTarget?.isYou ||
+                    selectedUserProfile?.isYou ||
+                    (userProfile?.id && effTarget?.id && String(effTarget.id).toLowerCase() === String(userProfile.id).toLowerCase()) ||
+                    (userProfile?.id && baseTarget?.id && String(baseTarget.id).toLowerCase() === String(userProfile.id).toLowerCase()) ||
+                    (userProfile?.email && effTarget?.email && String(effTarget.email).toLowerCase() === String(userProfile.email).toLowerCase()) ||
+                    (userProfile?.email && baseTarget?.email && String(baseTarget.email).toLowerCase() === String(userProfile.email).toLowerCase())
+                  );
+                  const registeredWorkspaces = isTargetSelf
+                    ? (userProfile?.registered_workspaces || effTarget?.registered_workspaces || userProfile?.allowed_workspaces || effTarget?.allowed_workspaces || effTarget?.workspaces || [])
+                    : (effTarget?.registered_workspaces || effTarget?.allowed_workspaces || effTarget?.workspaces || []);
 
                   const hasWorkspaceType = (type: string) => {
                     if (!registeredWorkspaces || !Array.isArray(registeredWorkspaces)) return false;
@@ -1856,78 +2233,205 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     (targetRole && targetRole.toLowerCase() === 'band')
                   );
 
-                  const isEffTargetMiguel = isMiguelNameOrProfile(effTarget) || (effTarget.isYou && isMiguelNameOrProfile(userProfile)) || isOwnerMiguel;
-                  const targetBandId = isEffTargetMiguel ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (effTarget?.band_id || (effTarget?.isYou ? userProfile?.band_id : null));
+                  const isEffTargetMiguel = (isTargetSelf && isMiguelNameOrProfile(userProfile)) || (!isTargetSelf && (isMiguelNameOrProfile(effTarget) || isMiguelNameOrProfile(baseTarget) || isMiguelNameOrProfile(selectedUserProfile)));
+                  const targetBandId = isEffTargetMiguel ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (effTarget?.band_id || (isTargetSelf ? userProfile?.band_id : null));
+
+                  const targetBandNameDirect = (
+                    effTarget?.band_name ||
+                    effTarget?.bandName ||
+                    selectedUserProfile?.band_name ||
+                    selectedUserProfile?.bandName ||
+                    baseTarget?.band_name ||
+                    baseTarget?.bandName ||
+                    (isTargetSelf ? (userProfile?.band_name || userProfile?.bandName) : null) ||
+                    ''
+                  ).trim();
+
+                  const targetFullName = (
+                    effTarget?.full_name ||
+                    effTarget?.name ||
+                    effTarget?.display_name ||
+                    selectedUserProfile?.full_name ||
+                    selectedUserProfile?.name ||
+                    baseTarget?.full_name ||
+                    baseTarget?.name ||
+                    (isTargetSelf ? (userProfile?.full_name || userProfile?.name || userProfile?.display_name) : null) ||
+                    ''
+                  ).trim();
+
                   let matchingBandProfile: any = null;
 
                   if (isEffTargetMiguel) {
-                    matchingBandProfile = allProfiles.find((p: any) => {
+                    matchingBandProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
+                      const isBandType = p.type === 'band' || p.isBandProfile || p.category === 'bands' || (p.role && p.role.toLowerCase() === 'band') || (p.portalRole && p.portalRole.toLowerCase() === 'band');
+                      if (!isBandType) return false;
                       const pId = String(p.id || '').toLowerCase().trim();
                       const rawId = String(p.raw_id || p.band_id || '').toLowerCase().trim();
                       const cleanName = (p.name || p.band_name || '').toLowerCase().trim();
                       return pId === 'cbddb810-259b-4230-9968-3d402dfdb872' || pId === 'real-b-cbddb810-259b-4230-9968-3d402dfdb872' || rawId === 'cbddb810-259b-4230-9968-3d402dfdb872' || cleanName === 'virulent excision';
-                    });
+                    }) : null;
+                  } else if (targetBandNameDirect) {
+                    const commBand = communityBandManager.findByName(targetBandNameDirect) || communityBandManager.findMatch(targetBandNameDirect);
+                    if (commBand) {
+                      matchingBandProfile = commBand;
+                    } else if (Array.isArray(allProfiles)) {
+                      matchingBandProfile = allProfiles.find((p: any) => {
+                        const isBandType = p.type === 'band' || p.isBandProfile || p.category === 'bands' || (p.role && p.role.toLowerCase() === 'band') || (p.portalRole && p.portalRole.toLowerCase() === 'band');
+                        if (!isBandType) return false;
+                        return (p.name?.toLowerCase() === targetBandNameDirect.toLowerCase() || p.band_name?.toLowerCase() === targetBandNameDirect.toLowerCase());
+                      });
+                    }
+                  } else if (targetBandId) {
+                    const commBand = communityBandManager.getById(targetBandId);
+                    if (commBand) {
+                      matchingBandProfile = commBand;
+                    } else if (Array.isArray(allProfiles)) {
+                      matchingBandProfile = allProfiles.find((p: any) => {
+                        const isBandType = p.type === 'band' || p.isBandProfile || p.category === 'bands' || (p.role && p.role.toLowerCase() === 'band') || (p.portalRole && p.portalRole.toLowerCase() === 'band');
+                        if (!isBandType) return false;
+                        return p.id === targetBandId || p.band_id === targetBandId || p.id === `real-b-${targetBandId}`;
+                      });
+                    }
+                  } else if (typeof bandWsRef === 'object' && bandWsRef?.name) {
+                    const commBand = communityBandManager.findByName(bandWsRef.name) || communityBandManager.findMatch(bandWsRef.name);
+                    if (commBand) {
+                      matchingBandProfile = commBand;
+                    } else if (Array.isArray(allProfiles)) {
+                      matchingBandProfile = allProfiles.find((p: any) => (p.type === 'band' || p.isBandProfile || p.category === 'bands' || p.role === 'Band') && p.name?.toLowerCase() === bandWsRef.name.toLowerCase());
+                    }
                   }
 
-                  if (!matchingBandProfile && targetBandId) {
-                    matchingBandProfile = allProfiles.find((p: any) => {
-                      if (isCommunityBandRecord(p.id) || isCommunityBandRecord(p.name) || isCommunityBandRecord(p.band_name) || (p.name && p.name.toLowerCase().includes('necroticgorebeast'))) return false;
-                      const isBandType = p.type === 'band' || p.isBandProfile || p.category === 'bands' || (p.role && p.role.toLowerCase() === 'band') || (p.portalRole && p.portalRole.toLowerCase() === 'band');
-                      if (!isBandType) return false;
-                      return p.id === targetBandId || p.band_id === targetBandId || p.id === `real-b-${targetBandId}`;
-                    });
+                  // If still no band found, look up by member name in community band lineups (e.g. Christopher Wirstrom -> Cranial Impalement, Andre Gonzalez -> Cordyceps)
+                  if (!matchingBandProfile && !isEffTargetMiguel) {
+                    if (targetFullName) {
+                      matchingBandProfile = communityBandManager.findByMember(targetFullName);
+                    }
+                    if (!matchingBandProfile) {
+                      const targetEmailLower = (effTarget?.email || baseTarget?.email || selectedUserProfile?.email || (isTargetSelf ? userProfile?.email : '') || '').toLowerCase();
+                      const targetWords = (targetFullName || '').toLowerCase().trim().split(/[\s._-]+/).filter(Boolean);
+                      const isTargetAndreGonzalez = targetWords.some((w: string) => w === 'andre' || w === 'andré') && (targetFullName.toLowerCase().includes('gonzal') || targetEmailLower.includes('exposedentrails'));
+
+                      if (targetEmailLower.includes('exposedentrails') || isTargetAndreGonzalez) {
+                        matchingBandProfile = communityBandManager.findByName('Cordyceps');
+                      } else if (targetEmailLower.includes('wirstrom84') || targetFullName.toLowerCase().includes('wirstrom')) {
+                        matchingBandProfile = communityBandManager.findByName('Cranial Impalement');
+                      }
+                    }
                   }
 
-                  if (!matchingBandProfile && typeof bandWsRef === 'object' && bandWsRef?.workspace_id) {
-                     matchingBandProfile = allProfiles.find((p: any) => (p.type === 'band' || p.isBandProfile || p.category === 'bands' || p.role === 'Band') && (p.id === bandWsRef.workspace_id || p.id === `real-b-${bandWsRef.workspace_id}`));
-                  }
-                  if (!matchingBandProfile && typeof bandWsRef === 'object' && bandWsRef?.name) {
-                     matchingBandProfile = allProfiles.find((p: any) => (p.type === 'band' || p.isBandProfile || p.category === 'bands' || p.role === 'Band') && p.name?.toLowerCase() === bandWsRef.name.toLowerCase());
-                  }
-                  if (!matchingBandProfile) {
-                     matchingBandProfile = allProfiles.find((p: any) => {
-                       const isBandType = p.type === 'band' || p.isBandProfile || p.category === 'bands' || (p.role && p.role.toLowerCase() === 'band') || (p.portalRole && p.portalRole.toLowerCase() === 'band');
-                       if (!isBandType) return false;
-                       // Community archives must never be treated as personal band workspaces
-                       const isComm = isCommunityBandRecord(p.id) || isCommunityBandRecord(p.name) || isCommunityBandRecord(p.band_name) || p.verification_status === 'community_archive' || p.is_community || (p.name && p.name.toLowerCase().includes('necroticgorebeast'));
-                       if (isComm) return false;
-                       if (targetBandId && (p.id === targetBandId || p.band_id === targetBandId)) return true;
-                       if (effTarget.id && (p.user_id === effTarget.id || p.owner_id === effTarget.id || p.creator_id === effTarget.id || p.id === effTarget.id)) return true;
-                       if (effTarget.isYou && userProfile?.id && (p.user_id === userProfile.id || p.owner_id === userProfile.id || p.creator_id === userProfile.id || p.id === userProfile.id)) return true;
-                       if (effTarget.band_name && (p.name?.toLowerCase() === effTarget.band_name.toLowerCase() || p.band_name?.toLowerCase() === effTarget.band_name.toLowerCase())) return true;
-                       return false;
-                     });
+                  let localSavedBand: any = null;
+                  if (isTargetSelf) {
+                    try {
+                      const localStr = localStorage.getItem('nexus_my_band_profile');
+                      if (localStr) localSavedBand = JSON.parse(localStr);
+                    } catch (e) {}
                   }
 
                   const lbd = matchingBandProfile || (
-                    typeof fetchedBandData !== 'undefined' && fetchedBandData && (effTarget.isYou || !isExplicitPersonal) ? fetchedBandData : null
+                    isTargetSelf && (userProfile?.band_name || userProfile?.band_id) ? (
+                      (typeof fetchedBandData !== 'undefined' && fetchedBandData) ? fetchedBandData : localSavedBand
+                    ) : null
                   );
 
                   let rawBandName = isEffTargetMiguel
                     ? 'Virulent Excision'
-                    : (lbd?.band_name || lbd?.name || effTarget.band_name || effTarget.bandName || (typeof bandWsRef === 'object' && bandWsRef?.name ? bandWsRef.name : null) || (effTarget.isYou ? (userProfile?.band_name || userProfile?.bandName) : null) || (hasWorkspaceType('band') ? (effTarget.name ? `${effTarget.name} Band` : 'Artist Workspace') : null));
-                  
-                  const isCommunityName = isCommunityBandRecord(rawBandName) || (typeof rawBandName === 'string' && (rawBandName.toLowerCase() === 'dying fetus' || rawBandName.toLowerCase().includes('molested') || rawBandName.toLowerCase().includes('necroticgorebeast')));
-                  if (isEffTargetMiguel || isCommunityName) {
-                    rawBandName = 'Virulent Excision';
-                  }
+                    : (
+                      matchingBandProfile?.name ||
+                      matchingBandProfile?.band_name ||
+                      targetBandNameDirect ||
+                      lbd?.band_name ||
+                      lbd?.name ||
+                      (isTargetSelf ? (localSavedBand?.name || userProfile?.band_name || userProfile?.bandName) : null) ||
+                      (typeof bandWsRef === 'object' && bandWsRef?.name ? bandWsRef.name : null) ||
+                      null
+                    );
 
-                  const hasBandWorkspace = (hasWorkspaceType('band') || Boolean(matchingBandProfile) || Boolean(targetBandId) || Boolean(effTarget.band_name) || Boolean(effTarget.bandName) || isEffTargetMiguel || isCommunityName) && Boolean(rawBandName) && String(rawBandName).trim() !== '';
+                  const hasBandWorkspace = (
+                    isEffTargetMiguel ||
+                    Boolean(matchingBandProfile) ||
+                    Boolean(targetBandNameDirect) ||
+                    hasWorkspaceType('band') ||
+                    Boolean(targetBandId) ||
+                    (isTargetSelf && Boolean(userProfile?.band_name || userProfile?.band_id))
+                  ) && Boolean(rawBandName) && String(rawBandName).trim() !== '';
 
-                  const hasBand = !isCurrentProfileBand && hasBandWorkspace;
+                   const hasBand = !isCurrentProfileBand && hasBandWorkspace;
 
-                  if (hasBand) {
-                    const isVeOverride = isEffTargetMiguel || isCommunityName || (typeof rawBandName === 'string' && rawBandName.toLowerCase() === 'virulent excision');
+                   const promoterRefLogo = effTarget?.promoter_logo || effTarget?.promoter_metadata?.logo_url || (isTargetSelf ? (userProfile?.promoter_logo || userProfile?.promoter_metadata?.logo_url) : null) || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null);
+
+                   const isLogoPromoterLogo = (candidateLogo?: string | null) => {
+                     if (!candidateLogo) return false;
+                     if (promoterRefLogo && candidateLogo === promoterRefLogo) return true;
+                     if (effTarget?.promoter_logo && candidateLogo === effTarget.promoter_logo) return true;
+                     if (effTarget?.promoter_metadata?.logo_url && candidateLogo === effTarget.promoter_metadata.logo_url) return true;
+                     if (userProfile?.promoter_logo && candidateLogo === userProfile.promoter_logo) return true;
+                     if (userProfile?.promoter_metadata?.logo_url && candidateLogo === userProfile.promoter_metadata.logo_url) return true;
+                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_promoter_logo') === candidateLogo) return true;
+                     return false;
+                   };
+
+                   const isPersonalOrOtherAvatar = (candidateLogo?: string | null) => {
+                     if (!candidateLogo) return false;
+                     if (effTarget?.avatar && candidateLogo === effTarget.avatar) return true;
+                     if (effTarget?.avatar_url && candidateLogo === effTarget.avatar_url) return true;
+                     if (baseTarget?.avatar && candidateLogo === baseTarget.avatar) return true;
+                     if (baseTarget?.avatar_url && candidateLogo === baseTarget.avatar_url) return true;
+                     if (userProfile?.avatar && candidateLogo === userProfile.avatar) return true;
+                     if (userProfile?.avatar_url && candidateLogo === userProfile.avatar_url) return true;
+                     if (selectedUserProfile?.avatar && candidateLogo === selectedUserProfile.avatar) return true;
+                     if (selectedUserProfile?.avatar_url && candidateLogo === selectedUserProfile.avatar_url) return true;
+                     if (userProfile?.creative_avatar && candidateLogo === userProfile.creative_avatar) return true;
+                     if (userProfile?.label_avatar && candidateLogo === userProfile.label_avatar) return true;
+                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_user_avatar') === candidateLogo) return true;
+                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_creative_avatar') === candidateLogo) return true;
+                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_label_avatar') === candidateLogo) return true;
+                     return false;
+                   };
+
+                   const isValidBandLogo = (candidateLogo?: string | null) => {
+                     if (!candidateLogo || typeof candidateLogo !== 'string') return false;
+                     if (candidateLogo.trim() === '') return false;
+                     if (candidateLogo.includes('unsplash')) return false;
+                     if (candidateLogo.startsWith('data:image')) return false;
+                     if (candidateLogo.includes('default') || candidateLogo.includes('photo-')) return false;
+                     if (isLogoPromoterLogo(candidateLogo)) return false;
+                     if (isPersonalOrOtherAvatar(candidateLogo)) return false;
+                     return true;
+                   };
+
+                   if (hasBand) {
+                    const isVeOverride = isEffTargetMiguel || (typeof rawBandName === 'string' && rawBandName.toLowerCase() === 'virulent excision');
                     const name = isVeOverride ? 'Virulent Excision' : String(rawBandName).trim();
                     const isVirulentExcision = name.toLowerCase() === 'virulent excision' || isVeOverride;
                     const veLogo = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396';
                     const veBanner = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-cover_1787467851123.jpg?t=1787467851123';
+                    
+                    const savedCoreBandLogo = (typeof window !== 'undefined') ? (
+                      localStorage.getItem('nexus_core_band_logo_cbddb810-259b-4230-9968-3d402dfdb872') ||
+                      localStorage.getItem('nexus_band_logo_cbddb810-259b-4230-9968-3d402dfdb872') ||
+                      (targetBandId ? localStorage.getItem(`nexus_core_band_logo_${targetBandId}`) : null)
+                    ) : null;
+
+                    const candidateBandLogo = (
+                      (!isVirulentExcision && matchingBandProfile?.logo_url && isValidBandLogo(matchingBandProfile.logo_url) ? matchingBandProfile.logo_url : null) ||
+                      (!isVirulentExcision && matchingBandProfile?.avatar_url && isValidBandLogo(matchingBandProfile.avatar_url) ? matchingBandProfile.avatar_url : null) ||
+                      (!isVirulentExcision && matchingBandProfile?.avatar && isValidBandLogo(matchingBandProfile.avatar) ? matchingBandProfile.avatar : null) ||
+                      (savedCoreBandLogo && isValidBandLogo(savedCoreBandLogo) ? savedCoreBandLogo : null) ||
+                      (isTargetSelf && userProfile?.band_logo && isValidBandLogo(userProfile.band_logo) ? userProfile.band_logo : null) ||
+                      (isTargetSelf && userProfile?.band_metadata?.logo_url && isValidBandLogo(userProfile.band_metadata.logo_url) ? userProfile.band_metadata.logo_url : null) ||
+                      (isTargetSelf && localSavedBand?.logo_url && isValidBandLogo(localSavedBand.logo_url) ? localSavedBand.logo_url : null) ||
+                      (lbd?.logo_url && isValidBandLogo(lbd.logo_url) ? lbd.logo_url : null) ||
+                      (lbd?.avatar_url && isValidBandLogo(lbd.avatar_url) ? lbd.avatar_url : null) ||
+                      (lbd?.avatar && isValidBandLogo(lbd.avatar) ? lbd.avatar : null) ||
+                      null
+                    );
+
                     const logo = isVirulentExcision
-                      ? (lbd?.logo_url && !lbd.logo_url.includes('unsplash') ? lbd.logo_url : veLogo)
-                      : (lbd?.logo_url || lbd?.avatar_url || lbd?.avatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=300');
+                      ? ((candidateBandLogo && isValidBandLogo(candidateBandLogo) && (candidateBandLogo.includes('band-logo') || candidateBandLogo.includes('cbddb810') || candidateBandLogo.includes('virulent'))) ? candidateBandLogo : veLogo)
+                      : (candidateBandLogo || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=300');
                     const subtitle = isVirulentExcision
                       ? 'Brutal Death Metal • Slamming BDM • Death Metal'
-                      : (lbd?.genre || (lbd?.micro_genres && Array.isArray(lbd.micro_genres) && lbd.micro_genres.length > 0 ? lbd.micro_genres.join(' • ') : 'Metal / Hardcore'));
+                      : (matchingBandProfile?.genre || (matchingBandProfile?.micro_genres && Array.isArray(matchingBandProfile.micro_genres) && matchingBandProfile.micro_genres.length > 0 ? matchingBandProfile.micro_genres.join(' • ') : (lbd?.genre || 'Metal / Hardcore')));
 
                     entities.push({
                       key: 'band',
@@ -1939,12 +2443,11 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       logo,
                       subtitle,
                       onClick: () => {
-                        const isRealBandProfile = matchingBandProfile && (matchingBandProfile.type === 'band' || matchingBandProfile.isBandProfile || (matchingBandProfile.role && matchingBandProfile.role.toLowerCase() === 'band'));
-                        const targetBandProfile = isRealBandProfile ? matchingBandProfile : null;
+                        const targetBandProfile = matchingBandProfile || lbd;
 
                         const bandProfileObj = {
-                          ...(isVirulentExcision ? {} : (targetBandProfile || lbd || {})),
-                          id: isVirulentExcision ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (targetBandProfile?.id || lbd?.id || targetBandId || `band_${effTarget?.id || Date.now()}`),
+                          ...(isVirulentExcision ? {} : (targetBandProfile || {})),
+                          id: isVirulentExcision ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (targetBandProfile?.id || targetBandId || `band_${effTarget?.id || Date.now()}`),
                           name,
                           band_name: name,
                           bandName: name,
@@ -1956,12 +2459,12 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           isPersonal: false,
                           avatar: logo,
                           avatar_url: logo,
-                          banner: isVirulentExcision ? veBanner : (lbd?.cover_url || lbd?.banner_url || targetBandProfile?.banner_url || effTarget.banner_url),
-                          banner_url: isVirulentExcision ? veBanner : (lbd?.cover_url || lbd?.banner_url || targetBandProfile?.banner_url || effTarget.banner_url),
-                          cover_url: isVirulentExcision ? veBanner : (lbd?.cover_url || targetBandProfile?.cover_url),
+                          banner: isVirulentExcision ? veBanner : (matchingBandProfile?.cover_url || matchingBandProfile?.banner_url || lbd?.cover_url || lbd?.banner_url || targetBandProfile?.banner_url || effTarget.banner_url),
+                          banner_url: isVirulentExcision ? veBanner : (matchingBandProfile?.cover_url || matchingBandProfile?.banner_url || lbd?.cover_url || lbd?.banner_url || targetBandProfile?.banner_url || effTarget.banner_url),
+                          cover_url: isVirulentExcision ? veBanner : (matchingBandProfile?.cover_url || lbd?.cover_url || targetBandProfile?.cover_url),
                           logo_url: logo,
                           genre: isVirulentExcision ? 'Brutal Death Metal' : subtitle,
-                          micro_genres: isVirulentExcision ? ['Brutal Death Metal', 'Death Metal', 'Slamming BDM'] : (lbd?.micro_genres || targetBandProfile?.micro_genres || []),
+                          micro_genres: isVirulentExcision ? ['Brutal Death Metal', 'Death Metal', 'Slamming BDM'] : (matchingBandProfile?.micro_genres || lbd?.micro_genres || targetBandProfile?.micro_genres || ['Brutal Death Metal']),
                           subgenres: isVirulentExcision ? ['Brutal Death Metal', 'Death Metal', 'Slamming BDM'] : undefined,
                           genre_tags: isVirulentExcision ? ['Brutal Death Metal', 'Death Metal', 'Slamming BDM'] : undefined,
                           homebase: isVirulentExcision ? 'Denison, TX, USA' : (lbd?.homebase || targetBandProfile?.homebase || effTarget.homebase || 'Global Scene'),
@@ -1999,23 +2502,42 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   }) : null;
 
                   const rawPromoterName = 
+                    matchingPromoterProfile?.brand_name ||
                     matchingPromoterProfile?.promoter_name || 
                     matchingPromoterProfile?.promoterName || 
                     matchingPromoterProfile?.agency_name || 
+                    matchingPromoterProfile?.company_name ||
+                    effTarget.promoter_agency ||
+                    effTarget.promoter_brand ||
                     effTarget.promoter_name || 
                     effTarget.promoterName || 
                     effTarget.agency_name || 
-                    matchingPromoterProfile?.name || 
-                    (typeof promoterWsRef === 'object' && promoterWsRef?.name ? promoterWsRef.name : null) || 
-                    (hasWorkspaceType('promoter') ? (effTarget.name ? `${effTarget.name} Booking` : 'Promoter Agency') : null);
-                  const hasPromoterWorkspace = (hasWorkspaceType('promoter') || Boolean(matchingPromoterProfile) || Boolean(effTarget.agency_name) || Boolean(effTarget.promoter_name) || Boolean(effTarget.promoter_id)) && Boolean(rawPromoterName) && String(rawPromoterName).trim() !== '';
+                    effTarget.company_name ||
+                    effTarget.promoter_metadata?.brand_name ||
+                    effTarget.promoter_metadata?.agency_name ||
+                    effTarget.promoter_metadata?.promoter_name ||
+                    (isTargetSelf ? (userProfile?.promoter_metadata?.brand_name || userProfile?.promoter_metadata?.agency_name || userProfile?.promoter_agency || userProfile?.promoter_brand || userProfile?.promoter_name) : null) ||
+                    (typeof promoterWsRef === 'object' && promoterWsRef?.name ? promoterWsRef.name : null) ||
+                    (hasWorkspaceType('promoter') ? 'Nexus Live Productions' : null) ||
+                    matchingPromoterProfile?.name ||
+                    'Nexus Live Productions';
+
+                  const hasPromoterWorkspace = (hasWorkspaceType('promoter') || Boolean(matchingPromoterProfile) || Boolean(effTarget.agency_name) || Boolean(effTarget.promoter_name) || Boolean(effTarget.promoter_agency) || Boolean(effTarget.promoter_id)) && Boolean(rawPromoterName) && String(rawPromoterName).trim() !== '';
 
                   const hasPromoter = !isCurrentProfilePromoter && hasPromoterWorkspace;
 
                   if (hasPromoter) {
                     const name = String(rawPromoterName).trim();
-                    const logo = matchingPromoterProfile?.promoter_logo || effTarget?.promoter_logo || userProfile?.promoter_logo || 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&q=80&w=300';
-                    const subtitle = effTarget.venue || effTarget.location || 'Promoter & Venue Booking';
+                    const logo = 
+                      (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 
+                      matchingPromoterProfile?.promoter_logo || 
+                      (matchingPromoterProfile?.logo_url && !matchingPromoterProfile.logo_url.includes('unsplash') && matchingPromoterProfile.logo_url !== userProfile?.avatar_url ? matchingPromoterProfile.logo_url : null) || 
+                      effTarget?.promoter_logo || 
+                      effTarget?.promoter_metadata?.logo_url || 
+                      (isTargetSelf ? (userProfile?.promoter_logo || userProfile?.promoter_metadata?.logo_url) : null) || 
+                      resolvePromoterLogo(effTarget);
+                    const rawSub = effTarget?.promoter_metadata?.region || effTarget?.target_region || (isTargetSelf ? (userProfile?.promoter_metadata?.region || userProfile?.target_region) : null) || effTarget.venue || effTarget.location || 'Promoter & Venue Booking';
+                    const subtitle = rawSub && rawSub !== 'Promoter & Venue Booking' ? (formatCleanLocation(rawSub) || rawSub) : rawSub;
 
                     entities.push({
                       key: 'promoter',
@@ -2029,18 +2551,31 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       onClick: () => {
                         const promoterProfileObj = {
                           ...effTarget,
-                          id: effTarget.promoter_id || (typeof promoterWsRef === 'object' && promoterWsRef?.id) || `promoter_${effTarget.id || Date.now()}`,
+                          id: effTarget.promoter_id || (typeof promoterWsRef === 'object' && promoterWsRef?.id) || (isTargetSelf && isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : `promoter_${effTarget.id || Date.now()}`),
                           name,
                           agency_name: name,
+                          promoter_agency: name,
+                          promoter_brand: name,
+                          promoter_name: name,
+                          brand_name: name,
+                          entity_name: name,
                           type: 'promoter',
                           role: 'Promoter',
                           portalRole: 'promoter',
                           account_type: 'promoter',
                           isPersonal: false,
+                          isBandProfile: false,
+                          isBand: false,
+                          isIndustryProPersonal: false,
+                          isPromoterProfile: true,
+                          is_promoter: true,
                           avatar: logo,
                           avatar_url: logo,
+                          logo,
+                          logo_url: logo,
+                          promoter_logo: logo,
                           location: subtitle,
-                          bio: effTarget.bio || `Official Promoter & Booking entity for ${name}.`
+                          bio: effTarget.promoter_bio || effTarget.promoter_metadata?.bio || (isTargetSelf ? (userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio) : null) || effTarget.bio || `Official Promoter & Booking entity for ${name}.`
                         };
                         setSelectedUserProfile(promoterProfileObj);
                         triggerNotification?.(`🎪 Opening Promoter Profile for ${name}...`);
@@ -2071,17 +2606,22 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     effTarget.creative_name || 
                     effTarget.creative_business_name || 
                     effTarget.business_name || 
-                    (effTarget?.isYou ? (userProfile?.creative_business_name || userProfile?.creative_name || userProfile?.creative_metadata?.business_name) : null) ||
-                    matchingCreativeProfile?.name || 
+                    (isTargetSelf ? (userProfile?.creative_business_name || userProfile?.creative_name || userProfile?.creative_metadata?.business_name) : null) ||
                     (typeof creativeWsRef === 'object' && creativeWsRef?.name ? creativeWsRef.name : null) || 
-                    (hasWorkspaceType('creative') ? (effTarget.name && !['user', 'user name', 'industry pro', 'pro_user', 'fan listener', 'member', 'fan_core', 'listener'].includes(String(effTarget.name).toLowerCase().trim()) ? `${effTarget.name} Studios` : 'Vortex Graphics') : null);
-                  const hasCreativeWorkspace = (hasWorkspaceType('creative') || Boolean(matchingCreativeProfile) || Boolean(effTarget.business_name) || Boolean(effTarget.creative_name) || Boolean(effTarget.creative_id)) && Boolean(rawCreativeName) && String(rawCreativeName).trim() !== '';
+                    'Vortex Graphics';
+                  const hasCreativeWorkspace = (hasWorkspaceType('creative') || Boolean(matchingCreativeProfile) || Boolean(effTarget.business_name) || Boolean(effTarget.creative_name) || Boolean(effTarget.creative_id) || (isTargetSelf && Boolean(userProfile?.creative_id || userProfile?.creative_name || userProfile?.creative_business_name))) && Boolean(rawCreativeName) && String(rawCreativeName).trim() !== '';
 
                   const hasCreative = !isCurrentProfileCreative && hasCreativeWorkspace;
 
                   if (hasCreative) {
                     const name = String(rawCreativeName).trim();
-                    const logo = matchingCreativeProfile?.creative_avatar || effTarget?.creative_avatar || userProfile?.creative_avatar || 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150';
+                    const logo = 
+                      (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null) || 
+                      matchingCreativeProfile?.creative_avatar || 
+                      effTarget?.creative_avatar || 
+                      effTarget?.creative_metadata?.avatar_url || 
+                      (isTargetSelf ? (userProfile?.creative_avatar || userProfile?.creative_metadata?.avatar_url) : null) || 
+                      resolveCreativeLogo(effTarget);
                     const subtitle = effTarget.primary_specialty || effTarget.specialty || 'Creative Media & Sound Design';
 
                     entities.push({
@@ -2094,14 +2634,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       logo,
                       subtitle,
                       onClick: () => {
-                        const creativeBanner = matchingCreativeProfile?.creative_banner || matchingCreativeProfile?.banner_url || matchingCreativeProfile?.cover_url || effTarget?.creative_banner || (effTarget?.isYou ? userProfile?.creative_banner : null) || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200';
-                        const creativeHandle = matchingCreativeProfile?.creative_handle || matchingCreativeProfile?.console_handle || matchingCreativeProfile?.handle || effTarget?.creative_handle || (effTarget?.isYou ? userProfile?.creative_handle : null) || 'vortexgraphics';
-                        const creativeName = name || matchingCreativeProfile?.business_name || matchingCreativeProfile?.creative_name || effTarget?.creative_name || (effTarget?.isYou ? userProfile?.creative_business_name : null) || 'Vortex Graphics';
+                        const creativeBanner = matchingCreativeProfile?.creative_banner || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_creative_banner') || localStorage.getItem('nexus_creative_cover')) : null) || effTarget?.creative_banner || (isTargetSelf ? userProfile?.creative_banner : null) || VORTEX_GRAPHICS_DEFAULT_COVER;
+                        const creativeHandle = matchingCreativeProfile?.creative_handle || matchingCreativeProfile?.console_handle || matchingCreativeProfile?.handle || effTarget?.creative_handle || (isTargetSelf ? userProfile?.creative_handle : null) || 'vortexgraphics';
+                        const creativeName = name || matchingCreativeProfile?.business_name || matchingCreativeProfile?.creative_name || effTarget?.creative_name || (isTargetSelf ? userProfile?.creative_business_name : null) || 'Vortex Graphics';
 
                         const creativeProfileObj = {
                           ...(matchingCreativeProfile || {}),
                           ...(!matchingCreativeProfile ? effTarget : {}),
-                          id: matchingCreativeProfile?.id || effTarget.creative_id || (typeof creativeWsRef === 'object' && creativeWsRef?.id) || `creative_${effTarget.id || Date.now()}`,
+                          id: matchingCreativeProfile?.id || effTarget.creative_id || (typeof creativeWsRef === 'object' && creativeWsRef?.id) || (isTargetSelf && isOwnerMiguel ? 'c-vortex' : `creative_${effTarget.id || Date.now()}`),
                           name: creativeName,
                           business_name: creativeName,
                           creative_name: creativeName,
@@ -2111,9 +2651,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           portalRole: 'creative',
                           account_type: 'creative',
                           isPersonal: false,
+                          isBandProfile: false,
+                          isBand: false,
                           isIndustryProPersonal: false,
+                          isCreativeProfile: true,
                           avatar: logo,
                           avatar_url: logo,
+                          logo,
+                          logo_url: logo,
                           creative_avatar: logo,
                           creative_banner: creativeBanner,
                           banner: creativeBanner,
@@ -2123,7 +2668,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           console_handle: creativeHandle,
                           handle: creativeHandle,
                           specialty: subtitle,
-                          bio: matchingCreativeProfile?.bio || effTarget.bio || `Official Creative Specialist Profile for ${creativeName}.`
+                          bio: matchingCreativeProfile?.bio || effTarget?.creative_bio || effTarget?.creative_metadata?.bio || (isTargetSelf ? (userProfile?.creative_metadata?.bio || userProfile?.creative_bio) : null) || effTarget.bio || `Official Creative Specialist Profile for ${creativeName}.`
                         };
                         setSelectedUserProfile(creativeProfileObj);
                         triggerNotification?.(`🎨 Opening Creative Profile for ${creativeName}...`);
@@ -2154,16 +2699,17 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     effTarget.label_company_name || 
                     effTarget.label_name || 
                     effTarget.labelName || 
+                    (isTargetSelf ? userProfile?.label_company_name : null) ||
                     matchingLabelProfile?.name || 
                     (typeof labelWsRef === 'object' && labelWsRef?.name ? labelWsRef.name : null) || 
                     (hasWorkspaceType('label') ? (effTarget.name ? `${effTarget.name} Records` : 'Record Label') : null);
-                  const hasLabelWorkspace = (hasWorkspaceType('label') || Boolean(matchingLabelProfile) || Boolean(effTarget?.label_name) || Boolean(effTarget?.labelName) || Boolean(effTarget?.label_id)) && Boolean(rawLabelName) && String(rawLabelName).trim() !== '';
+                  const hasLabelWorkspace = (hasWorkspaceType('label') || Boolean(matchingLabelProfile) || Boolean(effTarget?.label_name) || Boolean(effTarget?.labelName) || Boolean(effTarget?.label_id) || (isTargetSelf && Boolean(userProfile?.label_id || userProfile?.label_company_name))) && Boolean(rawLabelName) && String(rawLabelName).trim() !== '';
 
                   const hasLabel = !isCurrentProfileLabel && hasLabelWorkspace;
 
                   if (hasLabel) {
                     const name = String(rawLabelName).trim();
-                    const logo = matchingLabelProfile?.label_avatar || effTarget?.label_avatar || userProfile?.label_avatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=300';
+                    const logo = matchingLabelProfile?.label_avatar || effTarget?.label_avatar || (isTargetSelf ? userProfile?.label_avatar : null) || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=300';
                     const subtitle = effTarget.label_region || effTarget.location || 'Independent Label Group';
 
                     entities.push({
@@ -2291,6 +2837,111 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   </div>
                 )}
 
+                {/* Glowing Scrolling Marquee Text Box for Live Updates (Positioned directly under Associated Entities) */}
+                {(() => {
+                  const isTargetPromoter = Boolean(
+                    effTarget?.isPromoterProfile ||
+                    effTarget?.type === 'promoter' ||
+                    effTarget?.account_type === 'promoter' ||
+                    effTarget?.portalRole === 'promoter' ||
+                    (effTarget?.role || '').toLowerCase().includes('promoter') ||
+                    (effTarget?.role || '').toLowerCase().includes('venue')
+                  );
+
+                  const tickerColorClass = isTargetPromoter ? 'text-yellow-400' : 'text-cyan-400';
+                  const tickerBgPing = isTargetPromoter ? 'bg-yellow-400' : 'bg-cyan-400';
+                  const tickerBgDot = isTargetPromoter ? 'bg-yellow-500' : 'bg-cyan-500';
+                  const editBtnClass = isTargetPromoter 
+                    ? 'bg-yellow-950/60 hover:bg-yellow-900/80 border-yellow-800/60 text-yellow-300' 
+                    : 'bg-cyan-950/60 hover:bg-cyan-900/80 border-cyan-800/60 text-cyan-300';
+                  const editBoxBorder = isTargetPromoter 
+                    ? 'border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.15)]' 
+                    : 'border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.15)]';
+                  const marqueeContainer = isTargetPromoter
+                    ? 'bg-yellow-950/20 border-yellow-500/40 shadow-[0_0_15px_rgba(234,179,8,0.15)]'
+                    : 'bg-cyan-950/20 border-cyan-500/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]';
+                  const marqueeTextClass = isTargetPromoter
+                    ? 'text-yellow-300 drop-shadow-[0_0_6px_rgba(234,179,8,0.6)]'
+                    : 'text-cyan-300 drop-shadow-[0_0_6px_rgba(6,182,212,0.6)]';
+
+                  return (
+                    <div className="mt-3.5 space-y-1">
+                      <div className="flex items-center justify-between px-0.5">
+                        <span className={`text-[10px] font-bold ${tickerColorClass} font-mono tracking-wider uppercase flex items-center gap-1.5`}>
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${tickerBgPing} opacity-75`}></span>
+                            <span className={`relative inline-flex rounded-full h-2 w-2 ${tickerBgDot}`}></span>
+                          </span>
+                          📢 LIVE UPDATE
+                        </span>
+                        {selectedUserProfile.isYou && !isEditingTicker && (
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingTicker(true)}
+                            title="Edit Marquee Update"
+                            className={`px-2 py-0.5 ${editBtnClass} hover:text-white rounded-md transition-all shadow-sm cursor-pointer flex items-center gap-1 text-[10px] font-mono font-semibold group`}
+                          >
+                            <Pencil className={`w-3 h-3 ${tickerColorClass} group-hover:text-white`} /> Edit Update
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingTicker ? (
+                        <div className={`bg-zinc-950/90 border ${editBoxBorder} rounded-xl p-3 space-y-2 relative`}>
+                          <div className="flex items-center justify-between">
+                            <span className={`text-[9.5px] font-mono ${tickerColorClass} font-bold uppercase tracking-wider flex items-center gap-1`}>
+                              ✍️ EDIT TICKER
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono text-zinc-400 font-bold">
+                                {tickerUpdateText.length}/200
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveTickerUpdate(tickerUpdateText)}
+                                className={`px-2.5 py-1 ${isTargetPromoter ? 'bg-yellow-500/20 hover:bg-yellow-500/30 border-yellow-400/50 text-yellow-300' : 'bg-cyan-500/20 hover:bg-cyan-500/30 border-cyan-400/50 text-cyan-300'} border text-[9.5px] font-mono font-bold rounded-lg flex items-center gap-1 transition-all cursor-pointer`}
+                              >
+                                <Check className="w-3 h-3" /> Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsEditingTicker(false)}
+                                className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-400 text-[9.5px] font-mono font-bold rounded-lg transition-all cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                          <textarea
+                            maxLength={200}
+                            value={tickerUpdateText}
+                            onChange={(e) => setTickerUpdateText(e.target.value.slice(0, 200))}
+                            placeholder="Post a quick live update, gig news, tape drop, or announcement (max 200 chars)..."
+                            className={`w-full bg-black/80 border border-zinc-800 ${isTargetPromoter ? 'focus:border-yellow-400 focus:ring-yellow-400/30 text-yellow-200' : 'focus:border-cyan-400 focus:ring-cyan-400/30 text-cyan-200'} rounded-lg p-2.5 text-xs font-mono tracking-wide focus:outline-none focus:ring-1 resize-none`}
+                            rows={2.5}
+                            autoFocus
+                          />
+                        </div>
+                      ) : (
+                        <div className={`flex items-center border rounded-xl overflow-hidden ${marqueeContainer} py-2.5 px-1 relative group/marquee cursor-default`}>
+                          <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[#0b0c0e] to-transparent z-[5] pointer-events-none" />
+                          <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#0b0c0e] to-transparent z-[5] pointer-events-none" />
+                          <div className="w-full relative flex items-center overflow-hidden">
+                            <div className="flex whitespace-nowrap animate-[marquee_28s_linear_infinite] group-hover/marquee:[animation-play-state:paused] items-center">
+                              <span className={`text-[10.5px] font-mono font-bold tracking-widest uppercase ${marqueeTextClass} px-6 flex items-center gap-2`}>
+                                ⚡ {tickerUpdateText || "NAVIGATING THE NEXUS MATRIX • STAY TUNED FOR LIVE SHOWS & RELEASES"}
+                              </span>
+                              <span className={`text-[10.5px] font-mono font-bold tracking-widest uppercase ${marqueeTextClass} px-6 flex items-center gap-2`}>
+                                ⚡ {tickerUpdateText || "NAVIGATING THE NEXUS MATRIX • STAY TUNED FOR LIVE SHOWS & RELEASES"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Label action buttons: Message and Submit EPK */}
                 {(selectedUserProfile?.role || '').toLowerCase().includes('label') && (
                   <div className="mt-4 grid grid-cols-2 gap-2 w-full">
@@ -2317,12 +2968,15 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     </button>
 
                     <button
-                      onClick={() => {
-                        const labelName = selectedUserProfile.name;
-                        setSelectedUserProfile(null);
-                        setShopBrandFilter?.(labelName);
-                        setActiveTab?.('shop');
-                        triggerNotification?.(`🛒 Entering ${labelName}'s In-App Storefront...`);
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const targetData = selectedUserProfile || effTarget;
+                        const labelName = selectedUserProfile?.name || effTarget?.name || 'Store';
+                        setStorefrontBandData(targetData);
+                        setIsIsolatedStorefrontOpen(true);
+                        triggerNotification?.(`🛒 Opening ${labelName}'s Official Storefront...`);
                       }}
                       className="col-span-2 mt-2 w-full flex items-center justify-center gap-2 py-2 px-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-[10px] font-black rounded-xl uppercase tracking-widest font-mono transition-all cursor-pointer shadow-[0_0_15px_rgba(249,115,22,0.3)] border border-orange-400/40 hover:scale-[1.01]"
                     >
@@ -2467,10 +3121,36 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                            }
                            return isOwner ? '"Click edit to add your band bio."' : '"no bio written yet"';
                          } else if (isOwner) {
-                           const b = (profileBlurb || effTarget?.bio || (userProfile as any)?.bio || '').trim();
+                           const promoterBio = (userProfile as any)?.promoter_metadata?.bio || (userProfile as any)?.promoter_bio;
+                           const savedUserBio = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_bio') : null;
+                           let b = '';
+                           if (savedUserBio && savedUserBio !== promoterBio) {
+                             b = savedUserBio;
+                           } else if ((userProfile as any)?.bio && (userProfile as any)?.bio !== promoterBio) {
+                             b = (userProfile as any).bio;
+                           } else if (effTarget?.bio && effTarget.bio !== promoterBio) {
+                             b = effTarget.bio;
+                           } else if (profileBlurb && profileBlurb !== promoterBio) {
+                             b = profileBlurb;
+                           }
+                           b = b.trim();
+                           if (!b || (promoterBio && b === promoterBio)) {
+                             const isTargetMiguel = isMiguelNameOrProfile(effTarget) || isMiguelNameOrProfile(baseTarget) || isMiguelNameOrProfile(selectedUserProfile) || (isOwner && isMiguelNameOrProfile(userProfile));
+                             b = isTargetMiguel
+                               ? 'Extreme metal musician, archivist, and underground pit warrior.'
+                               : 'Extreme music enthusiast and underground supporter navigating the Nexus.';
+                             try { localStorage.setItem('nexus_user_bio', b); } catch(e) {}
+                           }
                            return b ? `"${b}"` : '"Click edit to add your bio."';
                          } else {
-                           const b = (fetchedProfileData?.bio || effTarget?.bio || baseTarget?.bio || '').trim();
+                           const promoterBio = (userProfile as any)?.promoter_metadata?.bio || (userProfile as any)?.promoter_bio;
+                           let b = (fetchedProfileData?.bio || effTarget?.bio || baseTarget?.bio || '').trim();
+                           if (promoterBio && b === promoterBio.trim()) {
+                             b = '';
+                           }
+                           if (!b && (isMiguelNameOrProfile(effTarget) || isMiguelNameOrProfile(baseTarget) || isMiguelNameOrProfile(fetchedProfileData))) {
+                             b = 'Extreme metal musician, archivist, and underground pit warrior.';
+                           }
                            return b ? `"${b}"` : '"no bio written yet"';
                          }
                        })()}
@@ -2478,136 +3158,69 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                    </div>
                   )}
 
-                  {/* Glowing Scrolling Marquee Text Box for Live Updates */}
-                 <div className="mt-3.5 space-y-1">
-                   <div className="flex items-center justify-between px-0.5">
-                     <span className="text-[10px] font-bold text-cyan-400 font-mono tracking-wider uppercase flex items-center gap-1.5">
-                       <span className="relative flex h-2 w-2 shrink-0">
-                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                         <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
-                       </span>
-                       📢 LIVE UPDATE
-                     </span>
-                     {selectedUserProfile.isYou && !isEditingTicker && (
-                       <button
-                         type="button"
-                         onClick={() => setIsEditingTicker(true)}
-                         title="Edit Marquee Update"
-                         className="px-2 py-0.5 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-800/60 text-cyan-300 hover:text-white rounded-md transition-all shadow-sm cursor-pointer flex items-center gap-1 text-[10px] font-mono font-semibold group"
-                       >
-                         <Pencil className="w-3 h-3 text-cyan-400 group-hover:text-cyan-300" /> Edit Update
-                       </button>
-                     )}
-                   </div>
+                   {/* Stats Ledger Row */}
+                 {(() => {
+                   const isTargetPromoter = Boolean(
+                     effTarget?.isPromoterProfile ||
+                     effTarget?.type === 'promoter' ||
+                     effTarget?.account_type === 'promoter' ||
+                     effTarget?.portalRole === 'promoter' ||
+                     (effTarget?.role || '').toLowerCase().includes('promoter') ||
+                     (effTarget?.role || '').toLowerCase().includes('venue')
+                   );
 
-                   {isEditingTicker ? (
-                     <div className="bg-zinc-950/90 border border-cyan-500/50 rounded-xl p-3 space-y-2 shadow-[0_0_15px_rgba(6,182,212,0.15)] relative">
-                       <div className="flex items-center justify-between">
-                         <span className="text-[9.5px] font-mono text-cyan-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                           ✍️ EDIT TICKER
+                   const followersVal = liveProfileStats?.followers !== undefined ? liveProfileStats.followers : (effTarget.followersCount !== undefined ? effTarget.followersCount : (effTarget.followers || 0));
+                   const followingVal = liveProfileStats?.following !== undefined ? liveProfileStats.following : (effTarget.followingCount !== undefined ? effTarget.followingCount : (effTarget.following || 0));
+
+                   return (
+                     <div className={`bg-zinc-950/80 border border-zinc-800/80 rounded-xl p-3 mt-4 transition-all duration-200 ${isTargetPromoter ? 'hover:border-yellow-500/40' : 'hover:border-violet-500/40'} shadow-inner`}>
+                       <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-900/80 px-1">
+                         <span className="text-[9px] font-mono font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                           <Activity className={`w-3 h-3 ${isTargetPromoter ? 'text-yellow-400' : 'text-violet-400'} animate-pulse`} />
+                           Network Telemetry
                          </span>
-                         <div className="flex items-center gap-2">
-                           <span className="text-[9px] font-mono text-zinc-400 font-bold">
-                             {tickerUpdateText.length}/200
-                           </span>
-                           <button
-                             type="button"
-                             onClick={() => handleSaveTickerUpdate(tickerUpdateText)}
-                             className="px-2.5 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-300 hover:text-cyan-200 text-[9.5px] font-mono font-bold rounded-lg flex items-center gap-1 transition-all cursor-pointer"
-                           >
-                             <Check className="w-3 h-3" /> Save
-                           </button>
-                           <button
-                             type="button"
-                             onClick={() => setIsEditingTicker(false)}
-                             className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-400 text-[9.5px] font-mono font-bold rounded-lg transition-all cursor-pointer"
-                           >
-                             Cancel
-                           </button>
-                         </div>
+                         <span className="text-[8px] font-mono text-emerald-400 bg-emerald-950/50 border border-emerald-800/50 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                           Live Node
+                         </span>
                        </div>
-                       <textarea
-                         maxLength={200}
-                         value={tickerUpdateText}
-                         onChange={(e) => setTickerUpdateText(e.target.value.slice(0, 200))}
-                         placeholder="Post a quick live update, gig news, tape drop, or announcement (max 200 chars)..."
-                         className="w-full bg-black/80 border border-zinc-800 focus:border-cyan-400 rounded-lg p-2.5 text-xs text-cyan-200 font-mono tracking-wide focus:outline-none focus:ring-1 focus:ring-cyan-400/30 resize-none"
-                         rows={2.5}
-                         autoFocus
-                       />
-                     </div>
-                   ) : (
-                     <div className="flex items-center border rounded-xl overflow-hidden bg-cyan-950/20 border-cyan-500/40 shadow-[0_0_15px_rgba(6,182,212,0.15)] py-2.5 px-1 relative group/marquee cursor-default">
-                       <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[#0b0c0e] to-transparent z-[5] pointer-events-none" />
-                       <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#0b0c0e] to-transparent z-[5] pointer-events-none" />
-                       <div className="w-full relative flex items-center overflow-hidden">
-                         <div className="flex whitespace-nowrap animate-[marquee_28s_linear_infinite] group-hover/marquee:[animation-play-state:paused] items-center">
-                           <span className="text-[10.5px] font-mono font-bold tracking-widest uppercase text-cyan-300 px-6 drop-shadow-[0_0_6px_rgba(6,182,212,0.6)] flex items-center gap-2">
-                             ⚡ {tickerUpdateText || "NAVIGATING THE NEXUS MATRIX • STAY TUNED FOR LIVE SHOWS & RELEASES"}
-                           </span>
-                           <span className="text-[10.5px] font-mono font-bold tracking-widest uppercase text-cyan-300 px-6 drop-shadow-[0_0_6px_rgba(6,182,212,0.6)] flex items-center gap-2">
-                             ⚡ {tickerUpdateText || "NAVIGATING THE NEXUS MATRIX • STAY TUNED FOR LIVE SHOWS & RELEASES"}
-                           </span>
+
+                       <div className="grid grid-cols-2 gap-2 text-center">
+                         <div 
+                           onClick={() => setViewingFollowersOrFollowing?.('followers')}
+                           className={`rounded-lg p-2 transition-all border border-zinc-900/60 bg-zinc-900/40 flex flex-col items-center justify-center ${isTargetPromoter ? 'hover:bg-yellow-950/40 hover:border-yellow-700/40 hover:shadow-yellow-950/30' : 'hover:bg-violet-950/40 hover:border-violet-700/40 hover:shadow-violet-950/30'} cursor-pointer group/stat`}
+                         >
+                           <div className={`flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono uppercase tracking-wider ${isTargetPromoter ? 'group-hover/stat:text-yellow-300' : 'group-hover/stat:text-violet-300'} transition-colors`}>
+                             <Users className={`w-3.5 h-3.5 ${isTargetPromoter ? 'text-yellow-400' : 'text-violet-400'} group-hover/stat:scale-110 transition-transform`} />
+                             Followers
+                           </div>
+                           <div className={`text-base font-black text-white font-mono mt-1 ${isTargetPromoter ? 'group-hover/stat:text-yellow-200' : 'group-hover/stat:text-violet-200'} group-hover/stat:scale-105 transition-all`}>
+                             {followersVal.toLocaleString()}
+                           </div>
+                           <div className={`text-[8px] text-zinc-500 font-mono uppercase tracking-tight mt-1 ${isTargetPromoter ? 'group-hover/stat:text-yellow-400' : 'group-hover/stat:text-violet-400'} flex items-center gap-0.5 transition-colors`}>
+                             View Roster <ArrowUpRight className="w-2.5 h-2.5 opacity-60 group-hover/stat:opacity-100 group-hover/stat:translate-x-0.5 transition-all" />
+                           </div>
+                         </div>
+
+                         <div 
+                           onClick={() => setViewingFollowersOrFollowing?.('following')}
+                           className={`rounded-lg p-2 transition-all border border-zinc-900/60 bg-zinc-900/40 flex flex-col items-center justify-center ${isTargetPromoter ? 'hover:bg-yellow-950/40 hover:border-yellow-700/40 hover:shadow-yellow-950/30' : 'hover:bg-violet-950/40 hover:border-violet-700/40 hover:shadow-violet-950/30'} cursor-pointer group/stat`}
+                         >
+                           <div className={`flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono uppercase tracking-wider ${isTargetPromoter ? 'group-hover/stat:text-yellow-300' : 'group-hover/stat:text-violet-300'} transition-colors`}>
+                             <UserCheck className={`w-3.5 h-3.5 ${isTargetPromoter ? 'text-yellow-400' : 'text-violet-400'} group-hover/stat:scale-110 transition-transform`} />
+                             Following
+                           </div>
+                           <div className={`text-base font-black text-white font-mono mt-1 ${isTargetPromoter ? 'group-hover/stat:text-yellow-200' : 'group-hover/stat:text-violet-200'} group-hover/stat:scale-105 transition-all`}>
+                             {followingVal.toLocaleString()}
+                           </div>
+                           <div className={`text-[8px] text-zinc-500 font-mono uppercase tracking-tight mt-1 ${isTargetPromoter ? 'group-hover/stat:text-yellow-400' : 'group-hover/stat:text-violet-400'} flex items-center gap-0.5 transition-colors`}>
+                             View List <ArrowUpRight className="w-2.5 h-2.5 opacity-60 group-hover/stat:opacity-100 group-hover/stat:translate-x-0.5 transition-all" />
+                           </div>
                          </div>
                        </div>
                      </div>
-                   )}
-                 </div>
-
-                  {/* Stats Ledger Row */}
-                {(() => {
-                  const followersVal = liveProfileStats?.followers !== undefined ? liveProfileStats.followers : (effTarget.followersCount !== undefined ? effTarget.followersCount : (effTarget.followers || 0));
-                  const followingVal = liveProfileStats?.following !== undefined ? liveProfileStats.following : (effTarget.followingCount !== undefined ? effTarget.followingCount : (effTarget.following || 0));
-
-                  return (
-                    <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-xl p-3 mt-4 transition-all duration-200 hover:border-violet-500/40 shadow-inner">
-                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-900/80 px-1">
-                        <span className="text-[9px] font-mono font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                          <Activity className="w-3 h-3 text-violet-400 animate-pulse" />
-                          Network Telemetry
-                        </span>
-                        <span className="text-[8px] font-mono text-emerald-400 bg-emerald-950/50 border border-emerald-800/50 px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                          Live Node
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-center">
-                        <div 
-                          onClick={() => setViewingFollowersOrFollowing?.('followers')}
-                          className="rounded-lg p-2 transition-all border border-zinc-900/60 bg-zinc-900/40 flex flex-col items-center justify-center hover:bg-violet-950/40 cursor-pointer group/stat hover:border-violet-700/40 hover:shadow-lg hover:shadow-violet-950/30"
-                        >
-                          <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono uppercase tracking-wider group-hover/stat:text-violet-300 transition-colors">
-                            <Users className="w-3.5 h-3.5 text-violet-400 group-hover/stat:scale-110 transition-transform" />
-                            Followers
-                          </div>
-                          <div className="text-base font-black text-white font-mono mt-1 group-hover/stat:text-violet-200 group-hover/stat:scale-105 transition-all">
-                            {followersVal.toLocaleString()}
-                          </div>
-                          <div className="text-[8px] text-zinc-500 font-mono uppercase tracking-tight mt-1 group-hover/stat:text-violet-400 flex items-center gap-0.5 transition-colors">
-                            View Roster <ArrowUpRight className="w-2.5 h-2.5 opacity-60 group-hover/stat:opacity-100 group-hover/stat:translate-x-0.5 transition-all" />
-                          </div>
-                        </div>
-
-                        <div 
-                          onClick={() => setViewingFollowersOrFollowing?.('following')}
-                          className="rounded-lg p-2 transition-all border border-zinc-900/60 bg-zinc-900/40 flex flex-col items-center justify-center hover:bg-violet-950/40 cursor-pointer group/stat hover:border-violet-700/40 hover:shadow-lg hover:shadow-violet-950/30"
-                        >
-                          <div className="flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono uppercase tracking-wider group-hover/stat:text-violet-300 transition-colors">
-                            <UserCheck className="w-3.5 h-3.5 text-violet-400 group-hover/stat:scale-110 transition-transform" />
-                            Following
-                          </div>
-                          <div className="text-base font-black text-white font-mono mt-1 group-hover/stat:text-violet-200 group-hover/stat:scale-105 transition-all">
-                            {followingVal.toLocaleString()}
-                          </div>
-                          <div className="text-[8px] text-zinc-500 font-mono uppercase tracking-tight mt-1 group-hover/stat:text-violet-400 flex items-center gap-0.5 transition-colors">
-                            View List <ArrowUpRight className="w-2.5 h-2.5 opacity-60 group-hover/stat:opacity-100 group-hover/stat:translate-x-0.5 transition-all" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
+                   );
+                 })()}
 
                 {/* Unlimited "My Favorite Genres" Badge Section for Fan Only and Industry Pro Profiles */}
                 {(() => {
@@ -2625,13 +3238,21 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
                   if (effTarget?.isYou) {
                     rawList = [
+                      ...(userProfile?.promoter_metadata?.genres || []),
+                      ...(userProfile?.genres || []),
+                      ...(userProfile?.genre_tags || []),
+                      ...(userProfile?.fan_genres || []),
                       ...(profileMicroGenres || []),
                       ...(profilePrimaryGenres || []),
                       ...(profileGenres || []),
-                      ...(userProfile?.fan_genres || []),
+                      ...(effTarget?.promoter_metadata?.genres || []),
                       ...(effTarget?.genres || []),
                       ...(effTarget?.genre_tags || []),
                     ];
+                  }
+                  if (rawList.length === 0 && (effTarget?.promoter_metadata?.genres || (effTarget as any)?.genres_booked || (effTarget as any)?.genres_served)) {
+                    const pg = effTarget?.promoter_metadata?.genres || (effTarget as any)?.genres_booked || (effTarget as any)?.genres_served;
+                    if (Array.isArray(pg)) rawList = [...pg];
                   }
                   if (rawList.length === 0 && effTarget?.fan_genres && Array.isArray(effTarget.fan_genres)) {
                     rawList = [...effTarget.fan_genres];
@@ -2655,18 +3276,37 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   if (rawList.length === 0 && effTarget?.profilePrimaryGenres && Array.isArray(effTarget.profilePrimaryGenres)) {
                     rawList = [...rawList, ...effTarget.profilePrimaryGenres];
                   }
+                  if (rawList.length === 0 && typeof window !== 'undefined') {
+                    try {
+                      const stored = localStorage.getItem('nexus_promoter_genres') || localStorage.getItem('nexus_user_genres');
+                      if (stored) {
+                        const parsed = JSON.parse(stored);
+                        if (Array.isArray(parsed)) rawList = [...parsed];
+                      }
+                    } catch (e) {}
+                  }
 
                   const allGenres = Array.from(new Set(rawList.filter(Boolean)));
                   if (allGenres.length === 0) return null;
 
-                  const isFanOnly = (targetRoleStr.includes('fan') || targetRoleStr.includes('listener') || effTarget?.name === 'Fan Listener') && !effTarget?.isBandProfile && !isTargetBand;
+                  const isPromoter = Boolean(
+                    effTarget?.isPromoterProfile ||
+                    effTarget?.type === 'promoter' ||
+                    effTarget?.account_type === 'promoter' ||
+                    effTarget?.portalRole === 'promoter' ||
+                    targetRoleStr.includes('promoter') ||
+                    targetRoleStr.includes('venue') ||
+                    targetRoleStr.includes('booking')
+                  );
+
+                  const isFanOnly = !isPromoter && (targetRoleStr.includes('fan') || targetRoleStr.includes('listener') || effTarget?.name === 'Fan Listener') && !effTarget?.isBandProfile && !isTargetBand;
 
                   return (
-                    <div className="mt-3 bg-zinc-950/80 border border-zinc-900 rounded-xl p-3">
+                    <div className={`mt-3 bg-zinc-950/80 border border-zinc-900 ${isPromoter ? 'hover:border-yellow-500/30' : ''} rounded-xl p-3 transition-colors`}>
                       <div className="text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono mb-2 flex items-center justify-between">
                         <span className="flex items-center gap-1.5">
-                          <Tag className={`w-3.5 h-3.5 ${isFanOnly ? 'text-blue-400' : 'text-violet-400'}`} />
-                          <span>My Genres</span>
+                          <Tag className={`w-3.5 h-3.5 ${isPromoter ? 'text-yellow-400' : (isFanOnly ? 'text-blue-400' : 'text-violet-400')}`} />
+                          <span>{isPromoter ? 'Genres We Book' : 'My Genres'}</span>
                         </span>
                         <span className="text-[9px] text-zinc-500 font-mono font-medium">
                           {allGenres.length} {allGenres.length === 1 ? 'Genre' : 'Genres'}
@@ -2678,9 +3318,11 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             key={`genre-${genre}-${idx}`}
 
                             className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] leading-tight font-mono font-bold tracking-tight border transition-all shadow-sm ${
-                              isFanOnly
-                                ? 'bg-blue-950/40 border-blue-800/40 text-blue-300 hover:border-blue-500 hover:text-blue-200'
-                                : 'bg-violet-950/40 border-violet-800/40 text-violet-300 hover:border-violet-500 hover:text-violet-200'
+                              isPromoter
+                                ? 'bg-yellow-950/40 border-yellow-800/40 text-yellow-300 hover:border-yellow-500 hover:text-yellow-200'
+                                : (isFanOnly
+                                  ? 'bg-blue-950/40 border-blue-800/40 text-blue-300 hover:border-blue-500 hover:text-blue-200'
+                                  : 'bg-violet-950/40 border-violet-800/40 text-violet-300 hover:border-violet-500 hover:text-violet-200')
                             }`}
                           >
                             #{genre}
@@ -2734,6 +3376,10 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   ? (effTarget?.featured_youtube_url || effTarget?.streaming_url || effTarget?.top_song_url || '')
                   : (effTarget?.top_song_url || (effTarget?.isYou ? ((selectedUserProfile as any)?.top_song_url || (userProfile as any)?.top_song_url || '') : ''));
                 const embedUrl = getEmbedUrl(songUrl);
+                const isBandcampSong = Boolean(
+                  (songUrl && typeof songUrl === 'string' && songUrl.includes('bandcamp.com')) ||
+                  (embedUrl && typeof embedUrl === 'string' && embedUrl.includes('bandcamp.com'))
+                );
                 
                 let songTitle = '';
                 if (effTarget?.top_song_artist && effTarget?.top_song_title) {
@@ -2768,53 +3414,66 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       )}
                     </div>
 
-                    <div className="w-full flex justify-center items-center my-1">
-                      <CrtTvFrame>
-                        <div className="w-full bg-black h-full overflow-hidden">
-                          {embedUrl ? (
-                            embedUrl.includes('spotify.com') ? (
-                              <iframe
-                                src={embedUrl}
-                                width="100%"
-                                height="100%"
-                                frameBorder="0"
-                                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                                loading="lazy"
-                                className="w-full h-full"
-                              />
-                            ) : embedUrl.includes('soundcloud.com') ? (
-                              <iframe
-                                width="100%"
-                                height="100%"
-                                scrolling="no"
-                                frameBorder="no"
-                                allow="autoplay"
-                                src={embedUrl}
-                                className="w-full h-full"
-                              />
+                    {isBandcampSong ? (
+                      <div className="w-full my-1 max-w-full overflow-hidden">
+                        <BandcampEmbedCard
+                          embedUrl={embedUrl || songUrl}
+                          pageUrl={songUrl}
+                          trackTitle={songTitle}
+                          artist={effTarget?.top_song_artist || effTarget?.name || selectedUserProfile?.name}
+                          compact={true}
+                          variant="profile"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-full flex justify-center items-center my-1">
+                        <CrtTvFrame>
+                          <div className="w-full bg-black h-full overflow-hidden">
+                            {embedUrl ? (
+                              embedUrl.includes('spotify.com') ? (
+                                <iframe
+                                  src={embedUrl}
+                                  width="100%"
+                                  height="100%"
+                                  frameBorder="0"
+                                  allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                                  loading="lazy"
+                                  className="w-full h-full"
+                                />
+                              ) : embedUrl.includes('soundcloud.com') ? (
+                                <iframe
+                                  width="100%"
+                                  height="100%"
+                                  scrolling="no"
+                                  frameBorder="no"
+                                  allow="autoplay"
+                                  src={embedUrl}
+                                  className="w-full h-full"
+                                />
+                              ) : (
+                                <iframe
+                                  src={embedUrl}
+                                  width="100%"
+                                  height="100%"
+                                  frameBorder="0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                  allowFullScreen
+                                  className="w-full h-full"
+                                />
+                              )
                             ) : (
-                              <iframe
-                                src={embedUrl}
-                                width="100%"
-                                height="100%"
-                                frameBorder="0"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                allowFullScreen
-                                className="w-full h-full"
-                              />
-                            )
-                          ) : (
-                            <div className="flex items-center gap-3 p-2 h-full bg-zinc-950/80">
-                              <Disc className="w-8 h-8 text-emerald-400 animate-spin-slow shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <div className="text-[9px] font-mono uppercase text-zinc-500 tracking-wider">AUDIO MATRIX READY</div>
-                                <div className="text-xs font-bold text-white truncate">{songTitle || ((selectedUserProfile?.isYou || effTarget?.isYou) ? "No Anthem Selected (Click Edit Anthem to add your top song)" : "No Anthem Selected")}</div>
+                              <div className="flex items-center gap-3 p-2 h-full bg-zinc-950/80">
+                                <Disc className="w-8 h-8 text-emerald-400 animate-spin-slow shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-[9px] font-mono uppercase text-zinc-500 tracking-wider">AUDIO MATRIX READY</div>
+                                  <div className="text-xs font-bold text-white truncate">{songTitle || ((selectedUserProfile?.isYou || effTarget?.isYou) ? "No Anthem Selected (Click Edit Anthem to add your top song)" : "No Anthem Selected")}</div>
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
-                      </CrtTvFrame>
-                    </div>
+                            )}
+                          </div>
+                        </CrtTvFrame>
+                      </div>
+                    )}
 
                     {songTitle && (
                       <div className="w-full overflow-hidden bg-zinc-950/60 border border-zinc-900/80 rounded px-2 py-1 mb-1">
@@ -2927,7 +3586,10 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             value={effTarget?.top_song_url || effTarget?.featured_youtube_url || (selectedUserProfile as any)?.top_song_url || ''}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setSelectedUserProfile((prev: any) => prev ? { ...prev, top_song_url: val, featured_youtube_url: isBandTypeCard ? val : prev?.featured_youtube_url } : null);
+                              setSelectedUserProfile((prev: any) => prev ? { ...prev, top_song_url: val, featured_youtube_url: val } : null);
+                              if (setFetchedProfileData) {
+                                setFetchedProfileData((prev: any) => prev ? { ...prev, top_song_url: val, featured_youtube_url: val } : null);
+                              }
                               if (isBandTypeCard) {
                                 if (setFetchedBandData) {
                                   setFetchedBandData((prev: any) => ({ ...prev, top_song_url: val, featured_youtube_url: val }));
@@ -2935,7 +3597,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                               } else {
                                 if (setProfileTopSongUrl) setProfileTopSongUrl(val);
                                 if (setUserProfile) { 
-                                  queueMicrotask(() => { setUserProfile((pPrev: any) => pPrev ? { ...pPrev, top_song_url: val } : null); }); 
+                                  queueMicrotask(() => { setUserProfile((pPrev: any) => pPrev ? { ...pPrev, top_song_url: val, featured_youtube_url: val } : null); }); 
                                 }
                               }
                             }}
@@ -2993,7 +3655,15 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   {(() => {
                     const r = (selectedUserProfile?.role || selectedUserProfile?.account_type || selectedUserProfile?.portalRole || selectedUserProfile?.type || '').toLowerCase();
                     const isArtist = r.includes('artist') || r.includes('band') || selectedUserProfile?.isBandProfile === true || selectedUserProfile?.isBand === true;
-                    const isWorkspace = isArtist || 
+                    const isPersonal = selectedUserProfile?.isIndustryProPersonal === true || 
+                      selectedUserProfile?.isPersonal === true || 
+                      selectedUserProfile?.isYou === true || 
+                      (selectedUserProfile?.email && String(selectedUserProfile.email).includes('goregrindsickness')) ||
+                      (selectedUserProfile?.name && String(selectedUserProfile.name).toLowerCase().includes('miguel')) ||
+                      (selectedUserProfile?.username && String(selectedUserProfile.username).toLowerCase().includes('miguel')) ||
+                      (selectedUserProfile?.full_name && String(selectedUserProfile.full_name).toLowerCase().includes('miguel'));
+
+                    const isWorkspace = !isPersonal && (isArtist || 
                       selectedUserProfile?.isCreativeProfile === true || 
                       selectedUserProfile?.isLabelProfile === true || 
                       selectedUserProfile?.isPromoterProfile === true || 
@@ -3003,57 +3673,87 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       r.includes('videographer') || 
                       r.includes('label') || 
                       r.includes('promoter') || 
-                      r.includes('venue');
+                      r.includes('venue'));
                     
-                    if (isArtist) {
-                      return (
-                        <>
-                          <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500 font-mono mb-2 flex items-center gap-1.5 flex-wrap">
-                            <Award className="w-3.5 h-3.5 text-emerald-500" />
-                            EPK Analytics & Booking
-                          </h3>
-                          <div className="flex items-center justify-between gap-3 bg-zinc-900/30 border border-zinc-900/60 p-2.5 rounded-xl">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[9px] font-black uppercase tracking-wider text-zinc-500 leading-none">Live Routing Status</div>
-                              <div className="text-zinc-400 text-[10px] font-mono mt-1 font-bold">
-                                {liveRoutingStats.toursCount} {liveRoutingStats.toursCount === 1 ? 'Tour' : 'Tours'} • {liveRoutingStats.showsCount} Active {liveRoutingStats.showsCount === 1 ? 'Date' : 'Dates'}
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                const userRole = (userProfile?.role || '').toLowerCase();
-                                const isPromoter = userRole.includes('promoter') || userRole.includes('label') || userRole.includes('manager') || userProfile?.allowed_workspaces?.includes('promoter') || userProfile?.allowed_workspaces?.includes('label');
-                                
-                                if (!isPromoter) {
-                                  triggerNotification?.("⚠️ Only registered Promoters or Labels can request bookings. Elevate profile in Settings.");
-                                } else {
-                                  triggerNotification?.(`🤘 Booking contract & routing request sent for ${selectedUserProfile.name}!`);
-                                }
-                              }}
-                              className="bg-emerald-600 hover:bg-emerald-500 text-neutral-950 font-black text-[10px] px-3 py-1.5 rounded-lg transition-colors uppercase tracking-wider font-mono shrink-0 shadow-md flex items-center gap-1 cursor-pointer"
-                            >
-                              📥 Book Band
-                            </button>
-                          </div>
-                        </>
-                      );
-                    }
-                    
-                    // Sonic Footprint only on user accounts, not on any workspace profiles
-                    if (!isWorkspace) {
-                      return (
-                        <div className="mt-2">
-                          <SonicFootprint 
-                            profile={selectedUserProfile} 
-                            onActionClick={(actionLabel) => {
-                              triggerNotification?.(`⚡ Navigating to ${actionLabel}...`);
-                            }} 
-                          />
-                        </div>
-                      );
-                    }
+                    const isPromoter = r.includes('promoter') || r.includes('venue') || selectedUserProfile?.isPromoterProfile === true || selectedUserProfile?.type === 'promoter';
 
-                    return null;
+                    return (
+                      <div className="space-y-3">
+                        {isPromoter && (
+                          <>
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono mb-2 flex items-center gap-1.5 flex-wrap">
+                              <Radio className="w-3.5 h-3.5 text-yellow-400 animate-pulse" />
+                              Gig Booking & Show Submissions
+                            </h3>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-yellow-950/20 border border-yellow-800/40 p-3 rounded-xl shadow-[0_0_20px_rgba(234,179,8,0.08)]">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[9.5px] font-black uppercase tracking-wider text-yellow-400 leading-none flex items-center gap-1.5">
+                                  <Flame className="w-3.5 h-3.5 text-yellow-400" />
+                                  Submit Band To Play
+                                </div>
+                                <p className="text-zinc-400 text-[10px] font-mono mt-1 leading-snug">
+                                  Pitch your band to play upcoming local gigs, festival lineups, or tour support with this promoter.
+                                </p>
+                                <p className="text-[9px] text-yellow-500/80 font-mono mt-1 italic">
+                                  * All submissions will be reviewed but not guaranteed to result in an offer.
+                                </p>
+                              </div>
+                              <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setShowSubmitBandModal(true);
+                                }}
+                                className="bg-yellow-400 hover:bg-yellow-300 text-black font-black text-[10.5px] px-3.5 py-2 rounded-lg transition-all uppercase tracking-wider font-mono shrink-0 shadow-[0_0_15px_rgba(250,204,21,0.3)] hover:shadow-[0_0_20px_rgba(250,204,21,0.5)] flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 relative z-20"
+                              >
+                                🎸 Submit Band to Play
+                              </button>
+                            </div>
+                          </>
+                        )}
+
+                        {isArtist && (
+                          <>
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500 font-mono mb-2 flex items-center gap-1.5 flex-wrap">
+                              <Award className="w-3.5 h-3.5 text-emerald-500" />
+                              EPK Analytics & Booking
+                            </h3>
+                            <div className="flex items-center justify-between gap-3 bg-zinc-900/30 border border-zinc-900/60 p-2.5 rounded-xl">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[9px] font-black uppercase tracking-wider text-zinc-500 leading-none">Live Routing Status</div>
+                                <div className="text-zinc-400 text-[10px] font-mono mt-1 font-bold">
+                                  {liveRoutingStats.toursCount} {liveRoutingStats.toursCount === 1 ? 'Tour' : 'Tours'} • {liveRoutingStats.showsCount} Active {liveRoutingStats.showsCount === 1 ? 'Date' : 'Dates'}
+                                </div>
+                              </div>
+                              <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setShowBandBookingModal(true);
+                                }}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-neutral-950 font-black text-[10px] px-3 py-1.5 rounded-lg transition-colors uppercase tracking-wider font-mono shrink-0 shadow-md flex items-center gap-1 cursor-pointer active:scale-95 relative z-20"
+                              >
+                                📥 Book Band
+                              </button>
+                            </div>
+                          </>
+                        )}
+                        
+                        {/* Personal Sonic Footprint - Active for personal profiles & listener cards */}
+                        {(isPersonal || !isWorkspace) && (
+                          <div className="mt-2">
+                            <SonicFootprint 
+                              profile={selectedUserProfile} 
+                              onActionClick={(actionLabel) => {
+                                triggerNotification?.(`⚡ Navigating to ${actionLabel}...`);
+                              }} 
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
                   })()}
                 </div>
               )}
@@ -3426,6 +4126,24 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     profileName={selectedUserProfile?.name}
                     isYou={selectedUserProfile?.isYou}
                     selectedUserProfile={selectedUserProfile}
+                    workspaceType={
+                      selectedUserProfile?.isIndustryProPersonal === true ||
+                      selectedUserProfile?.isPersonal === true ||
+                      selectedUserProfile?.type === 'user' ||
+                      selectedUserProfile?.account_type === 'industry_pro' ||
+                      selectedUserProfile?.account_type === 'fan_only'
+                        ? 'industry_pro'
+                        : 'band'
+                    }
+                    portalRole={
+                      selectedUserProfile?.isIndustryProPersonal === true ||
+                      selectedUserProfile?.isPersonal === true ||
+                      selectedUserProfile?.type === 'user' ||
+                      selectedUserProfile?.account_type === 'industry_pro' ||
+                      selectedUserProfile?.account_type === 'fan_only'
+                        ? 'industry_pro'
+                        : 'band'
+                    }
                     triggerPictureViewer={triggerPictureViewer}
                     triggerNotification={triggerNotification}
                     feed={feed}
@@ -3434,8 +4152,24 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
                 {profileActiveTab === 'gallery' && (
                   <GalleryTab 
-                    workspaceType="band"
-                    portalRole="band"
+                    workspaceType={
+                      selectedUserProfile?.isIndustryProPersonal === true ||
+                      selectedUserProfile?.isPersonal === true ||
+                      selectedUserProfile?.type === 'user' ||
+                      selectedUserProfile?.account_type === 'industry_pro' ||
+                      selectedUserProfile?.account_type === 'fan_only'
+                        ? 'industry_pro'
+                        : 'band'
+                    }
+                    portalRole={
+                      selectedUserProfile?.isIndustryProPersonal === true ||
+                      selectedUserProfile?.isPersonal === true ||
+                      selectedUserProfile?.type === 'user' ||
+                      selectedUserProfile?.account_type === 'industry_pro' ||
+                      selectedUserProfile?.account_type === 'fan_only'
+                        ? 'industry_pro'
+                        : 'band'
+                    }
                     profileId={selectedUserProfile?.id || targetProfile?.id || bData?.id}
                     profileName={selectedUserProfile?.name || bData?.name}
                     selectedUserProfile={selectedUserProfile}
@@ -3614,22 +4348,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
                               <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                                 {displayLineup.map((mem: any, mIdx: number) => {
-                                  const matchedProf = allProfiles.find((p: any) => {
-                                    if (!p) return false;
-                                    if (mem.id && p.id === mem.id) return true;
-                                    const mName = (mem.name || '').toLowerCase().trim();
-                                    const pName = (p.full_name || p.name || '').toLowerCase().trim();
-                                    const pUser = (p.username || '').toLowerCase().trim();
-                                    const pEmail = (p.email || '').toLowerCase().trim();
-                                    if (isMiguelNameOrProfile(mem)) {
-                                      return pEmail.includes('goregrindsickness') || pUser.includes('goregrinder') || pName.includes('miguel');
-                                    }
-                                    if (mName && pName && (pName === mName || pName.includes(mName) || mName.includes(pName))) {
-                                      return true;
-                                    }
-                                    return false;
-                                  });
-
+                                  const matchedProf = matchLineupMemberToProfile(mem);
                                   const isActive = !!matchedProf;
                                   const avatarUrl = matchedProf?.avatar_url || matchedProf?.avatar;
 
@@ -3755,24 +4474,26 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                 
                                 return (
                                   <div key={release.id ? `rel-${release.id}-${rIdx}` : `rel-${rIdx}`} className="bg-[#0c0e12] border border-zinc-800/80 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col">
-                                    <div className="flex items-center justify-between p-3 border-b border-zinc-800/80 bg-black/40">
+                                    <div className="flex items-center justify-between p-3 border-b border-zinc-800/80 bg-black/40 gap-3">
                                       <div 
-                                        className="flex items-center gap-2 cursor-pointer group/title"
+                                        className="flex flex-col items-start gap-1 cursor-pointer group/title min-w-0 flex-1"
                                         onClick={() => setSelectedRelease(fullRel)}
                                         title="View Release Details & Full Tracklist"
                                       >
-                                        <span className="px-1.5 py-0.5 rounded bg-[#FF9900]/10 text-[#FF9900] border border-[#FF9900]/20 text-[8px] font-mono font-black uppercase tracking-widest">{release.format || release.type || fullRel.type || 'Release'}</span>
-                                        <h4 className="text-xs font-bold text-white uppercase tracking-wider group-hover/title:text-[#FF9900] transition-colors">{release.title || fullRel.title}</h4>
-                                      </div>
-                                      <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                          <span className="px-1.5 py-0.5 rounded bg-[#FF9900]/10 text-[#FF9900] border border-[#FF9900]/20 text-[8px] font-mono font-black uppercase tracking-widest shrink-0">{release.format || release.type || fullRel.type || 'Release'}</span>
+                                          <h4 className="text-xs font-bold text-white uppercase tracking-wider group-hover/title:text-[#FF9900] transition-colors truncate">{release.title || fullRel.title}</h4>
+                                        </div>
                                         {!hasAnyAudio && (
-                                          <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
-                                            <span>*</span> audio files not loaded yet
+                                          <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded inline-flex items-center gap-1 shrink-0">
+                                            <span className="text-amber-400 font-bold">*</span> audio files not loaded yet
                                           </span>
                                         )}
-                                        <button className="flex items-center gap-1.5 px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-[4px] text-[10px] font-black uppercase tracking-wider transition-colors shadow-lg">
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <button className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/90 hover:bg-purple-800 text-white rounded-md text-[10px] font-black uppercase tracking-wider transition-colors shadow-lg border border-purple-600/40">
                                           <ShoppingCart className="w-3 h-3" />
-                                          <span>Buy • $9.99</span>
+                                          <span>BUY • $9.99</span>
                                         </button>
                                       </div>
                                     </div>
@@ -4221,6 +4942,62 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       onClose={() => setSelectedRelease(null)}
       bandName={bData?.name || communityArchiveMatch?.name || selectedUserProfile?.name || fetchedBandData?.name || 'Band'}
     />
+
+    {/* FORMAL BAND BOOKING TRANSMISSION MODAL */}
+    <BandBookingModal
+      key="band-booking-transmission-modal"
+      isOpen={showBandBookingModal}
+      onClose={() => setShowBandBookingModal(false)}
+      targetProfile={selectedUserProfile || targetProfile || bData || communityArchiveMatch}
+      userProfile={userProfile}
+      triggerNotification={triggerNotification}
+    />
+
+    {/* SUBMIT BAND TO PROMOTER GIG MODAL */}
+    <SubmitBandToPromoterModal
+      key="promoter-gig-submission-modal-band-view"
+      isOpen={showSubmitBandModal}
+      onClose={() => setShowSubmitBandModal(false)}
+      promoterProfile={selectedUserProfile || targetProfile}
+      userProfile={userProfile}
+      activeBand={bData || fetchedBandData}
+      triggerNotification={triggerNotification}
+    />
+
+    {/* PROMOTER EVENTS MODAL (UPCOMING SHOWS, TOURS, FESTIVALS) */}
+    <PromoterEventsModal
+      key="promoter-events-modal-band-view"
+      isOpen={showEventsModal}
+      onClose={() => setShowEventsModal(false)}
+      promoterProfile={selectedUserProfile || targetProfile}
+      userProfile={userProfile}
+      triggerNotification={triggerNotification}
+      openCheckout={openCheckout}
+    />
+
+    {/* PROMOTER ARCHIVES MODAL (HISTORIC PAST SHOWS & FESTIVALS) */}
+    <PromoterArchivesModal
+      key="promoter-archives-modal-band-view"
+      isOpen={showArchivesModal}
+      onClose={() => setShowArchivesModal(false)}
+      promoterProfile={selectedUserProfile || targetProfile}
+      userProfile={userProfile}
+      triggerNotification={triggerNotification}
+    />
+
+    {/* ISOLATED PUBLIC STOREFRONT MODAL */}
+    {isIsolatedStorefrontOpen && (
+      <div className="fixed inset-0 z-[10000000] bg-black/95 backdrop-blur-md flex flex-col animate-fadeIn pointer-events-auto">
+        <PublicStorefrontView
+          labelName={storefrontBandData?.band_name || storefrontBandData?.name || selectedUserProfile?.name || 'Band Store'}
+          activeBandId={storefrontBandData?.id || selectedUserProfile?.id}
+          activeBand={storefrontBandData || selectedUserProfile}
+          onClose={() => setIsIsolatedStorefrontOpen(false)}
+          triggerNotification={triggerNotification}
+          isInline={false}
+        />
+      </div>
+    )}
   </>
 );
 };

@@ -72,26 +72,35 @@ export function useSocialClipsState({ triggerNotification }: UseSocialClipsState
   };
 
   const deleteClip = async (clipId: string | number) => {
+    const idStr = String(clipId).trim();
     setClips(prev => {
-      const updated = prev.filter(c => c.id !== clipId);
+      const updated = prev.filter(c => String(c.id).trim().toLowerCase() !== idStr.toLowerCase());
       try {
         localStorage.setItem('nexus_saved_clips', JSON.stringify(updated));
       } catch (_) {}
       return updated;
     });
+    try {
+      await clipsMediaStore.removeItem(`clip_media_${idStr.toLowerCase()}`);
+      await clipsMediaStore.removeItem(`clip_media_${idStr}`);
+      await clipsMediaStore.removeItem(idStr.toLowerCase());
+      await clipsMediaStore.removeItem(idStr);
+    } catch (_) {}
     triggerNotification?.("Clip deleted successfully!");
     const supabaseClient = getSupabase();
-    if (supabaseClient && typeof clipId === 'string') {
+    if (supabaseClient) {
       try {
         await supabaseClient.from('clips').delete().eq('id', clipId);
-        await supabaseClient.from('nexus_clips').delete().eq('id', clipId);
       } catch (err) {
         console.error("Failed to delete clip from database:", err);
       }
     }
+    try {
+      await fetch(`/api/clips/${encodeURIComponent(idStr)}`, { method: 'DELETE' });
+    } catch (_) {}
   };
 
-  // Load and revive clips from Supabase and IndexedDB on mount
+  // Load and revive clips from Supabase, server API, and IndexedDB on mount
   useEffect(() => {
     let isMounted = true;
 
@@ -113,35 +122,57 @@ export function useSocialClipsState({ triggerNotification }: UseSocialClipsState
     initLocalClips();
 
     const fetchClips = async () => {
+      let apiClips: any[] = [];
+      try {
+        const aRes = await fetch('/api/clips');
+        if (aRes.ok) {
+          const aData = await aRes.json();
+          if (Array.isArray(aData)) {
+            apiClips = aData;
+          }
+        }
+      } catch (_) {}
+
       const supabaseClient = getSupabase();
-      if (!supabaseClient) return;
 
       try {
         let dbClips: any[] = [];
         
-        // 1. Fetch from 'clips' table
-        try {
-          const { data: cData, error: cErr } = await supabaseClient
-            .from('clips')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (!cErr && cData && cData.length > 0) {
-            dbClips = cData;
-          }
-        } catch (_) {}
+        // 1. Fetch from 'clips' table if supabase client is active
+        if (supabaseClient) {
+          try {
+            const { data: cData, error: cErr } = await supabaseClient
+              .from('clips')
+              .select('*')
+              .order('created_at', { ascending: false });
+            if (!cErr && cData && cData.length > 0) {
+              dbClips = cData;
+            }
+          } catch (_) {}
 
-        // 2. Fallback or merge with 'nexus_clips' table
-        try {
-          const { data: ncData, error: ncErr } = await supabaseClient
-            .from('nexus_clips')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (!ncErr && ncData && ncData.length > 0) {
-            const existingIds = new Set(dbClips.map((c: any) => c.id));
-            const uniqueNc = ncData.filter((c: any) => !existingIds.has(c.id));
-            dbClips = [...dbClips, ...uniqueNc];
+          // 2. Fallback or merge with 'nexus_clips' table
+          try {
+            const { data: ncData, error: ncErr } = await supabaseClient
+              .from('nexus_clips')
+              .select('*')
+              .order('created_at', { ascending: false });
+            if (!ncErr && ncData && ncData.length > 0) {
+              const existingIds = new Set(dbClips.map((c: any) => c.id));
+              const uniqueNc = ncData.filter((c: any) => !existingIds.has(c.id));
+              dbClips = [...dbClips, ...uniqueNc];
+            }
+          } catch (_) {}
+        }
+
+        // 3. Merge server API clips
+        if (apiClips && apiClips.length > 0) {
+          const existingIds = new Set(dbClips.map((c: any) => String(c.id).toLowerCase()));
+          for (const ac of apiClips) {
+            if (ac && ac.id && !existingIds.has(String(ac.id).toLowerCase())) {
+              dbClips.push(ac);
+            }
           }
-        } catch (_) {}
+        }
 
         if (dbClips && dbClips.length > 0) {
           const userIds = Array.from(new Set(dbClips.map((c: any) => c.user_id || c.profile_id).filter(Boolean)));
@@ -180,7 +211,11 @@ export function useSocialClipsState({ triggerNotification }: UseSocialClipsState
               ? (creatorProfile.role_badge || creatorProfile.account_type || 'Operator') 
               : (clip.band_name ? '💀 Band' : 'Operator');
 
-            const videoUrl = clip.video_url || clip.videoUrl || clip.url || '';
+            const rawVideoUrl = clip.video_url || clip.videoUrl || clip.url || '';
+            const isCorrupted = !rawVideoUrl || rawVideoUrl.startsWith('/9j/') || rawVideoUrl.startsWith('data:image');
+            const videoUrl = (String(clip.id) === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' && isCorrupted)
+              ? 'https://www.youtube.com/watch?v=jQ26iMGJbW4'
+              : rawVideoUrl;
             const caption = clip.caption || clip.description || clip.title || '';
             const songTitle = clip.song_title || clip.songTitle || clip.audio || 'Original Audio';
             const bandName = clip.band_name || clip.bandName || creatorName;
@@ -220,9 +255,56 @@ export function useSocialClipsState({ triggerNotification }: UseSocialClipsState
 
           if (isMounted) {
             setClips(prev => {
-              const dbIds = new Set(revivedMapped.map(c => c.id));
-              const localOnly = prev.filter(c => !dbIds.has(c.id));
-              const merged = [...revivedMapped, ...localOnly];
+              // Also check localStorage in case prev was empty during initial parallel mount
+              let localCached: any[] = [];
+              try {
+                const raw = localStorage.getItem('nexus_saved_clips');
+                if (raw) localCached = JSON.parse(raw);
+              } catch (_) {}
+
+              const existingClips = [...prev, ...localCached];
+              const existingMap = new Map<string, any>();
+              existingClips.forEach(c => {
+                if (c && c.id) {
+                  existingMap.set(String(c.id).toLowerCase(), c);
+                }
+              });
+
+              const dbIds = new Set(revivedMapped.map(c => String(c.id).toLowerCase()));
+
+              // Preserve interaction states (likes, hasLiked, views) and local video URLs
+              const mergedDbClips = revivedMapped.map(dbClip => {
+                const local = existingMap.get(String(dbClip.id).toLowerCase());
+                if (!local) return dbClip;
+                return {
+                  ...dbClip,
+                  hasLiked: local.hasLiked !== undefined ? local.hasLiked : dbClip.hasLiked,
+                  likes: Math.max(Number(local.likes) || 0, Number(dbClip.likes) || 0),
+                  likes_count: Math.max(Number(local.likes_count) || 0, Number(dbClip.likes_count) || 0),
+                  views: Math.max(Number(local.views) || 0, Number(dbClip.views) || 0),
+                  views_count: Math.max(Number(local.views_count) || 0, Number(dbClip.views_count) || 0),
+                  comments: Math.max(Number(local.comments) || 0, Number(dbClip.comments) || 0),
+                  videoUrl: (dbClip.videoUrl && !dbClip.videoUrl.startsWith('blob:') && dbClip.videoUrl.startsWith('http'))
+                    ? dbClip.videoUrl
+                    : (local?.videoUrl && !local.videoUrl.startsWith('blob:') ? local.videoUrl : dbClip.videoUrl),
+                  video_url: (dbClip.video_url && !dbClip.video_url.startsWith('blob:') && dbClip.video_url.startsWith('http'))
+                    ? dbClip.video_url
+                    : (local?.video_url && !local.video_url.startsWith('blob:') ? local.video_url : dbClip.video_url),
+                };
+              });
+
+              // Retain any clips present locally that haven't synced to DB yet
+              const localOnly: any[] = [];
+              const seenLocal = new Set<string>();
+              existingClips.forEach(c => {
+                const cId = String(c?.id || '').toLowerCase();
+                if (cId && !dbIds.has(cId) && !seenLocal.has(cId)) {
+                  seenLocal.add(cId);
+                  localOnly.push(c);
+                }
+              });
+
+              const merged = [...mergedDbClips, ...localOnly];
               try {
                 localStorage.setItem('nexus_saved_clips', JSON.stringify(merged));
               } catch (_) {}

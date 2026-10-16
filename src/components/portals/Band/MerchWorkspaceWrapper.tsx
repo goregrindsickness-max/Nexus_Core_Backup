@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { labelCatalogStore } from '../../../utils/indexedDB';
 import { V2ExpandableCard } from '../../V2ExpandableCard';
 import InventoryView from './InventoryView';
-import CreativesHubView from './CreativesHubView';
 import ReleasesCatalogTab from '../Label/ReleasesCatalogTab';
 import PublicStorefrontView from '../../sales/PublicStorefrontView';
 import { ShoppingBag, Globe, Play, Music, Radio, Sparkles, Box, Check, Star, RefreshCw, Layers } from 'lucide-react';
+import { syncBandDiscographyToPhysicalAndDigital } from '../../../services/discographySyncService';
 
 interface MerchWorkspaceWrapperProps {
   filteredInventory: any[];
@@ -84,13 +84,31 @@ export default function MerchWorkspaceWrapper({
   const getBandIdKey = (bandId: string) => {
     if (!bandId) return 'b1';
     const lower = bandId.toLowerCase();
-    if (lower.includes('virulent') || lower.includes('b1') || lower.includes('tomb') || lower.includes('excision')) return 'b1';
-    if (lower.includes('spectral') || lower.includes('b2') || lower.includes('blood') || lower.includes('incantation') || lower.includes('aqueous') || lower.includes('acid') || lower.includes('xenomorph')) return 'b2';
-    if (lower.includes('undeath') || lower.includes('b3')) return 'b3';
-    return 'b1'; // default fallback
+    if (lower.includes('tomb') || lower.includes('mold')) return 'b1';
+    if (lower.includes('spectral') || lower.includes('blood') || lower.includes('incantation') || lower.includes('aqueous') || lower.includes('acid') || lower.includes('xenomorph')) return 'b2';
+    if (lower.includes('undeath')) return 'b3';
+    return bandId;
   };
 
   const activeKey = getBandIdKey(activeBandId);
+
+  // Auto-sync band discography to physical release inventory and music catalog on mount/activeBand change
+  useEffect(() => {
+    if (activeBand) {
+      syncBandDiscographyToPhysicalAndDigital(activeBand).then(res => {
+        if (res.physicalCreated > 0 || res.tracksPopulated > 0) {
+          // Reload releases from label catalog store
+          labelCatalogStore.getItem('label_catalog_releases').then((cachedReleases) => {
+            if (cachedReleases) {
+              try {
+                setCatalogReleases(JSON.parse(cachedReleases as string));
+              } catch(e) {}
+            }
+          });
+        }
+      }).catch(console.warn);
+    }
+  }, [activeBand]);
 
   useEffect(() => {
     // 1. Load releases
@@ -318,19 +336,7 @@ export default function MerchWorkspaceWrapper({
         />
       </div>
 
-      {/* SECTION 2: CREATIVES HUB (COLLAPSIBLE) */}
-      <V2ExpandableCard title="Creatives Hub" defaultExpanded={false}>
-        <div className="bg-black border-t border-[#1a1a1a]">
-          <CreativesHubView
-            onBack={() => {}}
-            triggerNotification={triggerNotification}
-            addLog={addLog}
-            activeBandName={activeBand?.name || 'Artist'}
-          />
-        </div>
-      </V2ExpandableCard>
-
-      {/* SECTION 3: MUSIC CATALOG (COLLAPSIBLE) */}
+      {/* SECTION 2: MUSIC CATALOG (COLLAPSIBLE) */}
       <V2ExpandableCard title="Music Catalog & Master Releases" defaultExpanded={false}>
         <div className="bg-black border-t border-[#1a1a1a] p-1">
           {!isLoading && (
@@ -363,6 +369,8 @@ export default function MerchWorkspaceWrapper({
             setCatalogReleases={setCatalogReleases}
             setCatalogApparel={setCatalogApparel}
             labelName={activeBand?.name || 'MANAGED BAND'}
+            activeBandId={activeBandId}
+            activeBand={activeBand}
             onClose={() => setIsPublicStorefrontOpen(false)}
             triggerNotification={triggerNotification}
             isInline={true}
@@ -377,6 +385,8 @@ export default function MerchWorkspaceWrapper({
           catalogApparel={catalogApparel}
           storefrontSyncRecord={storefrontSyncRecord}
           labelName={activeBand?.name || 'MANAGED BAND'}
+          activeBandId={activeBandId}
+          activeBand={activeBand}
           onClose={() => setIsPublicStorefrontOpen(false)}
           triggerNotification={triggerNotification}
         />

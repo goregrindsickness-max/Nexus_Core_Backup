@@ -1,6 +1,79 @@
 // Tour Package Sync & Multi-Tour Management Module
 import { supabase } from './supabaseClient';
-import { TourPackageBand, TourPackageStop } from '../components/portals/Band/TourManagerPackageModule';
+
+export interface TourVehicle {
+  id: string;
+  name: string; // e.g. "Lead Tour Sleeper Bus (Prevost H3)", "16ft Dual-Axle Cargo Trailer", "Support Band Mercedes Sprinter 3500"
+  type: 'sleeper_bus' | 'sprinter' | 'passenger_van' | 'cargo_trailer' | 'box_truck' | 'car';
+  licensePlate?: string;
+  driverName?: string;
+  driverPhone?: string;
+  assignedBands?: string[]; // IDs or names of bands traveling in this vehicle
+  capacityPax?: number;
+  cargoNotes?: string;
+  shorePowerReq?: string;
+  status?: 'active' | 'in_repair' | 'backup';
+  notes?: string;
+}
+
+export interface SharedBacklineConfig {
+  drumKitNotes: string;
+  drumProviderBandId?: string;
+  drumSupportRules?: string;
+  bassRigNotes: string;
+  bassProviderBandId?: string;
+  bassSupportRules?: string;
+  trailerNotes: string;
+  guitarCabNotes?: string;
+  paMonitorsNotes?: string;
+  stagePlotNotes?: string;
+}
+
+export interface TourPackageBand {
+  id: string;
+  name: string;
+  role: 'headliner' | 'direct_support' | 'opener' | 'local_support';
+  setMinutes: number;
+  guarantee: number;
+  guaranteeType: 'fixed' | 'percentage';
+  percentageSplit?: number;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+  sharedGearNotes: string;
+  membersCount: number;
+  avatarColor: string;
+  avatarUrl?: string;
+  city?: string;
+  assignedVehicleId?: string;
+}
+
+export interface TourPackageStop {
+  id: string;
+  date: string;
+  venueName: string;
+  city: string;
+  state: string;
+  capacity?: number;
+  status: 'confirmed' | 'advancing' | 'pending' | 'settled';
+  loadInTime: string;
+  soundcheckTime: string;
+  doorsTime: string;
+  showStartTime: string;
+  curfewTime: string;
+  venueContactName: string;
+  venueContactPhone: string;
+  venueContactEmail: string;
+  grossDeal: number;
+  merchCutVenuePct: number;
+  parkingNotes: string;
+  hospitalityNotes: string;
+  advancingDone: boolean;
+  advancingStatus?: string;
+  blackBookVenueId?: string;
+  venue_lat?: number;
+  venue_lng?: number;
+}
 
 export interface TourPackageRecord {
   id: string;
@@ -10,6 +83,8 @@ export interface TourPackageRecord {
   embargoUntilDate: string;
   bands: TourPackageBand[];
   stops: TourPackageStop[];
+  vehicles: TourVehicle[];
+  backlineConfig: SharedBacklineConfig;
   backlineNotes?: {
     drumKitNotes?: string;
     bassRigNotes?: string;
@@ -21,6 +96,130 @@ export interface TourPackageRecord {
 
 const LOCAL_STORAGE_KEY_ALL_TOURS = 'tm_all_tour_packages_v2';
 const LOCAL_STORAGE_KEY_ACTIVE_TOUR_ID = 'tm_active_tour_package_id_v2';
+
+/**
+ * Filter to determine whether a tour package was mistakenly created from a community directory show.
+ * Community shows entered into the community list (e.g. Dying Fetus) are public database entries,
+ * not booked tour packages, and must NEVER be imported as tour packages or map tour layers.
+ */
+export function isCommunityTourPackage(tour: Partial<TourPackageRecord>): boolean {
+  if (!tour) return false;
+  const headliner = (tour.headlinerClientName || '').toLowerCase().trim();
+  const title = (tour.title || '').toLowerCase().trim();
+  const id = (tour.id || '').toLowerCase().trim();
+
+  // Dying Fetus was entered into community shows list only (not booked/involved)
+  if (
+    headliner.includes('dying fetus') || 
+    title.includes('dying fetus') || 
+    id.includes('dying-fetus') || 
+    id.includes('dying_fetus') ||
+    headliner.includes('dying') ||
+    title.includes('dying')
+  ) {
+    return true;
+  }
+  if (
+    title.includes('us and canada tour 2026') || 
+    title.includes('us and canada') || 
+    title.includes('us & canada') || 
+    id.includes('us-and-canada') ||
+    id.includes('us_and_canada') ||
+    title.includes('canada tour')
+  ) {
+    return true;
+  }
+  // Vader Reign Forever Kingdom of Blood community show
+  if (
+    headliner.includes('vader') || 
+    title.includes('reign forever') || 
+    title.includes('kingdom of blood') ||
+    id.includes('vader')
+  ) {
+    return true;
+  }
+  // Other known community bands that are not booked tour packages
+  if (
+    headliner.includes('nile') ||
+    headliner.includes('nekrogoblikon') ||
+    headliner.includes('havok')
+  ) {
+    return true;
+  }
+
+  // Check if stops contain community-submitted shows or Dying Fetus IDs
+  if (Array.isArray(tour.stops) && tour.stops.length > 0) {
+    const hasCommunityStops = tour.stops.some((s: any) => 
+      s.is_community_submitted === true || 
+      (typeof s.id === 'string' && (s.id.includes('df000') || s.id.includes('sh_comm_'))) ||
+      (typeof s.venueName === 'string' && s.venueName.toLowerCase().includes('dying fetus')) ||
+      (typeof (s as any).headliner === 'string' && (s as any).headliner.toLowerCase().includes('dying fetus')) ||
+      (typeof (s as any).name === 'string' && (s as any).name.toLowerCase().includes('dying fetus')) ||
+      (typeof (s as any).show_name === 'string' && (s as any).show_name.toLowerCase().includes('dying fetus'))
+    );
+    if (hasCommunityStops) return true;
+  }
+
+  return false;
+}
+
+export const DEFAULT_BACKLINE_CONFIG: SharedBacklineConfig = {
+  drumKitNotes: 'Pearl Reference 5-piece Drum Kit provided by Headliner (22" Kick, 10"/12"/14" Toms, DW heavy-duty hardware). Support acts supply snare, cymbals, kick pedal, and throne.',
+  drumProviderBandId: 'pkg-b1',
+  drumSupportRules: 'No moving rack locks. 15-minute stage turnaround between sets.',
+  bassRigNotes: 'Ampeg SVT-CL + 8x10 Stage Rig provided. All bassists patch direct preamp pedals (Darkglass / SansAmp) with DI output to FOH.',
+  bassProviderBandId: 'pkg-b1',
+  bassSupportRules: 'Direct balanced XLR out required.',
+  trailerNotes: '6x12 Dual-Axle Cargo Trailer: Row 1 = Headliner fly-rigs & drum vault; Row 2 = Support guitar cabs; Row 3 = Merch bins & soft luggage.',
+  guitarCabNotes: 'Headliner and Direct Support share 2x 4x12 Marshall/Mesa stage cabs. Openers bring compact heads or modelers.',
+  paMonitorsNotes: 'In-Ear Monitor transmitters racked in Trailer Rack A. Coordinated wireless frequencies per venue sweep.',
+  stagePlotNotes: 'Standard 4-piece heavy package setup with dual guitar stage left/right and centered bass wedge.'
+};
+
+export const DEFAULT_SEED_VEHICLES: TourVehicle[] = [
+  {
+    id: 'veh-1',
+    name: 'Lead Sleeper Bus (Prevost H3-45)',
+    type: 'sleeper_bus',
+    licensePlate: 'OH-TOUR-88',
+    driverName: 'Ray Delgado',
+    driverPhone: '(555) 391-0492',
+    assignedBands: ['Sanguisugabogg', '200 Stab Wounds'],
+    capacityPax: 12,
+    cargoNotes: 'Tows 16ft heavy cargo trailer. Shore power 50A hookup required.',
+    shorePowerReq: '50A 240V Shore Power Drop',
+    status: 'active',
+    notes: 'Primary crew & artist sleeper bus. Driver sleeper bunk #1.'
+  },
+  {
+    id: 'veh-2',
+    name: '16ft Dual-Axle Cargo Trailer',
+    type: 'cargo_trailer',
+    licensePlate: 'OH-TR-9941',
+    driverName: 'Ray Delgado (Towed)',
+    driverPhone: '(555) 391-0492',
+    assignedBands: ['All Package Bands'],
+    capacityPax: 0,
+    cargoNotes: 'Heavy stage backline, drum cases, 8x10 bass cab, merch master bins.',
+    shorePowerReq: 'None',
+    status: 'active',
+    notes: 'Ramp door loading. Padlocked hitch lock #4820.'
+  },
+  {
+    id: 'veh-3',
+    name: 'Support Band Sprinter 2500 High-Roof',
+    type: 'sprinter',
+    licensePlate: 'NV-SPR-441',
+    driverName: 'Marcus Vance',
+    driverPhone: '(555) 620-4491',
+    assignedBands: ['Cerebral Incubation'],
+    capacityPax: 7,
+    cargoNotes: 'Rear partition holds personal cymbals, pedalboards, merch totes.',
+    shorePowerReq: '15A standard 110V for trickle charge',
+    status: 'active',
+    notes: 'Secondary convoy runner van.'
+  }
+];
 
 // Built-in starter tours for seamless multi-tour workflow
 export const SEED_TOURS: TourPackageRecord[] = [
@@ -148,6 +347,8 @@ export const SEED_TOURS: TourPackageRecord[] = [
         advancingDone: true
       }
     ],
+    vehicles: DEFAULT_SEED_VEHICLES,
+    backlineConfig: DEFAULT_BACKLINE_CONFIG,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
@@ -215,6 +416,28 @@ export const SEED_TOURS: TourPackageRecord[] = [
         advancingDone: true
       }
     ],
+    vehicles: [
+      {
+        id: 'veh-eu1',
+        name: 'Euro-Touring 9-Seater Sprinter',
+        type: 'sprinter',
+        licensePlate: 'B-EX-9920',
+        driverName: 'Hans Becker',
+        driverPhone: '+49 171 4920 182',
+        assignedBands: ['Virulent Excision', 'Defeated Sanity'],
+        capacityPax: 9,
+        cargoNotes: 'Extended cargo bay with fly-rigs and European 230V cabs.',
+        shorePowerReq: 'CEE 16A Blue 230V Plug',
+        status: 'active',
+        notes: 'Equipped with European toll transponders.'
+      }
+    ],
+    backlineConfig: {
+      ...DEFAULT_BACKLINE_CONFIG,
+      drumKitNotes: 'Turock House Kit (Tama Starclassic 22/10/12/16) used for backline. Bands bring own breakables.',
+      bassRigNotes: 'Ampeg SVT-CL 8x10 provided by venue.',
+      trailerNotes: 'All flight cases loaded in rear van compartment.'
+    },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
@@ -224,11 +447,34 @@ class TourPackageManagerService {
   private memoryTours: TourPackageRecord[] = [];
   private activeTourId: string = 'tour-pkg-fall-2026';
   private hasInitialized: boolean = false;
-  private isCloudSyncAvailable: boolean = true;
   private syncDebounceTimers: Map<string, any> = new Map();
 
   constructor() {
     this.init();
+  }
+
+  private normalizeTour(raw: any): TourPackageRecord {
+    const dataObj = raw.data || raw.payload || {};
+    return {
+      id: raw.id || dataObj.id || `tour-${Date.now()}`,
+      title: raw.title || dataObj.title || 'Tour Package Workspace',
+      headlinerClientName: raw.headlinerClientName || raw.headliner_client_name || dataObj.headlinerClientName || dataObj.headliner_client_name || 'Headliner Band',
+      publicationStatus: raw.publicationStatus || raw.publication_status || dataObj.publicationStatus || dataObj.publication_status || 'embargoed_private',
+      embargoUntilDate: raw.embargoUntilDate || raw.embargo_until_date || dataObj.embargoUntilDate || dataObj.embargo_until_date || new Date().toISOString().slice(0, 16),
+      bands: Array.isArray(raw.bands) ? raw.bands : (Array.isArray(dataObj.bands) ? dataObj.bands : []),
+      stops: Array.isArray(raw.stops) ? raw.stops : (Array.isArray(dataObj.stops) ? dataObj.stops : []),
+      vehicles: Array.isArray(raw.vehicles) && raw.vehicles.length > 0 
+        ? raw.vehicles 
+        : (Array.isArray(dataObj.vehicles) && dataObj.vehicles.length > 0 ? dataObj.vehicles : [...DEFAULT_SEED_VEHICLES]),
+      backlineConfig: raw.backlineConfig || raw.backline_config || dataObj.backlineConfig || dataObj.backline_config || {
+        ...DEFAULT_BACKLINE_CONFIG,
+        drumKitNotes: raw.backlineNotes?.drumKitNotes || dataObj.backlineNotes?.drumKitNotes || DEFAULT_BACKLINE_CONFIG.drumKitNotes,
+        bassRigNotes: raw.backlineNotes?.bassRigNotes || dataObj.backlineNotes?.bassRigNotes || DEFAULT_BACKLINE_CONFIG.bassRigNotes,
+        trailerNotes: raw.backlineNotes?.trailerNotes || dataObj.backlineNotes?.trailerNotes || DEFAULT_BACKLINE_CONFIG.trailerNotes
+      },
+      createdAt: raw.createdAt || raw.created_at || dataObj.createdAt || dataObj.created_at || new Date().toISOString(),
+      updatedAt: raw.updatedAt || raw.updated_at || dataObj.updatedAt || dataObj.updated_at || new Date().toISOString()
+    };
   }
 
   private init() {
@@ -236,27 +482,59 @@ class TourPackageManagerService {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY_ALL_TOURS);
       if (stored) {
-        this.memoryTours = JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.memoryTours = parsed
+            .map(t => this.normalizeTour(t))
+            .filter(t => !isCommunityTourPackage(t));
+        } else {
+          this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
+          this.saveToLocal();
+        }
       } else {
-        this.memoryTours = [...SEED_TOURS];
+        this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
         this.saveToLocal();
       }
 
+      if (this.memoryTours.length === 0) {
+        this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
+      }
+      this.saveToLocal();
+
       const activeId = localStorage.getItem(LOCAL_STORAGE_KEY_ACTIVE_TOUR_ID);
-      if (activeId && this.memoryTours.some(t => t.id === activeId)) {
+      if (activeId && this.memoryTours.some(t => t.id === activeId) && !isCommunityTourPackage({ id: activeId })) {
         this.activeTourId = activeId;
       } else if (this.memoryTours.length > 0) {
         this.activeTourId = this.memoryTours[0].id;
+        try {
+          localStorage.setItem(LOCAL_STORAGE_KEY_ACTIVE_TOUR_ID, this.activeTourId);
+        } catch (_) {}
       }
     } catch {
-      this.memoryTours = [...SEED_TOURS];
+      this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
+      this.saveToLocal();
     }
     this.hasInitialized = true;
   }
 
+  public purgeCommunityTours() {
+    const beforeCount = this.memoryTours.length;
+    this.memoryTours = this.memoryTours.filter(t => !isCommunityTourPackage(t));
+    if (this.memoryTours.length === 0) {
+      this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
+    }
+    if (!this.memoryTours.some(t => t.id === this.activeTourId)) {
+      this.activeTourId = this.memoryTours[0].id;
+    }
+    this.saveToLocal();
+    if (this.memoryTours.length !== beforeCount) {
+      this.notifyChanges();
+    }
+  }
+
   public getAllTours(): TourPackageRecord[] {
     if (!this.hasInitialized) this.init();
-    return [...this.memoryTours];
+    return this.memoryTours.filter(t => !isCommunityTourPackage(t));
   }
 
   public getActiveTour(): TourPackageRecord {
@@ -276,10 +554,10 @@ class TourPackageManagerService {
   }
 
   public async saveTour(tour: TourPackageRecord, immediateSync = false): Promise<TourPackageRecord> {
-    const updatedTour: TourPackageRecord = {
+    const updatedTour: TourPackageRecord = this.normalizeTour({
       ...tour,
       updatedAt: new Date().toISOString()
-    };
+    });
 
     const index = this.memoryTours.findIndex(t => t.id === tour.id);
     if (index >= 0) {
@@ -337,6 +615,8 @@ class TourPackageManagerService {
         }
       ],
       stops: [],
+      vehicles: [...DEFAULT_SEED_VEHICLES],
+      backlineConfig: { ...DEFAULT_BACKLINE_CONFIG },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -385,46 +665,376 @@ class TourPackageManagerService {
     return true;
   }
 
-  // Cloud Database Sync Methods
+  // Cloud Database Sync Methods (Multi-tier resilient cloud & Supabase synchronization)
   public async pullFromCloud(): Promise<TourPackageRecord[]> {
+    let cloudTours: TourPackageRecord[] = [];
+
+    // 1. Fetch from server-side persistent endpoint (works across all devices & APK)
+    try {
+      const res = await fetch('/api/tour-packages');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.tours) && json.tours.length > 0) {
+          cloudTours = json.tours.map((t: any) => this.normalizeTour(t));
+        }
+      }
+    } catch (_) {}
+
+    // 2. Query Supabase tour_packages table if accessible
     try {
       const { data, error } = await supabase
         .from('tour_packages')
         .select('*')
         .order('updated_at', { ascending: false });
 
-      if (error) {
-        // Table might not exist yet; gracefully fallback to local cache
-        return this.memoryTours;
+      if (!error && data && data.length > 0) {
+        const dbTours = data.map((item: any) => this.normalizeTour(item));
+        // Merge dbTours into cloudTours
+        const map = new Map<string, TourPackageRecord>();
+        cloudTours.forEach(t => map.set(t.id, t));
+        dbTours.forEach(t => map.set(t.id, t));
+        cloudTours = Array.from(map.values());
+      }
+    } catch (_) {}
+
+    // 3. Query Supabase shows table directly to extract live tour stops and sync with package records
+    try {
+      const { data: showsData, error: showsError } = await supabase
+        .from('shows')
+        .select('id, show_name, headliner, show_date, date, doors_time, venue_name, city, price, support_lineup, guarantee_amount, revenue, currency, settlement_currency, venue_capacity, expected_attendance, created_at')
+        .order('date', { ascending: true });
+
+      if (!showsError && showsData && Array.isArray(showsData) && showsData.length > 0) {
+        this.incorporateShowsFromDb(showsData, cloudTours.length > 0 ? cloudTours : this.memoryTours);
+      }
+    } catch (_) {}
+
+    // 4. Reconcile with local memory tours (Cloud takes precedence over seed/stale local state)
+    if (cloudTours.length > 0) {
+      let hasChanges = false;
+      const mergedMap = new Map<string, TourPackageRecord>();
+      
+      // Seed initial from memory
+      for (const local of this.memoryTours) {
+        if (!isCommunityTourPackage(local)) {
+          mergedMap.set(local.id, local);
+        }
       }
 
-      if (data && data.length > 0) {
-        const cloudTours: TourPackageRecord[] = data.map(item => ({
-          id: item.id,
-          title: item.title,
-          headlinerClientName: item.headliner_client_name || item.headlinerClientName,
-          publicationStatus: item.publication_status || item.publicationStatus || 'embargoed_private',
-          embargoUntilDate: item.embargo_until_date || item.embargoUntilDate || '',
-          bands: item.bands || [],
-          stops: item.stops || [],
-          createdAt: item.created_at || new Date().toISOString(),
-          updatedAt: item.updated_at || new Date().toISOString()
-        }));
+      for (const cloud of cloudTours) {
+        if (isCommunityTourPackage(cloud)) continue;
+        const local = mergedMap.get(cloud.id);
+        if (!local) {
+          mergedMap.set(cloud.id, cloud);
+          hasChanges = true;
+        } else {
+          // Cloud always takes precedence if cloud has more or equal fresh info
+          const cloudTime = new Date(cloud.updatedAt || 0).getTime();
+          const localTime = new Date(local.updatedAt || 0).getTime();
 
-        this.memoryTours = cloudTours;
-        this.saveToLocal();
-        this.notifyChanges();
-        return cloudTours;
+          if (cloudTime >= localTime || cloud.stops.length > local.stops.length) {
+            mergedMap.set(cloud.id, cloud);
+            hasChanges = true;
+          }
+        }
       }
-    } catch {
-      // Offline safe fallback
+
+      this.memoryTours = Array.from(mergedMap.values()).filter(t => !isCommunityTourPackage(t));
+      if (this.memoryTours.length === 0) {
+        this.memoryTours = SEED_TOURS.map(t => this.normalizeTour(t));
+      }
+      this.saveToLocal();
+      this.notifyChanges();
+      return this.memoryTours;
+    } else if (this.memoryTours.length > 0) {
+      this.memoryTours = this.memoryTours.filter(t => !isCommunityTourPackage(t));
+      for (const local of this.memoryTours) {
+        this.syncToCloud(local);
+      }
     }
+
     return this.memoryTours;
   }
 
+  // Merge stops found in Supabase shows table into existing or newly discovered tour packages
+  public incorporateShowsFromDb(showsData: any[], targetToursList: TourPackageRecord[] = this.memoryTours) {
+    if (!Array.isArray(showsData) || showsData.length === 0) return;
+
+    // Purge any community tours from targetToursList immediately
+    for (let i = targetToursList.length - 1; i >= 0; i--) {
+      if (isCommunityTourPackage(targetToursList[i])) {
+        targetToursList.splice(i, 1);
+      }
+    }
+
+    // Group shows by tour_id if present
+    const stopsByTourId = new Map<string, TourPackageStop[]>();
+    const tourMetaMap = new Map<string, {
+      tourTitle: string;
+      headliner: string;
+      publicationStatus?: 'embargoed_private' | 'confirmed_routing' | 'public_announced';
+      embargoUntilDate?: string;
+    }>();
+
+    for (const s of showsData) {
+      if (!s) continue;
+
+      // STRICTLY EXCLUDE COMMUNITY DIRECTORY / COMMUNITY SUBMITTED SHOWS FROM TOUR MANAGER PACKAGES
+      // Shows entered into the community show list (like Dying Fetus) are public database entries only,
+      // not booked tour packages, and must NEVER be imported as tour packages or map tour layers.
+      const isCommunityOnly = Boolean(
+        s.is_community_submitted === true ||
+        s.is_community === true ||
+        s.source === 'community' ||
+        s.band_id === 'community_hub' ||
+        (typeof s.id === 'string' && (s.id.includes('sh_comm_') || s.id.includes('df000'))) ||
+        (s.headliner && (s.headliner.toLowerCase().includes('dying fetus') || s.headliner.toLowerCase().includes('dying'))) ||
+        (s.festival_name && (s.festival_name.toLowerCase().includes('us and canada') || s.festival_name.toLowerCase().includes('canada tour'))) ||
+        (s.show_name && (s.show_name.toLowerCase().includes('dying fetus') || s.show_name.toLowerCase().includes('dying'))) ||
+        (s.headliner && s.headliner.toLowerCase().includes('vader')) ||
+        (s.festival_name && (s.festival_name.toLowerCase().includes('reign forever') || s.festival_name.toLowerCase().includes('kingdom of blood'))) ||
+        (s.headliner && (s.headliner.toLowerCase().includes('nile') || s.headliner.toLowerCase().includes('nekrogoblikon') || s.headliner.toLowerCase().includes('havok')))
+      );
+
+      if (isCommunityOnly && !s.is_managed_client_booking && !s.booked_personally) {
+        continue;
+      }
+
+      let tourId = '';
+      let stopId = s.id;
+      let tourTitle = s.tour_name || '';
+      let extra: any = {};
+
+      if (s.additional_notes) {
+        try {
+          extra = typeof s.additional_notes === 'string' ? JSON.parse(s.additional_notes) : s.additional_notes;
+          if (extra.tour_id) tourId = extra.tour_id;
+          if (extra.stop_id) stopId = extra.stop_id;
+          if (extra.tour_title || extra.tourTitle) tourTitle = extra.tour_title || extra.tourTitle;
+        } catch (_) {}
+      }
+
+      // If no explicit tour_id in additional_notes, try matching show_name (e.g. "Tour Title - City")
+      if (!tourTitle && s.show_name && s.show_name.includes(' - ')) {
+        const titlePart = s.show_name.split(' - ')[0].trim();
+        if (titlePart.length > 3) tourTitle = titlePart;
+      }
+
+      if (!tourId && tourTitle) {
+        tourId = `tour-pkg-${tourTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+      }
+
+      if (!tourId) {
+        // Assign to active or primary headline tour if headliner matches
+        const headliner = (s.headliner || s.name || '').toLowerCase();
+        const matched = targetToursList.find(t => (t.headlinerClientName || '').toLowerCase() === headliner);
+        if (matched) {
+          tourId = matched.id;
+          tourTitle = matched.title;
+        }
+      }
+
+      // Check if this tour belongs to a community show / external list
+      if (tourId && isCommunityTourPackage({ id: tourId, title: tourTitle, headlinerClientName: s.headliner })) {
+        continue;
+      }
+
+      if (tourId) {
+        const isShowEmbargoed = s.status === 'Embargoed' || s.publication_status === 'embargoed_private' || s.is_published === false;
+        const resolvedHeadliner = s.headliner || s.name || 'Headliner Band';
+        
+        if (!tourMetaMap.has(tourId)) {
+          tourMetaMap.set(tourId, {
+            tourTitle: tourTitle || `${resolvedHeadliner} Tour 2026`,
+            headliner: resolvedHeadliner,
+            publicationStatus: s.publication_status || (isShowEmbargoed ? 'embargoed_private' : 'public_announced'),
+            embargoUntilDate: s.embargo_until_date
+          });
+        }
+
+        const stop: TourPackageStop = {
+          id: stopId || `stop_${s.id}`,
+          date: s.date || s.show_date || new Date().toISOString().split('T')[0],
+          venueName: s.venue_name || s.venue || s.name || 'Venue',
+          city: s.city || 'Tour City',
+          state: s.state_province || s.state || 'USA',
+          grossDeal: s.guarantee_amount || 2000,
+          loadInTime: extra.load_in_time || '15:00',
+          soundcheckTime: extra.soundcheck_time || '17:30',
+          doorsTime: s.doors_time || '19:00',
+          showStartTime: s.set_time || '20:00',
+          curfewTime: extra.curfew_time || '23:30',
+          venueContactName: s.promoter_contact || '',
+          venueContactPhone: extra.venue_phone || '',
+          venueContactEmail: extra.venue_email || '',
+          parkingNotes: s.parking_arrangements || '',
+          hospitalityNotes: extra.hospitality || '',
+          status: extra.stop_status || (s.status === 'Active' ? 'confirmed' : (s.status === 'Embargoed' ? 'advancing' : 'advancing')),
+          advancingDone: extra.advancing_done ?? true,
+          merchCutVenuePct: extra.merchCutVenuePct ?? 0
+        };
+
+        if (!stopsByTourId.has(tourId)) {
+          stopsByTourId.set(tourId, []);
+        }
+        stopsByTourId.get(tourId)!.push(stop);
+      }
+    }
+
+    // Merge extracted stops and statuses into target tours or instantiate newly discovered tours
+    stopsByTourId.forEach((extractedStops, tourId) => {
+      let tour = targetToursList.find(t => t.id === tourId);
+      const meta = tourMetaMap.get(tourId);
+
+      if (isCommunityTourPackage({ id: tourId, title: meta?.tourTitle, headlinerClientName: meta?.headliner })) {
+        return;
+      }
+
+      if (!tour && meta) {
+        // Instantiate new TourPackageRecord dynamically from Supabase shows
+        tour = {
+          id: tourId,
+          title: meta.tourTitle || 'Headline Tour 2026',
+          headlinerClientName: meta.headliner || 'Headliner Band',
+          publicationStatus: meta.publicationStatus || 'public_announced',
+          embargoUntilDate: meta.embargoUntilDate || new Date().toISOString().slice(0, 16),
+          bands: [
+            {
+              id: `pkg-b-${tourId}-1`,
+              name: meta.headliner || 'Headliner Band',
+              role: 'headliner',
+              setMinutes: 60,
+              guarantee: 2500,
+              guaranteeType: 'percentage',
+              percentageSplit: 60,
+              contactName: 'Tour Director',
+              contactPhone: '',
+              contactEmail: '',
+              sharedGearNotes: 'Provides full stage backline.',
+              membersCount: 4,
+              avatarColor: 'from-amber-600 to-yellow-950',
+              city: 'USA'
+            }
+          ],
+          stops: [],
+          vehicles: [...DEFAULT_SEED_VEHICLES],
+          backlineConfig: { ...DEFAULT_BACKLINE_CONFIG },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        targetToursList.unshift(tour);
+      }
+
+      if (tour) {
+        const existingStopIds = new Set(tour.stops.map(st => st.id));
+        const newStops = [...tour.stops];
+        for (const es of extractedStops) {
+          if (!existingStopIds.has(es.id)) {
+            newStops.push(es);
+            existingStopIds.add(es.id);
+          } else {
+            // Update in-place while preserving locally scouted/assigned venue names if DB show contains placeholder '?' or 'Venue'
+            const idx = newStops.findIndex(st => st.id === es.id);
+            if (idx >= 0) {
+              const existing = newStops[idx];
+              const isDbPlaceholder = !es.venueName || es.venueName === '?' || es.venueName === 'Venue' || es.venueName === 'TBD';
+              const finalVenueName = isDbPlaceholder && existing.venueName && existing.venueName !== '?' ? existing.venueName : es.venueName;
+              newStops[idx] = { ...existing, ...es, venueName: finalVenueName };
+            }
+          }
+        }
+        // Sort stops by date
+        newStops.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        tour.stops = newStops;
+
+        if (meta?.publicationStatus) {
+          tour.publicationStatus = meta.publicationStatus;
+        }
+        if (meta?.embargoUntilDate) {
+          tour.embargoUntilDate = meta.embargoUntilDate;
+        }
+      }
+    });
+
+    // Purge any community tours from targetToursList and memoryTours
+    for (let i = targetToursList.length - 1; i >= 0; i--) {
+      if (isCommunityTourPackage(targetToursList[i])) {
+        targetToursList.splice(i, 1);
+      }
+    }
+    this.memoryTours = this.memoryTours.filter(t => !isCommunityTourPackage(t));
+
+    this.saveToLocal();
+    this.notifyChanges();
+  }
+
   private async syncToCloud(tour: TourPackageRecord) {
+    if (isCommunityTourPackage(tour)) return;
+
+    const isPublished = tour.publicationStatus === 'public_announced';
+    const isEmbargoed = tour.publicationStatus === 'embargoed_private';
+
+    // 1. Push to server persistent API endpoint
     try {
-      const payload = {
+      fetch('/api/tour-packages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tour })
+      }).catch(() => {});
+    } catch (_) {}
+
+    // 2. Sync all stops directly to Supabase `shows` table with embargo & publication flags
+    try {
+      if (Array.isArray(tour.stops) && tour.stops.length > 0) {
+        for (const stop of tour.stops) {
+          const hexId = (stop.id || '').replace(/[^a-f0-9]/gi, '').padEnd(32, '0').slice(0, 32);
+          const stopUuid = hexId.slice(0, 8) + '-' + hexId.slice(8, 12) + '-4' + hexId.slice(13, 16) + '-a' + hexId.slice(17, 20) + '-' + hexId.slice(20, 32);
+
+          const showRecord = {
+            id: stopUuid,
+            creator_id: '24523979-7f72-422b-8fb6-85634345d81c',
+            show_name: `${tour.title} - ${stop.city || 'Tour Stop'}`,
+            headliner: tour.headlinerClientName || 'Headliner Band',
+            date: stop.date,
+            show_date: stop.date,
+            venue_name: stop.venueName || 'Venue',
+            venue: stop.venueName || 'Venue',
+            city: stop.city || 'Tour City',
+            state_province: stop.state || 'USA',
+            country: 'USA',
+            guarantee_amount: stop.grossDeal || 2000,
+            doors_time: stop.doorsTime || '19:00',
+            set_time: stop.showStartTime || '20:00',
+            promoter_contact: stop.venueContactName || '',
+            parking_arrangements: stop.parkingNotes || '',
+            status: isEmbargoed ? 'Embargoed' : 'Active',
+            is_managed_client_booking: true,
+            additional_notes: JSON.stringify({
+              tour_id: tour.id,
+              tour_title: tour.title,
+              stop_id: stop.id,
+              load_in_time: stop.loadInTime,
+              soundcheck_time: stop.soundcheckTime,
+              curfew_time: stop.curfewTime,
+              hospitality: stop.hospitalityNotes,
+              venue_email: stop.venueContactEmail,
+              venue_phone: stop.venueContactPhone,
+              stop_status: stop.status,
+              publication_status: tour.publicationStatus,
+              is_published: isPublished,
+              embargo_until_date: tour.embargoUntilDate
+            }),
+            support_lineup: Array.isArray(tour.bands) ? tour.bands.map(b => b.name).join(', ') : ''
+          };
+
+          supabase.from('shows').upsert(showRecord, { onConflict: 'id' }).then();
+        }
+      }
+    } catch (_) {}
+
+    // 3. Attempt direct Supabase tour_packages table upsert
+    try {
+      const fullPayload = {
         id: tour.id,
         title: tour.title,
         headliner_client_name: tour.headlinerClientName,
@@ -432,26 +1042,42 @@ class TourPackageManagerService {
         embargo_until_date: tour.embargoUntilDate,
         bands: tour.bands,
         stops: tour.stops,
-        updated_at: new Date().toISOString()
+        vehicles: tour.vehicles,
+        backline_config: tour.backlineConfig,
+        data: tour,
+        payload: tour,
+        updated_at: tour.updatedAt || new Date().toISOString()
       };
 
       const { error } = await supabase
         .from('tour_packages')
-        .upsert(payload, { onConflict: 'id' });
+        .upsert(fullPayload, { onConflict: 'id' });
 
       if (error) {
-        // Silently log; offline local storage preserves work uninterrupted
-        console.info('[TourPackageManager] Local persistence active; Supabase sync cached.');
+        await supabase
+          .from('tour_packages')
+          .upsert({
+            id: tour.id,
+            title: tour.title,
+            data: tour,
+            updated_at: tour.updatedAt || new Date().toISOString()
+          }, { onConflict: 'id' });
       }
-    } catch (e) {
-      console.info('[TourPackageManager] Supabase offline fallback active.');
+    } catch (_) {}
+
+    // 4. Notify app to retroactively refresh shows state across all feeds
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shows_updated_from_tour_manager', {
+        detail: { tour, stops: tour.stops }
+      }));
     }
   }
 
   private async deleteFromCloud(tourId: string) {
     try {
+      fetch(`/api/tour-packages/${tourId}`, { method: 'DELETE' }).catch(() => {});
       await supabase.from('tour_packages').delete().eq('id', tourId);
-    } catch {}
+    } catch (_) {}
   }
 
   private saveToLocal() {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { StorefrontView } from './StorefrontView';
 import { InboxTerminal } from '../messaging/InboxTerminal';
 import { CreatePostCard } from './CreatePostCard';
@@ -10,6 +10,7 @@ import { ClipsView } from './ClipsView';
 import { formatPostTimestamp } from '../../utils/socialFeedUtils';
 import { getComposerRoleTheme } from './CreatePostCard';
 import { mergePostWithReactions } from './utils/reactionStore';
+import { isMiguelNameOrProfile } from './utils/profileUtils';
 
 export const FeedViewRouter: React.FC<any> = (props) => {
   const [feedStreamScope, setFeedStreamScope] = React.useState<'all' | 'workspace'>('all');
@@ -114,6 +115,8 @@ export const FeedViewRouter: React.FC<any> = (props) => {
     handleAddComment,
     setEditingPostId,
     setEditingPostText,
+    editingPostImages,
+    setEditingPostImages,
     handleSaveEdit,
     handleDeletePost,
     setCheckoutItem,
@@ -154,6 +157,8 @@ export const FeedViewRouter: React.FC<any> = (props) => {
     getProfileForUser,
     getPostAuthorDisplayName,
   } = props;
+
+  const [selectedForumThreadId, setSelectedForumThreadId] = useState<string | null>(null);
 
   return (
     <>
@@ -253,6 +258,22 @@ export const FeedViewRouter: React.FC<any> = (props) => {
                   setEventTicketUrl={props.setEventTicketUrl}
                   eventData={props.eventData}
                   setEventData={props.setEventData}
+                  classifiedType={props.classifiedType}
+                  setClassifiedType={props.setClassifiedType}
+                  classifiedTitle={props.classifiedTitle}
+                  setClassifiedTitle={props.setClassifiedTitle}
+                  classifiedPrice={props.classifiedPrice}
+                  setClassifiedPrice={props.setClassifiedPrice}
+                  classifiedCondition={props.classifiedCondition}
+                  setClassifiedCondition={props.setClassifiedCondition}
+                  classifiedBrand={props.classifiedBrand}
+                  setClassifiedBrand={props.setClassifiedBrand}
+                  classifiedYear={props.classifiedYear}
+                  setClassifiedYear={props.setClassifiedYear}
+                  classifiedLocation={props.classifiedLocation}
+                  setClassifiedLocation={props.setClassifiedLocation}
+                  classifiedDescription={props.classifiedDescription}
+                  setClassifiedDescription={props.setClassifiedDescription}
                 />
               </div>
 
@@ -267,7 +288,16 @@ export const FeedViewRouter: React.FC<any> = (props) => {
       {(() => {
         const filteredFeed = feed.filter(post => {
           // Hide quiet vault uploads / gallery-only items from the public feed
-          if (post.is_gallery_only === true || post.post_to_feed === false || post.hidden_from_feed === true || post.gallery_only === true) {
+          if (
+            post.is_gallery_only === true ||
+            post.post_to_feed === false ||
+            post.hidden_from_feed === true ||
+            post.gallery_only === true ||
+            post.is_archived_asset === true ||
+            post.content === 'Archived Profile Photo' ||
+            post.content === 'Archived Cover Photo' ||
+            String(post.content || '').startsWith('Archived ')
+          ) {
             return false;
           }
 
@@ -417,17 +447,81 @@ export const FeedViewRouter: React.FC<any> = (props) => {
                 post.tag?.toLowerCase().includes('gallery') ||
                 post.type === 'photo';
               if (!isPhoto) return false;
-            } else if (filter === 'following') {
-              const authorName = (post?.author?.name || (post as any)?.profile?.name || (post as any)?.author_name || '').toLowerCase();
-              const isAuthorFollowed = (discoverProfiles || []).some(p => (p?.name || '').toLowerCase() === authorName && p.followed);
+            } else if (filter === 'bulletin' || filter === 'gear' || filter === 'classifieds') {
+              const isBulletin =
+                Boolean(post.classifiedData || post.classified_data) ||
+                post.category === 'gear' ||
+                post.category === 'classifieds' ||
+                post.type === 'gear' ||
+                post.type === 'classifieds' ||
+                ['GEAR SWAP', 'CLASSIFIED', 'CLASSIFIEDS', 'BULLETIN', 'GEAR'].includes(post.tag?.toUpperCase() || '');
+              if (!isBulletin) return false;
+            } else if (filter === 'followed' || filter === 'following') {
+              const authorName = (post?.author?.name || (post as any)?.profile?.name || (post as any)?.author_name || (post as any)?.authorName || '').toLowerCase().trim();
+              const authorId = post?.author?.id || post?.author_id || post?.profile_id || post?.user_id || post?.band_id;
+              const authorHandle = (post?.author?.handle || post?.handle || post?.console_handle || '').toLowerCase().trim().replace(/^@/, '');
+
+              // Check local storage follows
+              let localFollows: Record<string, boolean> = {};
+              try {
+                localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
+              } catch (e) {}
+
+              const isLocallyFollowed = Boolean(
+                (authorId && localFollows[authorId]) ||
+                (authorName && localFollows[authorName]) ||
+                (authorHandle && localFollows[authorHandle])
+              );
+
+              const isDiscoverFollowed = (discoverProfiles || []).some(p => {
+                if (!p?.followed) return false;
+                const pName = (p?.name || p?.band_name || '').toLowerCase().trim();
+                const pHandle = (p?.handle || '').toLowerCase().trim().replace(/^@/, '');
+                const pId = p?.id;
+                return (
+                  (authorName && pName === authorName) ||
+                  (authorId && pId === authorId) ||
+                  (authorHandle && pHandle && pHandle === authorHandle)
+                );
+              });
+
+              const isAllProfilesFollowed = (props.allProfiles || []).some((p: any) => {
+                if (!p?.followed && !p?.is_followed) return false;
+                const pName = (p?.name || p?.full_name || p?.band_name || '').toLowerCase().trim();
+                const pId = p?.id;
+                return (
+                  (authorName && pName === authorName) ||
+                  (authorId && pId === authorId)
+                );
+              });
+
+              const isFollowedInUserProfile = Boolean(
+                userProfile?.following?.includes(authorId) ||
+                userProfile?.followed_artists?.includes(authorId) ||
+                userProfile?.saved_bands?.includes(authorId) ||
+                (authorName && userProfile?.following?.some((f: any) => typeof f === 'string' && f.toLowerCase() === authorName))
+              );
+
               const isSelf = Boolean(
-                (post?.author?.name || '') === profileFullLegalName ||
-                (userProfile && (post?.author?.name || '') === userProfile?.name) ||
+                (authorName && authorName === (profileFullLegalName || '').toLowerCase()) ||
+                (userProfile?.name && authorName === userProfile.name.toLowerCase()) ||
+                (userProfile?.console_handle && (
+                  (authorHandle && authorHandle === userProfile.console_handle.toLowerCase().replace(/^@/, '')) ||
+                  (authorName && authorName.includes(userProfile.console_handle.toLowerCase().replace(/^@/, '')))
+                )) ||
                 post.author?.isYou ||
                 post.isYou ||
-                (userProfile?.id && (post.author?.id === userProfile.id || post.profile_id === userProfile.id || post.user_id === userProfile.id))
+                (userProfile?.id && (
+                  post.author?.id === userProfile.id || 
+                  post.profile_id === userProfile.id || 
+                  post.user_id === userProfile.id ||
+                  post.author_id === userProfile.id
+                ))
               );
-              if (!isAuthorFollowed && !isSelf) return false;
+
+              if (!isLocallyFollowed && !isDiscoverFollowed && !isAllProfilesFollowed && !isFollowedInUserProfile && !isSelf) {
+                return false;
+              }
             }
           }
           return true;
@@ -444,21 +538,42 @@ export const FeedViewRouter: React.FC<any> = (props) => {
         const isFilterActive = Boolean(props.activeFeedCategoryFilter && props.activeFeedCategoryFilter !== 'all');
 
         const postsToPass = filteredFeed.length > 0 ? filteredFeed.map((p: any) => {
-          const isSelf = Boolean(
-            p.author?.isYou ||
-            p.isYou ||
-            (userProfile?.id && (p.author?.id === userProfile.id || p.profile_id === userProfile.id || p.user_id === userProfile.id)) ||
-            (userProfile?.console_handle && p.author?.name && (
-              p.author.name.toLowerCase().includes(userProfile.console_handle.toLowerCase().replace(/^@/, '')) ||
-              (p.authorName && p.authorName.toLowerCase().includes(userProfile.console_handle.toLowerCase().replace(/^@/, '')))
-            ))
+          const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+          const pAuthorName = String(p.author?.name || p.authorName || '').toLowerCase().trim();
+          const pAuthorHandle = String(p.author?.handle || p.authorHandle || p.author?.console_handle || '').toLowerCase().trim();
+          const cleanUserHandle = String(userProfile?.console_handle || userProfile?.handle || '').toLowerCase().replace(/^@/, '').trim();
+          const cleanUserName = String(userProfile?.name || userProfile?.full_name || '').toLowerCase().trim();
+          
+          const isHandleMatch = cleanUserHandle && cleanUserHandle !== 'user' && (
+            pAuthorHandle === `@${cleanUserHandle}` ||
+            pAuthorHandle === cleanUserHandle ||
+            pAuthorName === `@${cleanUserHandle}` ||
+            pAuthorName === cleanUserHandle
           );
+          const isNameMatch = cleanUserName && cleanUserName !== 'user' && cleanUserName !== 'nexus member' && cleanUserName !== 'anonymous' && (
+            pAuthorName === cleanUserName
+          );
+          const isIdMatch = userProfile?.id && (p.author?.id === userProfile.id || p.profile_id === userProfile.id || p.user_id === userProfile.id || p.authorId === userProfile.id);
+
+          const isSelf = Boolean(
+            isIdMatch ||
+            isHandleMatch ||
+            isNameMatch ||
+            (isOwnerMiguel && (pAuthorName.includes('goregrinder') || pAuthorName.includes('bdmceo') || pAuthorHandle.includes('bdmceo')))
+          );
+
+          const postWorkspace = (p.workspace_type || p.workspaceType || p.author?.workspace_type || p.author?.workspaceType || '').toLowerCase();
+          const isBandPost = postWorkspace === 'band' || p.authorRole === 'Band / Artist' || p.author?.role === 'Band / Artist' || Boolean(p.author?.isBand);
 
           const rawAvatar = typeof p.author?.avatar === 'string' ? p.author.avatar : (typeof p.authorAvatar === 'string' ? p.authorAvatar : undefined);
           const isGenericUiAvatar = rawAvatar && (rawAvatar.includes('ui-avatars.com') || rawAvatar === 'U' || rawAvatar === 'Anon');
-          const resolvedAuthorAvatar = (!isGenericUiAvatar && rawAvatar)
-            ? rawAvatar
-            : (isSelf ? liveUserAvatar : (!isGenericUiAvatar ? rawAvatar : undefined));
+
+          // For personal/industry pro posts by current user, liveUserAvatar is authoritative over stale/corrupted snapshots
+          const resolvedAuthorAvatar = (isSelf && !isBandPost && liveUserAvatar)
+            ? liveUserAvatar
+            : ((!isGenericUiAvatar && rawAvatar)
+              ? rawAvatar
+              : (isSelf ? liveUserAvatar : (!isGenericUiAvatar ? rawAvatar : undefined)));
 
           const parsedPost = {
             id: p.id,
@@ -489,6 +604,9 @@ export const FeedViewRouter: React.FC<any> = (props) => {
             merchData: p.merchData,
             ticketData: p.ticketData,
             eventData: p.eventData || p.event_data,
+            classifiedData: p.classifiedData || p.classified_data,
+            classified_data: p.classifiedData || p.classified_data,
+            category: p.category || (p.classifiedData?.listingType) || (p.classified_data?.listingType),
             isVipExclusive: p.isVipExclusive || p.is_vip_exclusive,
             requiredTier: p.requiredTier || p.required_tier,
             vipDiscountPct: p.vipDiscountPct || p.vip_discount_pct,
@@ -520,7 +638,7 @@ export const FeedViewRouter: React.FC<any> = (props) => {
         }) : (isFilterActive ? [] : labelPosts.map((p: any) => mergePostWithReactions(p, userProfile?.id)));
 
         return (
-          <div className="max-w-2xl mx-auto pt-2 pb-2 px-4">
+          <div className="max-w-2xl mx-auto pt-2 pb-28 sm:pb-24 px-4">
             {/* Stream Scope Toggle Bar */}
             {isWorkspace && (
               <div className="flex items-center justify-between mb-3 px-1">
@@ -559,19 +677,20 @@ export const FeedViewRouter: React.FC<any> = (props) => {
             {isFilterActive && filteredFeed.length === 0 && (
               <div className="bg-[#0b0b0d] border border-zinc-800/80 rounded-2xl p-8 text-center my-4 space-y-3 shadow-xl animate-in fade-in duration-200">
                 <div className="w-12 h-12 mx-auto rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-xl shadow-inner">
+                  {(props.activeFeedCategoryFilter === 'followed' || props.activeFeedCategoryFilter === 'following') && '⭐'}
                   {props.activeFeedCategoryFilter === 'tour' && '🎟️'}
                   {props.activeFeedCategoryFilter === 'merch' && '👕'}
                   {props.activeFeedCategoryFilter === 'audio' && '🎙️'}
                   {props.activeFeedCategoryFilter === 'photos' && '📸'}
-                  {props.activeFeedCategoryFilter === 'following' && '⭐'}
+                  {props.activeFeedCategoryFilter === 'bulletin' && '📌'}
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-white uppercase tracking-wider">
-                    No {props.activeFeedCategoryFilter === 'tour' ? 'Tour Dates' : props.activeFeedCategoryFilter === 'merch' ? 'Merch Drops' : props.activeFeedCategoryFilter === 'audio' ? 'Demos & Tapes' : props.activeFeedCategoryFilter === 'photos' ? 'Photo Pit Snaps' : 'Followed Posts'} Yet
+                    No {(props.activeFeedCategoryFilter === 'followed' || props.activeFeedCategoryFilter === 'following') ? 'Followed Posts' : props.activeFeedCategoryFilter === 'tour' ? 'Tour Dates' : props.activeFeedCategoryFilter === 'merch' ? 'Merch Drops' : props.activeFeedCategoryFilter === 'audio' ? 'Demos & Tapes' : props.activeFeedCategoryFilter === 'bulletin' ? 'Bulletin & Gear Notices' : 'Photo Pit Snaps'} Yet
                   </h3>
                   <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
-                    {props.activeFeedCategoryFilter === 'following'
-                      ? 'Follow more bands, venues, and scene members to see their posts here.'
+                    {(props.activeFeedCategoryFilter === 'followed' || props.activeFeedCategoryFilter === 'following')
+                      ? 'Follow more bands, venues, labels, and scene members to see their posts exclusively here.'
                       : `There are currently no active posts in the stream tagged with this category.`}
                   </p>
                 </div>
@@ -631,12 +750,37 @@ export const FeedViewRouter: React.FC<any> = (props) => {
                 setFeed(prev => prev.map(p => p.id === postId ? { ...p, is_pinned: !(p as any).is_pinned } : p));
                 setLabelPosts(prev => prev.map(p => p.id === postId ? { ...p, is_pinned: !p.is_pinned } : p));
               }}
-              onEditPost={(postId, newText) => {
+              onEditPost={(postId, newText, newImages) => {
                 setEditingPostId(postId);
                 setEditingPostText(newText);
-                handleSaveEdit(postId);
-                setFeed(prev => prev.map(p => p.id === postId ? { ...p, content: newText, message: newText } : p));
-                setLabelPosts(prev => prev.map(p => p.id === postId ? { ...p, content: newText, message: newText } : p));
+                const resolvedImages = newImages || [];
+                const primaryMedia = resolvedImages.length > 0 ? resolvedImages[0] : null;
+                if (setEditingPostImages) {
+                  setEditingPostImages(resolvedImages);
+                }
+                handleSaveEdit(postId, newText, resolvedImages);
+                setFeed(prev => prev.map(p => p.id === postId ? {
+                  ...p,
+                  content: newText,
+                  message: newText,
+                  text: newText,
+                  images: resolvedImages,
+                  image: primaryMedia,
+                  image_url: primaryMedia || undefined,
+                  mediaUrl: primaryMedia || undefined,
+                  media_url: primaryMedia || undefined
+                } : p));
+                setLabelPosts(prev => prev.map(p => p.id === postId ? {
+                  ...p,
+                  content: newText,
+                  message: newText,
+                  text: newText,
+                  images: resolvedImages,
+                  image: primaryMedia,
+                  image_url: primaryMedia || undefined,
+                  mediaUrl: primaryMedia || undefined,
+                  media_url: primaryMedia || undefined
+                } : p));
               }}
               onDeletePost={(postId) => {
                 handleDeletePost(postId, true);
@@ -685,6 +829,12 @@ export const FeedViewRouter: React.FC<any> = (props) => {
               discoverProfiles={discoverProfiles}
               onFollowProfile={props.handleFollowProfile}
               onTriggerNotification={triggerNotification}
+              onNavigateToForum={(threadId) => {
+                if (threadId) {
+                  setSelectedForumThreadId(threadId);
+                }
+                setActiveTab('forum');
+              }}
             />
           </div>
         );
@@ -726,6 +876,12 @@ export const FeedViewRouter: React.FC<any> = (props) => {
         chats={props.chats}
         setChats={props.setChats}
         allProfiles={allProfiles}
+        setFeed={setFeed}
+        setLabelPosts={setLabelPosts}
+        onAddFeedPost={(p: any) => {
+          setFeed((prev: any[]) => [p, ...prev]);
+          setLabelPosts((prev: any[]) => [p, ...prev]);
+        }}
       />
 
       {/* FORUM VIEW */}
@@ -737,6 +893,8 @@ export const FeedViewRouter: React.FC<any> = (props) => {
           profileAvatarUrl={profileAvatarUrl}
           discoverProfiles={discoverProfiles}
           allProfiles={allProfiles}
+          initialThreadId={selectedForumThreadId}
+          onClearInitialThread={() => setSelectedForumThreadId(null)}
         />
       )}
 

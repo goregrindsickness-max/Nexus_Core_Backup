@@ -72,6 +72,21 @@ export interface TourEmbedData {
   }[];
 }
 
+export interface ClassifiedPostData {
+  listingId?: string;
+  listingType?: 'gear' | 'classifieds' | string;
+  title?: string;
+  price?: number;
+  condition?: string;
+  brand?: string;
+  year?: string;
+  location?: string;
+  description?: string;
+  image?: string;
+  seller?: string;
+  contactHint?: string;
+}
+
 export interface FeedPost {
   id: string;
   type?: string;
@@ -124,6 +139,7 @@ export interface FeedPost {
     name: string;
     price: number;
     thumbnail: string;
+    images?: string[];
     sizes: string[];
     isTimed?: boolean;
     durationHours?: number;
@@ -131,10 +147,14 @@ export interface FeedPost {
     expiresAt?: string;
     stock?: number;
     totalStock?: number;
+    isUnlimited?: boolean;
+    description?: string;
     allowNegotiation?: boolean;
     condition?: string;
     category?: string;
   };
+  classifiedData?: ClassifiedPostData;
+  classified_data?: ClassifiedPostData;
   eventData?: any;
   isVipExclusive?: boolean;
   requiredTier?: string;
@@ -170,7 +190,7 @@ export interface TimelineFeedProps {
   onEmojiReact: (postId: string, reactionType: string) => void;
   onAddComment: (postId: string, commentText: string, parentCommentId?: string) => void;
   onTogglePin?: (postId: string) => void;
-  onEditPost?: (postId: string, newText: string) => void;
+  onEditPost?: (postId: string, newText: string, newImages?: string[]) => void;
   onDeletePost?: (postId: string) => void;
   onOpenProfile?: (authorId: string, authorName: string) => void;
   onPlaySong?: (song: SongEmbedData) => void;
@@ -182,6 +202,7 @@ export interface TimelineFeedProps {
   onTriggerNotification?: (msg: string) => void;
   discoverProfiles?: any[];
   onFollowProfile?: (profile: any) => void;
+  onNavigateToForum?: (threadId?: string) => void;
 }
 
 export const REACTION_PALETTE = [

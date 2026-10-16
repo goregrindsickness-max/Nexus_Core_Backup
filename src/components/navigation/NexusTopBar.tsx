@@ -1,11 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Shield, Sparkles, ChevronDown, CheckCircle2, CloudOff, RefreshCcw, 
+  Shield, Sparkles, ChevronDown, ChevronUp, CheckCircle2, CloudOff, RefreshCcw, 
   Bell, Repeat, User, Plus, ArrowRight, Settings, X, Lock, Home, Radio,
   Volume2, Layers, Wifi, Zap, Activity, Compass, Music, Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { hasRegisteredWorkspace, normalizeRegisteredWorkspaces, Band, UserProfile } from '../../types';
+import { 
+  resolveEffectiveAvatar, 
+  resolveCreativeName, 
+  resolveCreativeHandle, 
+  resolvePromoterName, 
+  resolvePromoterHandle,
+  resolveBandName,
+  resolveBandHandle 
+} from '../../utils/bandProfileUtils';
 import MarqueeText from '../MarqueeText';
 
 export interface NexusTopBarProps {
@@ -74,6 +83,9 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
   const [internalRoleMenuOpen, setInternalRoleMenuOpen] = useState(false);
   const roleMenuOpen = externalV2RoleMenuOpen !== undefined ? externalV2RoleMenuOpen : internalRoleMenuOpen;
   const setRoleMenuOpen = externalSetV2RoleMenuOpen || setInternalRoleMenuOpen;
+
+  // Collapsible state for Active Managed Client / Band switcher card (collapsed by default to shrink vertical footprint)
+  const [isBandClientSectionExpanded, setIsBandClientSectionExpanded] = useState(false);
 
   // Live ticker updates
   const [tickerIndex, setTickerIndex] = useState(0);
@@ -188,7 +200,7 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
           >
             <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
             {unreadNotificationsCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse ring-2 ring-black" />
+              <span className={`absolute top-1 right-1 w-2 h-2 rounded-full animate-pulse ring-2 ring-black ${userProfile?.active_workspace === 'band' ? 'bg-[#00ffcc]' : 'bg-red-500'}`} />
             )}
           </button>
 
@@ -207,39 +219,45 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
           <div className="relative">
             <button
               onClick={() => setRoleMenuOpen(!roleMenuOpen)}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all active:scale-95 overflow-hidden shadow-md cursor-pointer hover:border-emerald-400 ml-1"
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-900 flex items-center justify-center font-black text-white focus:outline-none transition-all active:scale-95 overflow-hidden shadow-md cursor-pointer ml-1 ${
+                userProfile?.active_workspace === 'band' 
+                  ? 'border-2 border-[#39ff14] shadow-[0_0_12px_rgba(57,255,20,0.8)]' 
+                  : 'border border-zinc-700 hover:border-emerald-400 focus:ring-2 focus:ring-emerald-500'
+              }`}
             >
               {(() => {
                 const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                if (r === 'band') return activeBand?.logo_url || null;
-                if (r === 'creative') return userProfile?.creative_avatar || null;
-                if (r === 'label') return userProfile?.label_avatar || null;
-                if (r === 'promoter') return userProfile?.promoter_logo || null;
-                return userProfile?.avatar_url || null;
+                return resolveEffectiveAvatar(r, activeBand, userProfile);
               })() ? (
                 <img 
                   src={(() => {
                     const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                    if (r === 'band') return activeBand?.logo_url;
-                    if (r === 'creative') return userProfile?.creative_avatar;
-                    if (r === 'label') return userProfile?.label_avatar;
-                    if (r === 'promoter') return userProfile?.promoter_logo;
-                    return userProfile?.avatar_url;
-                  })() || ""} 
+                    return resolveEffectiveAvatar(r, activeBand, userProfile) || "";
+                  })()} 
                   className="w-full h-full object-cover" 
                   alt="" 
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
+                    e.currentTarget.src = r === 'creative' 
+                      ? 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150' 
+                      : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100';
+                  }}
                 />
               ) : (
-                <span className="text-emerald-400 text-sm font-bold font-mono">
+                <span className="text-emerald-400 text-xs font-bold font-mono">
                   {(() => {
                     const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                    if (r === 'band') return activeBand?.name;
-                    if (r === 'creative') return userProfile?.creative_metadata?.business_name;
-                    if (r === 'label') return userProfile?.label_company_name;
-                    if (r === 'promoter') return userProfile?.promoter_metadata?.brand_name;
-                    return userProfile?.name;
-                  })()?.charAt(0).toUpperCase() || 'U'}
+                    if (r === 'band') return (activeBand?.name || 'BD').slice(0, 2).toUpperCase();
+                    if (r === 'creative') return (userProfile?.creative_metadata?.business_name || 'CR').slice(0, 2).toUpperCase();
+                    if (r === 'label') return (userProfile?.label_company_name || 'LB').slice(0, 2).toUpperCase();
+                    if (r === 'promoter') return (userProfile?.promoter_metadata?.brand_name || 'PR').slice(0, 2).toUpperCase();
+                    const name = (userProfile?.full_name || userProfile?.name || 'User').replace(/^@+/, '').trim();
+                    const parts = name.split(/\s+/).filter(Boolean);
+                    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+                    return name.slice(0, 2).toUpperCase() || 'U';
+                  })()}
                 </span>
               )}
             </button>
@@ -257,37 +275,36 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                       <div className="w-10 h-10 rounded-full bg-rose-950/40 border border-rose-500/40 flex items-center justify-center font-black text-rose-400 shrink-0 overflow-hidden">
                         {(() => {
                           const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                          if (r === 'band') return activeBand?.logo_url || null;
-                          if (r === 'creative') return userProfile?.creative_avatar || null;
-                          if (r === 'label') return userProfile?.label_avatar || null;
-                          if (r === 'promoter') return userProfile?.promoter_logo || null;
-                          return userProfile?.avatar_url || null;
-                        })() ? (
-                          <img 
-                            src={(() => {
-                              const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                              if (r === 'band') return activeBand?.logo_url;
-                              if (r === 'creative') return userProfile?.creative_avatar;
-                              if (r === 'label') return userProfile?.label_avatar;
-                              if (r === 'promoter') return userProfile?.promoter_logo;
-                              return userProfile?.avatar_url;
-                            })() || ""} 
-                            className="w-full h-full object-cover" 
-                            alt="" 
-                            referrerPolicy="no-referrer" 
-                          />
-                        ) : (
-                          <div className="font-mono text-sm">
-                            {(() => {
-                              const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
-                              if (r === 'band') return activeBand?.name;
-                              if (r === 'creative') return userProfile?.creative_metadata?.business_name;
-                              if (r === 'label') return userProfile?.label_company_name;
-                              if (r === 'promoter') return userProfile?.promoter_metadata?.brand_name;
-                              return userProfile?.name;
-                            })()?.charAt(0).toUpperCase() || 'U'}
-                          </div>
-                        )}
+                          const avatar = resolveEffectiveAvatar(r, activeBand, userProfile);
+                          if (avatar) {
+                            return (
+                              <img 
+                                src={avatar} 
+                                className="w-full h-full object-cover" 
+                                alt="" 
+                                referrerPolicy="no-referrer" 
+                                onError={(e) => {
+                                  e.currentTarget.onerror = null;
+                                  e.currentTarget.src = r === 'creative' 
+                                    ? 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150' 
+                                    : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100';
+                                }}
+                              />
+                            );
+                          }
+                          const name = r === 'band' 
+                            ? resolveBandName(activeBand, userProfile) 
+                            : r === 'creative' 
+                            ? resolveCreativeName(userProfile) 
+                            : r === 'promoter' 
+                            ? resolvePromoterName(userProfile) 
+                            : (userProfile?.name || 'U');
+                          return (
+                            <div className="font-mono text-sm">
+                              {name?.charAt(0).toUpperCase() || 'U'}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="overflow-hidden flex-1">
                         <h4 className="text-sm font-black text-white truncate flex items-center gap-1.5">
@@ -295,13 +312,13 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                             const r = userProfile?.active_workspace || userProfile?.account_type || 'industry_pro';
                             if (r === 'industry_pro') return 'Industry Pro';
                             if (r === 'fan_only') return 'Fan Only';
-                            if (r === 'promoter') return userProfile?.promoter_metadata?.brand_name || 'Promoter Gateway';
-                            if (r === 'creative') return userProfile?.creative_metadata?.business_name || 'Creative Hub';
+                            if (r === 'promoter') return resolvePromoterName(userProfile);
+                            if (r === 'creative') return resolveCreativeName(userProfile);
                             if (r === 'label') return userProfile?.label_company_name || 'Pro Label';
                             if (userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager') {
                               return userProfile?.full_name || userProfile?.legal_name || userProfile?.name || 'Miguel Goregrinder Medina';
                             }
-                            return activeBand?.name || userProfile?.bandName || 'Artist';
+                            return resolveBandName(activeBand, userProfile);
                           })()}
                           <span className="text-[7px] font-black tracking-widest uppercase bg-emerald-500/25 border border-emerald-500/45 text-emerald-400 px-1 py-0.5 rounded">
                             {activeClearanceLevel === 5 ? 'OWNER' : `LVL ${activeClearanceLevel}`}
@@ -313,154 +330,203 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                       </div>
                     </div>
 
-                    {/* View My Profile Button */}
+                    {/* View Profile Button */}
                     <button 
                       onClick={() => {
                         setRoleMenuOpen(false);
-                        if (handleOpenMyProfile) handleOpenMyProfile();
+                        const isBandActive = userProfile?.active_workspace === 'band' && activeBand;
+                        if (isBandActive) {
+                          const bandName = activeBand?.name || 'Band';
+                          const bandHandle = (activeBand as any)?.custom_slug || (activeBand as any)?.slug || '@band';
+                          const bandLogo = (activeBand as any)?.logo_url || null;
+                          const bandCover = (activeBand as any)?.banner_url || (activeBand as any)?.cover_url || null;
+                          const bandBio = activeBand?.bio || 'Band profile.';
+                          const detailPayload = {
+                            id: activeBand?.id || 'band:active',
+                            name: bandName,
+                            legalName: bandName,
+                            handle: bandHandle.startsWith('@') ? bandHandle : `@${bandHandle}`,
+                            avatar: bandLogo,
+                            avatar_url: bandLogo,
+                            logo: bandLogo,
+                            logo_url: bandLogo,
+                            banner: bandCover,
+                            banner_url: bandCover,
+                            cover: bandCover,
+                            cover_url: bandCover,
+                            location: activeBand?.homebase || 'Global',
+                            role: 'Band / Artist',
+                            account_type: 'band',
+                            type: 'band',
+                            isPersonal: false,
+                            isBandProfile: true,
+                            isYou: true,
+                            badges: ['⚡ Band Core', '🎵 Metal'],
+                            bio: bandBio
+                          };
+                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+                          triggerNotification?.("⚡ Opening Band Public Profile...");
+                        } else if (handleOpenMyProfile) {
+                          handleOpenMyProfile();
+                        }
                       }}
                       className="w-full flex items-center justify-center gap-2 mt-2 mb-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors cursor-pointer shadow-md shadow-emerald-950/30"
                     >
                       <User className="w-3.5 h-3.5" />
-                      View My Profile
+                      {userProfile?.active_workspace === 'band' ? 'VIEW BAND PROFILE' : 'VIEW MY PROFILE'}
                     </button>
 
-                    {/* Default Band/Artist Tab Section - Only if band is registered */}
+                    {/* Default Band/Artist Tab Section - Only if band is registered (Collapsed by default to shrink vertical footprint) */}
                     {hasRegisteredWorkspace(userProfile, 'band') && activeBand && (
-                      <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 mb-3">
-                        <div className="flex items-center gap-2.5 pb-2 border-b border-zinc-800/60">
-                          <div className="w-8 h-8 rounded-full overflow-hidden border border-[#00ffcc]/30 bg-zinc-950 shrink-0">
-                            {activeBand?.logo_url ? (
-                              <img src={activeBand.logo_url} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                      <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-2.5 mb-3 transition-all">
+                        {/* Compact Header Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={() => setIsBandClientSectionExpanded(!isBandClientSectionExpanded)}
+                          className="w-full flex items-center justify-between gap-2 text-left cursor-pointer hover:bg-zinc-800/40 p-1 rounded-lg transition-colors"
+                          title={isBandClientSectionExpanded ? "Collapse client options" : "Expand client options"}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-7 h-7 rounded-full overflow-hidden border border-[#00ffcc]/30 bg-zinc-950 shrink-0">
+                              {activeBand?.logo_url ? (
+                                <img src={activeBand.logo_url} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-[#00ffcc] font-mono text-xs font-bold">
+                                  {activeBand?.name?.charAt(0).toUpperCase() || 'B'}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-grow min-w-0">
+                              <span className="block text-[7px] font-mono font-bold text-zinc-500 uppercase tracking-widest leading-none mb-0.5">
+                                {userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager' ? 'ACTIVE MANAGED CLIENT' : 'ACTIVE BAND / ARTIST'}
+                              </span>
+                              <h4 className="text-[11px] font-bold text-white truncate uppercase tracking-tight leading-tight">
+                                {activeBand?.name || 'No Band Name'}
+                              </h4>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase">
+                              {isBandClientSectionExpanded ? 'Hide' : 'Expand'}
+                            </span>
+                            {isBandClientSectionExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-zinc-400" />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center text-[#00ffcc] font-mono text-xs font-bold">
-                                {activeBand?.name?.charAt(0).toUpperCase() || 'B'}
-                              </div>
+                              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
                             )}
                           </div>
-                          <div className="flex-grow min-w-0">
-                            <span className="block text-[7px] font-mono font-bold text-zinc-500 uppercase tracking-widest leading-none mb-0.5">
-                              {userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager' ? 'ACTIVE MANAGED CLIENT' : 'ACTIVE BAND / ARTIST'}
-                            </span>
-                            <h4 className="text-[11px] font-bold text-white truncate uppercase tracking-tight leading-tight">
-                              {activeBand?.name || 'No Band Name'}
-                            </h4>
-                            <p className="text-[8px] font-mono text-[#00ffcc] leading-none mt-0.5 truncate">
-                              {activeBand
-                                ? (Array.isArray(activeBand.micro_genres) && activeBand.micro_genres.length > 0
-                                    ? activeBand.micro_genres.slice(0, 3).join(' • ')
-                                    : Array.isArray((activeBand as any).genre_tags) && (activeBand as any).genre_tags.length > 0
-                                    ? (activeBand as any).genre_tags.slice(0, 3).join(' • ')
-                                    : activeBand.genre || 'Genre unspecified')
-                                : 'Genre unspecified'}
-                            </p>
-                          </div>
-                        </div>
+                        </button>
                         
-                        {/* Switch to Tour Manager Mode / Switch to Band Member Mode Button */}
-                        {(() => {
-                          const isTourManagerMode = userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager';
-                          
-                          if (isTourManagerMode) {
-                            return (
-                              <div className="mt-2.5 pt-2 border-t border-zinc-800/80 space-y-1.5">
-                                <div className="flex items-center justify-between px-0.5">
-                                  <span className="text-[8px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                                    <Compass className="w-3 h-3 text-amber-400 animate-spin" style={{ animationDuration: '10s' }} />
-                                    Identity: Tour Manager
-                                  </span>
-                                  <span className="text-[7.5px] font-mono px-1.5 py-0.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded font-bold uppercase tracking-wider">
-                                    TM MODE ACTIVE
-                                  </span>
+                        {/* Expandable Inner Controls */}
+                        {isBandClientSectionExpanded && (
+                          <div className="mt-2 pt-2 border-t border-zinc-800/80 animate-in fade-in duration-150">
+                            {/* Switch to Tour Manager Mode / Switch to Band Member Mode Button */}
+                            {(() => {
+                              const isTourManagerMode = userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager';
+                              
+                              if (isTourManagerMode) {
+                                return (
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between px-0.5">
+                                      <span className="text-[8px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                                        <Compass className="w-3 h-3 text-amber-400 animate-spin" style={{ animationDuration: '10s' }} />
+                                        Identity: Tour Manager
+                                      </span>
+                                      <span className="text-[7.5px] font-mono px-1.5 py-0.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded font-bold uppercase tracking-wider">
+                                        TM MODE ACTIVE
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const prevRole = userProfile?.previous_band_role || 'Vocals';
+                                        const updated: UserProfile = {
+                                          ...userProfile!,
+                                          band_role_mode: 'musician',
+                                          role: prevRole,
+                                        };
+                                        if (setUserProfile) setUserProfile(updated);
+                                        try {
+                                          localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                                          window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
+                                        } catch {}
+                                        triggerNotification?.(`🎸 Switched to Band Member (${prevRole}) Mode for ${activeBand.name}.`);
+                                      }}
+                                      className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700 hover:border-zinc-500 text-zinc-200 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
+                                      title="Switch identity back to Artist / Band Member mode"
+                                    >
+                                      <Music className="w-3 h-3 text-emerald-400" />
+                                      <span>Switch to Artist / Member Mode</span>
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between px-0.5">
+                                    <span className="text-[8px] font-mono font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                                      <Music className="w-3 h-3 text-emerald-400" />
+                                      Identity: {userProfile?.role || 'Vocals'}
+                                    </span>
+                                    <span className="text-[7.5px] font-mono px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded font-bold uppercase tracking-wider">
+                                      BAND MEMBER
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const currentRole = userProfile?.role || 'Vocals';
+                                      const updated: UserProfile = {
+                                        ...userProfile!,
+                                        band_role_mode: 'tour_manager',
+                                        previous_band_role: currentRole !== 'Tour Manager' ? currentRole : (userProfile?.previous_band_role || 'Vocals'),
+                                        role: 'Tour Manager',
+                                      };
+                                      if (setUserProfile) setUserProfile(updated);
+                                      try {
+                                        localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                                        window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
+                                      } catch {}
+                                      setActiveTab('home-v2');
+                                      if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
+                                      triggerNotification?.(`🧭 Switched to Tour Manager & Booking Agent Mode for ${activeBand.name}. Executive tour suite active.`);
+                                    }}
+                                    className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-amber-500/20 via-amber-500/15 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 border border-amber-500/40 hover:border-amber-400 text-amber-300 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
+                                    title="Switch to Tour Manager & Booking Agent executive identity"
+                                  >
+                                    <Compass className="w-3 h-3 text-amber-400" />
+                                    <span>Switch to Tour Manager Mode</span>
+                                  </button>
                                 </div>
+                              );
+                            })()}
+
+                            {/* Add Another Band/Artist Button */}
+                            {(() => {
+                              const currentLimit = 
+                                userProfile?.sub_tier === 'touring_pro_plus' || activePlan === 'touring-pro-plus' ? 5 :
+                                userProfile?.sub_tier === 'touring_pro' || activePlan === 'touring-pro' ? 2 :
+                                userProfile?.sub_tier === 'enterprise_circuit' ? 999 :
+                                userProfile?.sub_tier === 'power_user_pro' ? 2 : 1;
+                              
+                              return (
                                 <button
-                                  type="button"
                                   onClick={() => {
-                                    const prevRole = userProfile?.previous_band_role || 'Vocals';
-                                    const updated: UserProfile = {
-                                      ...userProfile!,
-                                      band_role_mode: 'musician',
-                                      role: prevRole,
-                                    };
-                                    if (setUserProfile) setUserProfile(updated);
-                                    try {
-                                      localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
-                                      window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
-                                    } catch {}
-                                    triggerNotification?.(`🎸 Switched to Band Member (${prevRole}) Mode for ${activeBand.name}.`);
+                                    setRoleMenuOpen(false);
+                                    setActiveTab('plans');
+                                    triggerNotification?.('Opening band roster manager. Register another band/artist here.');
                                   }}
-                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700 hover:border-zinc-500 text-zinc-200 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
-                                  title="Switch identity back to Artist / Band Member mode"
+                                  className="w-full mt-2 flex items-center justify-center gap-1.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-[#00ffcc] hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer"
                                 >
-                                  <Music className="w-3 h-3 text-emerald-400" />
-                                  <span>Switch to Artist / Member Mode</span>
+                                  <Plus className="w-3 h-3 text-[#00ffcc]" />
+                                  <span>Add Another Band/Artist ({bands.length}/{currentLimit})</span>
                                 </button>
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div className="mt-2.5 pt-2 border-t border-zinc-800/80 space-y-1.5">
-                              <div className="flex items-center justify-between px-0.5">
-                                <span className="text-[8px] font-mono font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                                  <Music className="w-3 h-3 text-emerald-400" />
-                                  Identity: {userProfile?.role || 'Vocals'}
-                                </span>
-                                <span className="text-[7.5px] font-mono px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded font-bold uppercase tracking-wider">
-                                  BAND MEMBER
-                                </span>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const currentRole = userProfile?.role || 'Vocals';
-                                  const updated: UserProfile = {
-                                    ...userProfile!,
-                                    band_role_mode: 'tour_manager',
-                                    previous_band_role: currentRole !== 'Tour Manager' ? currentRole : (userProfile?.previous_band_role || 'Vocals'),
-                                    role: 'Tour Manager',
-                                  };
-                                  if (setUserProfile) setUserProfile(updated);
-                                  try {
-                                    localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
-                                    window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
-                                  } catch {}
-                                  setActiveTab('home-v2');
-                                  if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
-                                  triggerNotification?.(`🧭 Switched to Tour Manager & Booking Agent Mode for ${activeBand.name}. Executive tour suite active.`);
-                                }}
-                                className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-amber-500/20 via-amber-500/15 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 border border-amber-500/40 hover:border-amber-400 text-amber-300 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
-                                title="Switch to Tour Manager & Booking Agent executive identity"
-                              >
-                                <Compass className="w-3 h-3 text-amber-400" />
-                                <span>Switch to Tour Manager Mode</span>
-                              </button>
-                            </div>
-                          );
-                        })()}
-
-                        {/* Add Another Band/Artist Button */}
-                        {(() => {
-                          const currentLimit = 
-                            userProfile?.sub_tier === 'touring_pro_plus' || activePlan === 'touring-pro-plus' ? 5 :
-                            userProfile?.sub_tier === 'touring_pro' || activePlan === 'touring-pro' ? 2 :
-                            userProfile?.sub_tier === 'enterprise_circuit' ? 999 :
-                            userProfile?.sub_tier === 'power_user_pro' ? 2 : 1;
-                          
-                          return (
-                            <button
-                              onClick={() => {
-                                setRoleMenuOpen(false);
-                                setActiveTab('plans');
-                                triggerNotification?.('Opening band roster manager. Register another band/artist here.');
-                              }}
-                              className="w-full mt-2.5 flex items-center justify-center gap-1.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-[#00ffcc] hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer"
-                            >
-                              <Plus className="w-3 h-3 text-[#00ffcc]" />
-                              <span>Add Another Band/Artist ({bands.length}/{currentLimit})</span>
-                            </button>
-                          );
-                        })()}
+                              );
+                            })()}
+                          </div>
+                        )}
                       </div>
                     )}
 

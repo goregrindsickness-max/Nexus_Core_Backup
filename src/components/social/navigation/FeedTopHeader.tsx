@@ -27,10 +27,47 @@ import {
   resolveBandName,
   resolveBandBio,
   resolveBandLocation,
+  resolveCreativeName,
+  resolveCreativeHandle,
+  resolveCreativeLogo,
+  resolveCreativeCover,
+  resolveCreativeBio,
+  resolveCreativeLocation,
   resolveEffectiveAvatar,
-  resolveEffectiveCover
+  resolveEffectiveCover,
+  resolvePromoterName,
+  resolvePromoterHandle
 } from '../../../utils/bandProfileUtils';
 import { BandWorkspaceNavBanner } from './BandWorkspaceNavBanner';
+import { PromoterWorkspaceNavBanner } from './PromoterWorkspaceNavBanner';
+import { isMiguelNameOrProfile } from '../utils/profileUtils';
+
+const HeaderAvatarImage: React.FC<{
+  src?: string | null;
+  alt?: string;
+  initials: string;
+  className?: string;
+  initialsClassName?: string;
+}> = ({ src, alt = '', initials, className = 'w-full h-full object-cover', initialsClassName = 'font-bold text-xs text-zinc-300' }) => {
+  const [hasError, setHasError] = React.useState(false);
+
+  React.useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  if (src && !hasError) {
+    return (
+      <img
+        referrerPolicy="no-referrer"
+        src={src}
+        alt={alt}
+        className={className}
+        onError={() => setHasError(true)}
+      />
+    );
+  }
+  return <span className={initialsClassName}>{initials}</span>;
+};
 
 export interface FeedTopHeaderProps {
   isEmbedded?: boolean;
@@ -198,22 +235,30 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
           {!isEmbedded && (
             <div className="text-right mr-1">
               <p className={`text-[9px] font-mono font-bold uppercase tracking-wider leading-none mb-1 ${
-                portalRole === 'fan_only' ? 'text-cyan-400' : 'text-[#9d4edf]'
+                portalRole === 'fan_only' ? 'text-cyan-400' : portalRole === 'promoter' ? 'text-yellow-400' : 'text-[#9d4edf]'
               }`}>
                 {portalRole === 'fan_only'
                   ? 'FAN ZONE'
                   : portalRole === 'band'
                   ? resolveBandName(activeBand, userProfile)?.toUpperCase() || 'ARTIST WORKSPACE'
                   : portalRole === 'creative'
-                  ? 'CREATIVE PRO'
+                  ? resolveCreativeName(userProfile)?.toUpperCase() || 'CREATIVE PRO'
                   : portalRole === 'promoter'
-                  ? 'PROMOTER PRO'
+                  ? (resolvePromoterName(userProfile)?.toUpperCase() || 'PROMOTER PRO')
                   : portalRole === 'label'
                   ? 'RECORD LABEL'
                   : 'INDUSTRY PRO'}
               </p>
               <p className="text-sm font-black text-white leading-none">
-                Hi {portalRole === 'band' ? (resolveBandName(activeBand, userProfile).split(' ')[0]) : (profileFullLegalName || userProfile?.display_name || userProfile?.username || userProfile?.name || 'Miguel').split(' ')[0]},
+                Hi {
+                  portalRole === 'band' 
+                    ? (resolveBandName(activeBand, userProfile).split(' ')[0]) 
+                    : portalRole === 'creative'
+                    ? (resolveCreativeName(userProfile).split(' ')[0])
+                    : portalRole === 'promoter' 
+                    ? (resolvePromoterName(userProfile).split(' ')[0]) 
+                    : (profileFullLegalName || userProfile?.display_name || userProfile?.username || userProfile?.name || 'User').split(' ')[0]
+                },
               </p>
             </div>
           )}
@@ -224,22 +269,31 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
               className={`relative rounded-full overflow-hidden transition-all duration-300 p-0.5 border-2 ${
                 portalRole === 'fan_only'
                   ? 'border-cyan-400/80 shadow-[0_0_15px_rgba(34,211,238,0.5)]'
+                  : portalRole === 'promoter'
+                  ? 'border-yellow-400/80 shadow-[0_0_15px_rgba(234,179,8,0.7)]'
+                  : (portalRole === 'band' || userProfile?.active_workspace === 'band')
+                  ? 'border-[#39ff14] shadow-[0_0_15px_rgba(57,255,20,0.8)]'
+                  : portalRole === 'label'
+                  ? 'border-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.7)]'
+                  : portalRole === 'creative'
+                  ? 'border-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.7)]'
                   : 'border-[#6601BB] shadow-[0_0_15px_rgba(102,1,187,0.7)]'
               }`}
               title="Switch Workspace / Profile"
             >
-              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full overflow-hidden bg-zinc-900 flex items-center justify-center">
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full overflow-hidden bg-zinc-900 flex items-center justify-center font-bold text-xs text-white">
                 {(() => {
                   const activeKey = portalRole || userProfile?.active_workspace || 'industry_pro';
                   const activeAvatar = resolveEffectiveAvatar(activeKey, activeBand, userProfile, profileAvatarUrl);
-                  return (
-                    <img
-                      referrerPolicy="no-referrer"
-                      src={activeAvatar}
-                      alt={portalRole === 'band' ? resolveBandName(activeBand, userProfile) : (profileFullLegalName || 'User')}
-                      className="w-full h-full object-cover"
-                    />
-                  );
+                  const displayName = activeKey === 'band' 
+                    ? resolveBandName(activeBand, userProfile) 
+                    : activeKey === 'creative'
+                    ? resolveCreativeName(userProfile)
+                    : activeKey === 'promoter'
+                    ? resolvePromoterName(userProfile)
+                    : (profileFullLegalName || userProfile?.name || 'User');
+                  const initials = (displayName || 'U').slice(0, 2).toUpperCase();
+                  return <HeaderAvatarImage src={activeAvatar} initials={initials} />;
                 })()}
               </div>
             </button>
@@ -260,21 +314,37 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                       const activeKey = portalRole || userProfile?.active_workspace || 'industry_pro';
                       const activeAvatar = resolveEffectiveAvatar(activeKey, activeBand, userProfile, profileAvatarUrl);
                       const isBand = activeKey === 'band';
+                      const isCreative = activeKey === 'creative';
+                      const isPromoter = activeKey === 'promoter';
+                      const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
                       const rawHandle = isBand 
                         ? resolveBandHandle(activeBand, userProfile)
-                        : (userProfile?.console_handle || userProfile?.username || userProfile?.handle || userProfile?.display_name?.replace(/\s+/g, '_') || profileFullLegalName?.replace(/\s+/g, '_') || 'user');
-                      const userHandle = isBand
+                        : isCreative
+                        ? resolveCreativeHandle(userProfile)
+                        : isPromoter
+                        ? resolvePromoterHandle(userProfile)
+                        : (userProfile?.console_handle || userProfile?.username || userProfile?.handle || userProfile?.display_name?.replace(/\s+/g, '_') || profileFullLegalName?.replace(/\s+/g, '_') || (userProfile?.email ? userProfile.email.split('@')[0] : (isOwnerMiguel ? 'bdmCEO' : 'member')));
+                      const fallbackH = isOwnerMiguel ? '@bdmCEO' : (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@member'));
+                      const userHandle = (isBand || isCreative || isPromoter)
                         ? (rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`)
-                        : ((!rawHandle || rawHandle.toLowerCase().includes('virulent') || rawHandle === 'user' || rawHandle === '@user') ? '@bdmCEO' : (rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`));
-                      const displayName = isBand ? resolveBandName(activeBand, userProfile) : (profileFullLegalName || userProfile?.name || 'User Name');
+                        : ((!rawHandle || (isOwnerMiguel && rawHandle.toLowerCase().includes('virulent')) || rawHandle === 'user' || rawHandle === '@user' || (!isOwnerMiguel && (rawHandle.toLowerCase().includes('bdmceo') || rawHandle.toLowerCase().includes('goregrinder')))) ? fallbackH : (rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`));
+                      const displayName = isBand 
+                        ? resolveBandName(activeBand, userProfile) 
+                        : isCreative
+                        ? resolveCreativeName(userProfile)
+                        : isPromoter
+                        ? resolvePromoterName(userProfile)
+                        : (profileFullLegalName || userProfile?.name || 'User Name');
+                      const initials = (displayName || 'U').slice(0, 2).toUpperCase();
                       return (
                         <div className="flex items-center justify-between mb-2 pb-2 border-b border-zinc-900/80">
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-full border-2 border-[#6601BB] p-0.5 shadow-[0_0_10px_rgba(102,1,187,0.5)] shrink-0">
-                              <img
-                                src={activeAvatar}
-                                alt="Profile"
-                                className="w-full h-full object-cover rounded-full"
+                            <div className="w-8 h-8 rounded-full border-2 border-[#6601BB] p-0.5 shadow-[0_0_10px_rgba(102,1,187,0.5)] shrink-0 flex items-center justify-center overflow-hidden bg-zinc-900">
+                              <HeaderAvatarImage 
+                                src={activeAvatar} 
+                                initials={initials} 
+                                className="w-full h-full object-cover rounded-full" 
+                                initialsClassName="font-bold text-[10px] text-zinc-300" 
                               />
                             </div>
                             <div className="min-w-0 flex-1">
@@ -332,22 +402,153 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                           return;
                         }
 
-                        const personalHandle = userProfile?.console_handle && !userProfile.console_handle.toLowerCase().includes('virulent') && userProfile.console_handle !== '@user' && userProfile.console_handle !== 'user'
-                          ? (userProfile.console_handle.startsWith('@') ? userProfile.console_handle : `@${userProfile.console_handle}`)
-                          : '@bdmCEO';
+                        if (portalRole === 'promoter') {
+                          const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+                          const pm = (userProfile as any)?.promoter_metadata || {};
+                          const promoterAgencyName = pm.brand_name || pm.agency_name || (userProfile as any)?.promoter_agency || (isOwnerMiguel ? 'Nexus Live Productions' : (userProfile?.name ? `${userProfile.name} Productions` : 'Promoter Operations'));
+                          const promoterLogo = (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || pm.logo_url || (userProfile as any)?.promoter_logo || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : (userProfile?.promoter_logo || ''));
+                          const promoterCover = (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || pm.banner_url || pm.cover_url || (userProfile as any)?.promoter_cover_image || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : (userProfile?.promoter_cover_image || ''));
+                          const promoterBio = pm.bio || (userProfile as any)?.promoter_bio || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_bio') : null) || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent live event promoter.');
+                          const rawHandle = (userProfile as any)?.promoter_handle || (promoterAgencyName ? `@${promoterAgencyName.replace(/\s+/g, '')}` : (isOwnerMiguel ? '@NexusLive' : '@promoter'));
+                          const resolvedHandle = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`;
+
+                          const detailPayload = {
+                            id: userProfile?.id || (userProfile as any)?.promoter_id || (isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : 'promoter_profile'),
+                            user_id: userProfile?.id || (isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : 'promoter_profile'),
+                            email: userProfile?.email || (isOwnerMiguel ? 'goregrindsickness@gmail.com' : ''),
+                            name: promoterAgencyName,
+                            legalName: userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Promoter User'),
+                            full_name: userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Promoter User'),
+                            handle: resolvedHandle,
+                            console_handle: resolvedHandle,
+                            username: resolvedHandle,
+                            avatar: promoterLogo,
+                            avatar_url: promoterLogo,
+                            logo: promoterLogo,
+                            logo_url: promoterLogo,
+                            promoter_logo: promoterLogo,
+                            banner: promoterCover,
+                            banner_url: promoterCover,
+                            cover: promoterCover,
+                            cover_url: promoterCover,
+                            promoter_cover_image: promoterCover,
+                            location: userProfile?.city ? `${userProfile.city}, ${userProfile.state || 'TX'}` : 'Denison, TX',
+                            role: 'Event Promoter',
+                            account_type: 'promoter',
+                            type: 'promoter',
+                            isPersonal: false,
+                            isPromoterProfile: true,
+                            isBandProfile: false,
+                            isYou: true,
+                            badges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+                            customBadges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+                            bio: promoterBio,
+                            promoter_metadata: pm
+                          };
+                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+                          triggerNotification?.("⚡ Opening Promoter Public Profile...");
+                          return;
+                        }
+
+                        if (portalRole === 'creative') {
+                          const creativeName = resolveCreativeName(userProfile);
+                          const creativeAvatar = resolveCreativeLogo(userProfile);
+                          const creativeBanner = resolveCreativeCover(userProfile);
+                          const creativeBio = resolveCreativeBio(userProfile);
+                          const creativeHandle = resolveCreativeHandle(userProfile);
+                          const creativeLoc = resolveCreativeLocation(userProfile);
+
+                          const detailPayload = {
+                            id: (userProfile as any)?.creative_id || userProfile?.id || 'creative:vortex',
+                            name: creativeName,
+                            legalName: userProfile?.full_name || userProfile?.name,
+                            business_name: creativeName,
+                            handle: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+                            console_handle: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+                            username: creativeHandle.startsWith('@') ? creativeHandle : `@${creativeHandle}`,
+                            avatar: creativeAvatar,
+                            avatar_url: creativeAvatar,
+                            banner: creativeBanner,
+                            banner_url: creativeBanner,
+                            cover_url: creativeBanner,
+                            location: creativeLoc || userProfile?.location || 'Detroit, MI',
+                            role: 'Creative',
+                            account_type: 'creative',
+                            type: 'creative',
+                            isPersonal: false,
+                            isCreativeProfile: true,
+                            isBandProfile: false,
+                            isYou: true,
+                            badges: ['🛠️ Creative Pro', '🎨 Designer'],
+                            customBadges: ['🛠️ Creative Pro', '🎨 Designer'],
+                            bio: creativeBio,
+                            creative_metadata: (userProfile as any)?.creative_metadata || {}
+                          };
+                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+                          triggerNotification?.("⚡ Opening Creative Public Profile...");
+                          return;
+                        }
+
+                        if (portalRole === 'label') {
+                          const labelName = (userProfile as any)?.label_name || (userProfile as any)?.label_metadata?.label_name || 'Rotten Music Records';
+                          const labelAvatar = (userProfile as any)?.label_avatar || (userProfile as any)?.label_metadata?.logo_url || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=150';
+                          const labelBanner = (userProfile as any)?.label_banner || (userProfile as any)?.label_metadata?.banner_url || userProfile?.banner_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200';
+                          const labelBio = (userProfile as any)?.label_metadata?.bio || userProfile?.bio || 'Independent record label dedicated to underground extreme metal releases.';
+                          const labelHandle = (userProfile as any)?.label_handle || '@rottenmusic';
+
+                          const detailPayload = {
+                            id: (userProfile as any)?.label_id || userProfile?.id || 'label:rotten',
+                            name: labelName,
+                            legalName: labelName,
+                            handle: labelHandle.startsWith('@') ? labelHandle : `@${labelHandle}`,
+                            console_handle: labelHandle.startsWith('@') ? labelHandle : `@${labelHandle}`,
+                            username: labelHandle.startsWith('@') ? labelHandle : `@${labelHandle}`,
+                            avatar: labelAvatar,
+                            avatar_url: labelAvatar,
+                            banner: labelBanner,
+                            banner_url: labelBanner,
+                            cover_url: labelBanner,
+                            location: userProfile?.location || 'USA / Global',
+                            role: 'Record Label',
+                            account_type: 'label',
+                            type: 'label',
+                            isPersonal: false,
+                            isLabelProfile: true,
+                            isBandProfile: false,
+                            isYou: true,
+                            badges: ['💿 Record Label'],
+                            customBadges: ['💿 Record Label'],
+                            bio: labelBio,
+                            label_metadata: (userProfile as any)?.label_metadata || {}
+                          };
+                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
+                          triggerNotification?.("⚡ Opening Label Public Profile...");
+                          return;
+                        }
+
+                        const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+                        const rawPersonalHandle = userProfile?.console_handle || userProfile?.handle || userProfile?.username || userProfile?.screen_name || (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? userProfile.name.replace(/\s+/g, '_').toLowerCase() : (userProfile?.email ? userProfile.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : (isOwnerMiguel ? 'bdmCEO' : 'member')));
+                        const personalHandle = rawPersonalHandle && (!rawPersonalHandle.toLowerCase().includes('virulent') || isOwnerMiguel) && (!rawPersonalHandle.toLowerCase().includes('bdmceo') || isOwnerMiguel) && rawPersonalHandle !== '@user' && rawPersonalHandle !== 'user'
+                          ? (rawPersonalHandle.startsWith('@') ? rawPersonalHandle : `@${rawPersonalHandle}`)
+                          : (isOwnerMiguel ? '@bdmCEO' : (userProfile?.name ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@member')));
+
+                        const rawPersonalBanner = userProfile?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_banner') : null) || null;
+                        const cleanPersonalBanner = (typeof rawPersonalBanner === 'string' && rawPersonalBanner.includes('promoter-banner')) ? null : rawPersonalBanner;
+
+                        const authenticName = profileFullLegalName || userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : (userProfile?.email ? userProfile.email.split('@')[0] : 'Member'));
 
                         const detailPayload = {
                           id: userProfile?.id || null,
-                          name: profileFullLegalName || userProfile?.name || userProfile?.full_name || 'Miguel Goregrinder Medina',
-                          legalName: profileFullLegalName || userProfile?.full_name || userProfile?.name || 'Miguel Goregrinder Medina',
+                          name: authenticName,
+                          legalName: authenticName,
                           handle: personalHandle,
                           console_handle: personalHandle,
                           username: personalHandle,
                           avatar: userProfile?.avatar_url || null,
                           avatar_url: userProfile?.avatar_url || null,
-                          banner: userProfile?.banner_url || null,
-                          banner_url: userProfile?.banner_url || null,
-                          cover_url: userProfile?.banner_url || null,
+                          banner: cleanPersonalBanner,
+                          banner_url: cleanPersonalBanner,
+                          cover_url: cleanPersonalBanner,
                           location: userProfile?.location || 'USA / Global',
                           role: userProfile?.account_type === 'fan_only' ? 'Fan Listener' : 'Industry Pro',
                           account_type: userProfile?.account_type || 'industry_pro',
@@ -366,7 +567,7 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                       className="w-full flex items-center justify-center gap-1.5 bg-[#3b0b6c] hover:bg-[#4c0d8a] text-white py-1.5 rounded-lg text-[10px] font-bold tracking-widest uppercase transition-colors mb-2 shadow-md shadow-purple-900/20 cursor-pointer"
                     >
                       <User className="w-3 h-3" strokeWidth={2.5} />
-                      {portalRole === 'band' ? 'VIEW BAND PROFILE' : 'VIEW MY PROFILE'}
+                      {portalRole === 'band' ? 'VIEW BAND PROFILE' : portalRole === 'promoter' ? 'VIEW PROMOTER PROFILE' : portalRole === 'creative' ? 'VIEW CREATIVE PROFILE' : portalRole === 'label' ? 'VIEW LABEL PROFILE' : 'VIEW MY PROFILE'}
                     </button>
 
                     <div className="text-[8px] font-mono font-bold text-zinc-500 uppercase tracking-widest mb-1 px-1">
@@ -568,7 +769,7 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                             }}
                             className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-all ${
                               isActive
-                                ? 'bg-[#291244] border border-[#6601BB] text-white shadow-md'
+                                ? 'bg-yellow-950/40 border border-yellow-500 text-white shadow-md'
                                 : !promoterAllowed
                                 ? 'bg-amber-950/20 border border-amber-500/30 hover:border-amber-500/60 text-amber-200'
                                 : 'hover:bg-zinc-900/80 text-zinc-400 border border-transparent'
@@ -577,14 +778,14 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                             <div className="flex items-center gap-2 min-w-0">
                               <span className={`text-sm ${!isActive && !promoterAllowed ? 'opacity-80' : ''}`}>🏟️</span>
                               <div className="text-left min-w-0">
-                                <div className={`text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 ${isActive ? 'text-[#a268ff]' : (promoterAllowed ? 'text-zinc-300' : 'text-amber-300')}`}>
+                                <div className={`text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 ${isActive ? 'text-yellow-400' : (promoterAllowed ? 'text-zinc-300' : 'text-amber-300')}`}>
                                   VENUE PROMOTER {!promoterAllowed && <Lock className="w-3 h-3 text-amber-400" strokeWidth={2.5} />}
                                 </div>
                                 <div className={`text-[9px] font-mono leading-none mt-0.5 ${isActive ? 'text-zinc-300' : (!promoterAllowed ? 'text-amber-400/80 font-semibold' : 'text-zinc-500')}`}>{isActive ? 'Active Environment' : (!promoterAllowed ? 'LOCKED • Tap to Register' : 'Switch Workspace')}</div>
                               </div>
                             </div>
                             {isActive ? (
-                              <div className="w-1.5 h-1.5 rounded-full bg-[#a268ff] shadow-[0_0_8px_rgba(162,104,255,0.8)] shrink-0" />
+                              <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(234,179,8,0.8)] shrink-0" />
                             ) : !promoterAllowed && (
                               <div className="w-5 h-5 rounded-full bg-amber-950/60 border border-amber-500/40 flex items-center justify-center shrink-0">
                                 <Lock className="w-3 h-3 text-amber-400" strokeWidth={2.5} />
@@ -715,59 +916,10 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                       })()}
                     </div>
 
-                    <div className="pt-2 border-t border-zinc-900/80 space-y-0.5">
-                      <button 
-                        onClick={() => {
-                          setRoleMenuOpen(false);
-                          const personalHandle = userProfile?.console_handle && !userProfile.console_handle.toLowerCase().includes('virulent') && userProfile.console_handle !== '@user' && userProfile.console_handle !== 'user'
-                            ? (userProfile.console_handle.startsWith('@') ? userProfile.console_handle : `@${userProfile.console_handle}`)
-                            : '@bdmCEO';
-
-                          const detailPayload = {
-                            id: userProfile?.id || null,
-                            name: profileFullLegalName || userProfile?.name || userProfile?.full_name || 'Miguel Goregrinder Medina',
-                            legalName: profileFullLegalName || userProfile?.full_name || userProfile?.name || 'Miguel Goregrinder Medina',
-                            handle: personalHandle,
-                            console_handle: personalHandle,
-                            username: personalHandle,
-                            avatar: userProfile?.avatar_url || null,
-                            avatar_url: userProfile?.avatar_url || null,
-                            banner: userProfile?.banner_url || null,
-                            banner_url: userProfile?.banner_url || null,
-                            cover_url: userProfile?.banner_url || null,
-                            location: userProfile?.location || 'USA / Global',
-                            role: userProfile?.account_type === 'fan_only' ? 'Fan Listener' : 'Industry Pro',
-                            account_type: userProfile?.account_type || 'industry_pro',
-                            type: 'user',
-                            isPersonal: true,
-                            isBandProfile: false,
-                            isYou: true,
-                            badges: userProfile?.badges || (userProfile?.account_type === 'fan_only' ? ['🤘 Fan'] : ['💼 Industry Pro']),
-                            customBadges: userProfile?.customBadges || userProfile?.badges || [],
-                            bio: userProfile?.bio || userProfile?.blurb || 'User profile on the Nexus network.'
-                          };
-
-                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
-                          triggerNotification?.("⚡ Opening your public profile...");
-                        }}
-                        className="flex items-center gap-2 text-xs font-bold text-cyan-400 hover:text-cyan-300 transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-cyan-950/30"
-                      >
-                        <User className="w-3.5 h-3.5 text-cyan-400" />
-                        View My Profile
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setRoleMenuOpen(false);
-                          setLeftDrawerOpen(true);
-                        }}
-                        className="flex items-center gap-2 text-xs font-bold text-zinc-300 hover:text-white transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-zinc-900/80"
-                      >
-                        <Settings className="w-3.5 h-3.5 text-zinc-400" />
-                        Profile Settings & Preferences
-                      </button>
+                    <div className="pt-2 border-t border-zinc-900/80">
                       <button 
                         onClick={handleLogout} 
-                        className="flex items-center gap-2 text-xs font-bold text-[#a268ff] hover:text-[#b78aff] transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-[#6601BB]/10"
+                        className="flex items-center gap-2 text-xs font-bold text-[#a268ff] hover:text-[#b78aff] transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-[#6601BB]/10 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" />
                         Log Out from Terminal
@@ -789,6 +941,17 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
           onNavigateToTab={onNavigateToTab}
           setActiveTab={setActiveTab}
           setDashboardV2ActiveNav={setDashboardV2ActiveNav}
+          triggerNotification={triggerNotification}
+          portalRole={portalRole}
+        />
+      )}
+
+      {/* Promoter Workspace Navigation Bar - Only for Promoter workspace */}
+      {portalRole === 'promoter' && (
+        <PromoterWorkspaceNavBanner
+          userProfile={userProfile}
+          onNavigateToTab={onNavigateToTab}
+          setActiveTab={setActiveTab}
           triggerNotification={triggerNotification}
           portalRole={portalRole}
         />
@@ -823,27 +986,27 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                   {/* Icon */}
                   <div className={`relative flex items-center justify-center transition-colors ${
                     isActive 
-                      ? portalRole === 'fan_only' ? 'text-cyan-400' : 'text-[#9d4edf]' 
+                      ? portalRole === 'fan_only' ? 'text-cyan-400' : portalRole === 'promoter' ? 'text-yellow-400' : (portalRole === 'band' || userProfile?.active_workspace === 'band') ? 'text-[#00ffcc]' : portalRole === 'label' ? 'text-orange-400' : portalRole === 'creative' ? 'text-fuchsia-400' : 'text-[#9d4edf]' 
                       : 'text-zinc-500 group-hover:text-zinc-300'
                   }`}>
                     <item.icon className="w-[22px] h-[22px]" strokeWidth={1.5} />
                     {item.badge && unreadNotifsCount > 0 && (
                       <span className={`absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white shadow-lg ${
-                        portalRole === 'fan_only' ? 'bg-cyan-500' : 'bg-[#6601BB]'
+                        portalRole === 'fan_only' ? 'bg-cyan-500' : portalRole === 'promoter' ? 'bg-yellow-500 text-black' : (portalRole === 'band' || userProfile?.active_workspace === 'band') ? 'bg-[#00ffcc] text-black font-extrabold' : 'bg-[#6601BB]'
                       }`}>
                         {unreadNotifsCount}
                       </span>
                     )}
                     {item.id === 'notices' && unreadNotifsCount > 0 && (
                       <span className={`absolute -top-1.5 -right-1.5 w-2 h-2 rounded-full animate-ping ${
-                        portalRole === 'fan_only' ? 'bg-cyan-500' : 'bg-[#6601BB]'
+                        portalRole === 'fan_only' ? 'bg-cyan-500' : portalRole === 'promoter' ? 'bg-yellow-400' : (portalRole === 'band' || userProfile?.active_workspace === 'band') ? 'bg-[#00ffcc]' : 'bg-[#6601BB]'
                       }`} />
                     )}
                   </div>
                   {/* Label */}
                   <span className={`text-[9px] font-black uppercase tracking-[0.1em] transition-colors ${
                     isActive 
-                      ? portalRole === 'fan_only' ? 'text-cyan-400' : 'text-[#9d4edf]'
+                      ? portalRole === 'fan_only' ? 'text-cyan-400' : portalRole === 'promoter' ? 'text-yellow-400' : (portalRole === 'band' || userProfile?.active_workspace === 'band') ? 'text-[#00ffcc]' : portalRole === 'label' ? 'text-orange-400' : portalRole === 'creative' ? 'text-fuchsia-400' : 'text-[#9d4edf]'
                       : 'text-zinc-500 group-hover:text-zinc-300'
                   }`}>
                     {item.label}
@@ -853,7 +1016,17 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                     <motion.div
                       layoutId="socialNavIndicator"
                       className={`absolute -bottom-[3px] left-1 right-1 h-[2px] rounded-t-full ${
-                        portalRole === 'fan_only' ? 'bg-cyan-400 shadow-[0_-2px_8px_rgba(34,211,238,0.5)]' : 'bg-[#6601BB] shadow-[0_-2px_8px_rgba(102,1,187,0.8)]'
+                        portalRole === 'fan_only' 
+                          ? 'bg-cyan-400 shadow-[0_-2px_8px_rgba(34,211,238,0.5)]' 
+                          : portalRole === 'promoter'
+                          ? 'bg-yellow-400 shadow-[0_-2px_8px_rgba(234,179,8,0.8)]'
+                          : (portalRole === 'band' || userProfile?.active_workspace === 'band')
+                          ? 'bg-[#00ffcc] shadow-[0_-2px_8px_rgba(0,255,204,0.8)]'
+                          : portalRole === 'label'
+                          ? 'bg-orange-500 shadow-[0_-2px_8px_rgba(249,115,22,0.8)]'
+                          : portalRole === 'creative'
+                          ? 'bg-fuchsia-500 shadow-[0_-2px_8px_rgba(217,70,239,0.8)]'
+                          : 'bg-[#6601BB] shadow-[0_-2px_8px_rgba(102,1,187,0.8)]'
                       }`}
                     />
                   )}
@@ -889,13 +1062,16 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-2 px-0.5 select-none">
                   {[
                     { id: 'all', label: 'All Stream', emoji: '🔥' },
+                    { id: 'followed', label: 'Followed', emoji: '⭐' },
+                    { id: 'bulletin', label: 'Bulletin & Gear', emoji: '📌' },
                     { id: 'tour', label: 'Tour Dates', emoji: '🎟️' },
                     { id: 'merch', label: 'Merch Drops', emoji: '👕' },
                     { id: 'audio', label: 'Demos & Tapes', emoji: '🎙️' },
-                    { id: 'photos', label: 'Photo Pit', emoji: '📸' },
-                    { id: 'following', label: 'Following', emoji: '⭐' }
+                    { id: 'photos', label: 'Photo Pit', emoji: '📸' }
                   ].map((chip) => {
-                    const isSelected = (activeFeedCategoryFilter || 'all') === chip.id;
+                    const isSelected = 
+                      (activeFeedCategoryFilter || 'all') === chip.id || 
+                      (chip.id === 'followed' && activeFeedCategoryFilter === 'following');
                     return (
                       <button
                         key={`feed-filter-chip-${chip.id}`}
@@ -905,6 +1081,14 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                           isSelected
                             ? portalRole === 'fan_only'
                               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/70 shadow-[0_0_12px_rgba(34,211,238,0.35)]'
+                              : portalRole === 'promoter'
+                              ? 'bg-yellow-500/25 text-yellow-300 border border-yellow-400/80 shadow-[0_0_12px_rgba(234,179,8,0.4)]'
+                              : (portalRole === 'band' || userProfile?.active_workspace === 'band')
+                              ? 'bg-[#39ff14]/20 text-[#39ff14] border border-[#39ff14]/80 shadow-[0_0_12px_rgba(57,255,20,0.4)]'
+                              : portalRole === 'label'
+                              ? 'bg-orange-500/20 text-orange-300 border border-orange-400/80 shadow-[0_0_12px_rgba(249,115,22,0.4)]'
+                              : portalRole === 'creative'
+                              ? 'bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-400/80 shadow-[0_0_12px_rgba(217,70,239,0.4)]'
                               : 'bg-[#6601BB]/30 text-[#e9d5ff] border border-[#a855f7]/70 shadow-[0_0_12px_rgba(168,85,247,0.35)]'
                             : 'bg-zinc-900/90 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 border border-zinc-800/80'
                         }`}

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { compressImageInSocialFeed } from '../../../utils/socialFeedUtils';
 import { showsStore, venuesStore } from '../../../utils/indexedDB';
-import { getSupabase } from '../../../services/clientService';
+import { getSupabase, sanitizeShowForDb, generateUUID, ensureUUID, uploadBase64ToStorage } from '../../../supabase';
 
 export interface CreateCommunityShowModalProps {
   isOpen: boolean;
@@ -113,8 +113,85 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
   useEffect(() => {
     if (editingShow) {
       setActiveTab('single');
-      setName(editingShow.name || editingShow.headliner || editingShow.show_name || '');
-      setFestivalName(editingShow.festival_name || editingShow.tour_name || '');
+
+      // Helper to decompose composite strings like "Tour Show - Austin, TX | Come and Take It Live (Tour)"
+      const isGeneric = (str?: string) => {
+        if (!str) return true;
+        const lower = str.toLowerCase().trim();
+        return (
+          !lower ||
+          lower === 'tour show' ||
+          lower === 'live show' ||
+          lower === 'show' ||
+          lower === 'gig' ||
+          lower === 'live act' ||
+          lower === 'underground show'
+        );
+      };
+
+      let headlinerVal = editingShow.headliner || editingShow.band_name || editingShow.artist_name || '';
+      let venueVal = editingShow.venue_name || (editingShow.venue && !editingShow.venue.toLowerCase().includes('live show') ? editingShow.venue : '') || '';
+      let cityVal = editingShow.city || '';
+      let stateVal = editingShow.state_province || editingShow.state || '';
+      let festivalVal = editingShow.festival_name || editingShow.tour_name || '';
+
+      const compositeStr = editingShow.name || editingShow.show_name || editingShow.title || '';
+
+      // Decompose composite string if present
+      if (compositeStr.includes(' | ') || compositeStr.includes(' - ') || isGeneric(headlinerVal)) {
+        let leftPart = compositeStr;
+
+        if (compositeStr.includes(' | ')) {
+          const parts = compositeStr.split(' | ').map((s: string) => s.trim());
+          leftPart = parts[0];
+          if (parts[1]) {
+            const extractedVenue = parts[1].replace(/\(Tour\)/gi, '').trim();
+            if (extractedVenue && (isGeneric(venueVal) || !venueVal)) {
+              venueVal = extractedVenue;
+            }
+          }
+        }
+
+        if (leftPart.includes(' - ')) {
+          const [hPart, locPart] = leftPart.split(' - ').map((s: string) => s.trim());
+          if (hPart && !isGeneric(hPart)) {
+            headlinerVal = hPart;
+          }
+          if (locPart && (!cityVal || cityVal === 'Tour Stop')) {
+            if (locPart.includes(',')) {
+              const [c, s] = locPart.split(',').map((str: string) => str.trim());
+              cityVal = c;
+              stateVal = s;
+            } else {
+              cityVal = locPart;
+            }
+          }
+        } else if (leftPart && !isGeneric(leftPart) && isGeneric(headlinerVal)) {
+          if (leftPart.includes(' at ')) {
+            const [hPart, vPart] = leftPart.split(' at ').map((s: string) => s.trim());
+            if (hPart && !isGeneric(hPart)) headlinerVal = hPart;
+            if (vPart && isGeneric(venueVal)) venueVal = vPart;
+          } else {
+            headlinerVal = leftPart;
+          }
+        }
+      }
+
+      if (isGeneric(headlinerVal)) {
+        headlinerVal = festivalVal && !isGeneric(festivalVal) ? festivalVal : 'Vader';
+      }
+
+      if (cityVal.includes(',')) {
+        const parts = cityVal.split(',').map((p: string) => p.trim()).filter(Boolean);
+        cityVal = parts[0] || '';
+        if (!stateVal && parts[1]) stateVal = parts[1];
+      }
+
+      setName(headlinerVal);
+      setFestivalName(festivalVal);
+      setVenueName(venueVal);
+      setCity(cityVal);
+      setStateProvince(stateVal);
       
       const rawDate = editingShow.date || editingShow.show_date || '';
       setDate(rawDate ? String(rawDate).split('T')[0] : '');
@@ -122,25 +199,8 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       setDoorsTime(editingShow.doors_time || '19:00');
       setSetTime(editingShow.set_time || '20:00');
 
-      const rawVName = editingShow.venue_name || (editingShow.venue && !editingShow.venue.toLowerCase().includes('live show') ? editingShow.venue : '') || '';
-      const rawVAddr = editingShow.venue_address || (editingShow.venue && editingShow.venue !== rawVName ? editingShow.venue : '') || '';
-      setVenueName(rawVName);
+      const rawVAddr = editingShow.venue_address || (editingShow.venue && editingShow.venue !== venueVal ? editingShow.venue : '') || '';
       setVenueAddress(rawVAddr);
-
-      const capVal = editingShow.capacity || editingShow.venue_capacity || editingShow.expected_attendance || '';
-      setCapacity(capVal ? String(capVal) : '');
-
-      let cleanCity = editingShow.city || '';
-      let cleanState = editingShow.state_province || '';
-      if (cleanCity.includes(',')) {
-        const parts = cleanCity.split(',').map((p: string) => p.trim()).filter(Boolean);
-        if (parts.length > 0) {
-          cleanCity = parts[0];
-          if (!cleanState && parts[1]) cleanState = parts[1];
-        }
-      }
-      setCity(cleanCity);
-      setStateProvince(cleanState);
       setCountry(editingShow.country || 'United States');
 
       let dosP = editingShow.day_of_show_price ? String(editingShow.day_of_show_price) : '';
@@ -244,8 +304,8 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
 
   if (!isOpen) return null;
 
-  // Process manual flyer upload with compression
-  const processImageFile = (file: File, onSuccess: (dataUrl: string) => void) => {
+  // Process manual flyer upload with compression & Storage upload
+  const processImageFile = (file: File, onSuccess: (publicUrl: string) => void) => {
     if (!file) return;
     if (file.size > 12 * 1024 * 1024) {
       triggerNotification?.('⚠️ Flyer image exceeds 12MB limit.');
@@ -255,12 +315,19 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
     reader.onload = async () => {
       try {
         const raw = reader.result as string;
-        const compressed = await compressImageInSocialFeed(raw, 1200, 1200, 0.82);
-        onSuccess(compressed);
-        triggerNotification?.('✅ Flyer image attached');
+        const compressed = await compressImageInSocialFeed(raw, 1080, 1080, 0.8);
+        triggerNotification?.('⏳ Uploading flyer to storage...');
+        const uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
+        if (uploadedUrl && !uploadedUrl.startsWith('data:')) {
+          onSuccess(uploadedUrl);
+          triggerNotification?.('✅ Flyer stored in cloud');
+        } else {
+          onSuccess(compressed);
+          triggerNotification?.('✅ Flyer attached');
+        }
       } catch {
         onSuccess(reader.result as string);
-        triggerNotification?.('✅ Flyer image attached');
+        triggerNotification?.('✅ Flyer attached');
       }
     };
     reader.readAsDataURL(file);
@@ -328,7 +395,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
   };
 
   // Submit Handler for Single Show Tab
-  const handleSingleShowSubmit = (e: React.FormEvent) => {
+  const handleSingleShowSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const headlinerVal = name.trim();
@@ -370,8 +437,9 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       computedPrice = 'External Tickets';
     }
 
+    const showId = editingShow?.id ? ensureUUID(editingShow.id) : generateUUID();
     const showPayload = {
-      id: editingShow?.id || ('sh_comm_' + Math.random().toString(36).substring(2, 9)),
+      id: showId,
       name: finalShowName,
       show_name: finalShowName,
       headliner: headlinerVal,
@@ -389,7 +457,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       capacity: explicitCapacity || undefined,
       venue_capacity: explicitCapacity || undefined,
       expected_attendance: explicitCapacity || undefined,
-      city: city.trim(),
+      city: city.trim() || stateProvince.trim() || 'Austin, TX',
       state_province: stateProvince.trim() || undefined,
       state: stateProvince.trim() || undefined,
       country: country.trim() || undefined,
@@ -407,8 +475,23 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       support_bands: supportBands.join(', '),
       is_time_24h: isTime24Hour,
       is_community_submitted: true,
+      additional_notes: JSON.stringify({
+        tour_name: trimmedFestival || undefined,
+        tour_title: trimmedFestival || undefined,
+      }),
       created_at: editingShow?.created_at || new Date().toISOString()
     };
+
+    // Also sync to Supabase directly
+    try {
+      const supabase = getSupabase();
+      if (supabase) {
+        const sanitized = sanitizeShowForDb(showPayload);
+        await supabase.from('shows').upsert([sanitized]);
+      }
+    } catch (err) {
+      console.warn('Direct show sync notice:', err);
+    }
 
     onSubmit(showPayload);
   };
@@ -432,9 +515,36 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
     const sharedLineup = tourSupportBands.map(b => ({ band_name: b, set_duration: '35 mins' }));
 
     try {
+      // Load existing shows to detect and reuse already saved local dates (e.g. Dallas, Austin)
+      const existingShowsMap = new Map<string, any>();
+      try {
+        await showsStore.iterate((val: any) => {
+          if (val) {
+            const h = String(val.headliner || val.name || '').toLowerCase().trim();
+            const c = String(val.city || '').toLowerCase().trim();
+            const d = String(val.date || val.show_date || '').toLowerCase().trim();
+            const t = String(val.tour_name || val.festival_name || '').toLowerCase().trim();
+            if (h && d) existingShowsMap.set(`${h}__${d}`, val);
+            if (h && c) existingShowsMap.set(`${h}__${c}`, val);
+            if (t && c) existingShowsMap.set(`${t}__${c}`, val);
+          }
+        });
+      } catch (_) {}
+
       for (const stop of tourStops) {
-        const showId = 'sh_tour_' + Math.random().toString(36).substring(2, 9);
-        const venueVal = stop.venue_name || 'Live Venue';
+        const stopCityLower = stop.city.toLowerCase().trim();
+        const stopDateLower = stop.show_date.toLowerCase().trim();
+        const hLower = headlinerVal.toLowerCase();
+        const tLower = activeTourName.toLowerCase();
+
+        // Check if this date / city is already saved in the system
+        const existingShow = 
+          existingShowsMap.get(`${hLower}__${stopDateLower}`) ||
+          existingShowsMap.get(`${hLower}__${stopCityLower}`) ||
+          existingShowsMap.get(`${tLower}__${stopCityLower}`);
+
+        const showId = ensureUUID(existingShow?.id || generateUUID());
+        const venueVal = stop.venue_name || existingShow?.venue_name || existingShow?.venue || 'Live Venue';
         const finalName = `${headlinerVal} at ${venueVal}`;
 
         // Auto-stub venue in local Black Book
@@ -453,7 +563,9 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
         }
 
         const showPayload: any = {
+          ...(existingShow || {}),
           id: showId,
+          creator_id: existingShow?.creator_id || 'community_curator',
           name: finalName,
           show_name: finalName,
           headliner: headlinerVal,
@@ -461,51 +573,40 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
           tour_name: activeTourName,
           date: stop.show_date,
           show_date: stop.show_date,
-          doors_time: stop.doors_time || '19:00',
+          doors_time: stop.doors_time || existingShow?.doors_time || '19:00',
           set_time: '20:00',
           venue_name: venueVal,
           venue: venueVal,
-          city: stop.city,
-          state_province: stop.state || undefined,
-          state: stop.state || undefined,
+          city: (stop.city && String(stop.city).trim()) || existingShow?.city || 'Austin, TX',
+          state_province: stop.state || existingShow?.state_province || undefined,
+          state: stop.state || existingShow?.state || undefined,
           country: 'United States',
-          price: 'Cover at Door',
-          day_of_show_price: 'Cover at Door',
-          age_restriction: 'All Ages',
-          ticket_url: stop.ticket_url || undefined,
-          external_ticket_url: stop.ticket_url || undefined,
-          flyer_url: tourFlyerUrl || undefined,
-          support_bands: sharedSupport,
-          support_lineup: sharedLineup,
+          price: existingShow?.price || 'Cover at Door',
+          day_of_show_price: existingShow?.day_of_show_price || 'Cover at Door',
+          age_restriction: existingShow?.age_restriction || 'All Ages',
+          ticket_url: stop.ticket_url || existingShow?.ticket_url || undefined,
+          external_ticket_url: stop.ticket_url || existingShow?.external_ticket_url || undefined,
+          flyer_url: tourFlyerUrl || existingShow?.flyer_url || undefined,
+          support_bands: sharedSupport || existingShow?.support_bands,
+          support_lineup: sharedLineup.length > 0 ? sharedLineup : existingShow?.support_lineup,
           is_community_submitted: true,
-          created_at: new Date().toISOString()
+          additional_notes: JSON.stringify({
+            tour_name: activeTourName,
+            tour_title: activeTourName,
+            stop_id: showId
+          }),
+          updated_at: new Date().toISOString()
         };
 
-        // 1. Save to local IndexedDB store
+        // 1. Save / Update in local IndexedDB store
         await showsStore.setItem(showId, showPayload);
 
         // 2. Sync to Supabase if connected
         try {
           const supabase = getSupabase();
           if (supabase) {
-            await supabase.from('shows').upsert([{
-              id: showId,
-              headliner: headlinerVal,
-              show_name: finalName,
-              tour_name: activeTourName,
-              show_date: stop.show_date,
-              date: stop.show_date,
-              doors_time: stop.doors_time || '19:00',
-              venue_name: venueVal,
-              city: stop.city,
-              state_province: stop.state,
-              price: 'Cover at Door',
-              flyer_url: tourFlyerUrl || null,
-              ticket_url: stop.ticket_url || null,
-              support_bands: sharedSupport,
-              is_community_submitted: true,
-              created_at: new Date().toISOString()
-            }]);
+            const dbSanitized = sanitizeShowForDb(showPayload);
+            await supabase.from('shows').upsert([dbSanitized]);
           }
         } catch (sbErr) {
           console.warn('Supabase tour show sync notice:', sbErr);

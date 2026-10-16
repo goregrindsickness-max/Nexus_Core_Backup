@@ -6,6 +6,7 @@ import {
   Zap, CreditCard
 } from 'lucide-react';
 import { mockShopItems } from '../../data/shopMockData';
+import { syncPostToSupabase } from './utils/postSyncUtils';
 
 type ChatType = any;
 
@@ -112,11 +113,57 @@ export const StorefrontView: React.FC<StorefrontViewProps> = (props) => {
   const [communityCategory, setCommunityCategory] = React.useState<string>('all');
   const [shopItemsList, setShopItemsList] = React.useState<any[]>([]);
   const [isDemoMode, setIsDemoMode] = React.useState<boolean>(true);
+  const [dynamicCatalogItems, setDynamicCatalogItems] = React.useState<any[]>([]);
 
-  // Compute effective items: fallback to shopItems prop, shopItemsList, or mockShopItems
-  const effectiveShopItems = (shopItems && shopItems.length > 0)
+  // Hydrate dynamic physical releases & inventory for storefront viewing
+  React.useEffect(() => {
+    try {
+      const invStr = localStorage.getItem('nexus_master_inventory');
+      const loaded: any[] = [];
+      if (invStr) {
+        const inv = JSON.parse(invStr);
+        if (Array.isArray(inv)) {
+          inv.forEach(item => {
+            if (item.name || item.title) {
+              const cat = item.type === 'merch' || item.category === 'apparel' || item.category === 'merch' ? 'apparel' : 'media';
+              loaded.push({
+                id: item.id || `inv_${item.name}`,
+                name: item.name || item.title,
+                price: Number(item.price) || 20,
+                category: cat,
+                subcategory: item.format || item.subcategory || (cat === 'apparel' ? 'apparel' : 'vinyl'),
+                description: item.description || `Official ${item.format || 'release'} by ${item.artist || item.band || 'Band'}.`,
+                thumbnail: item.image || item.coverUrl || item.artwork_url || item.thumbnail || 'https://images.unsplash.com/photo-1539185441755-769473a23570?auto=format&fit=crop&q=80&w=600',
+                fallbackThumbnail: 'https://images.unsplash.com/photo-1539185441755-769473a23570?auto=format&fit=crop&q=80&w=600',
+                brand: item.artist || item.band || item.brand || '',
+                artist: item.artist || item.band || '',
+                band_id: item.band_id || item.bandId || '',
+                is_real_account: false
+              });
+            }
+          });
+        }
+      }
+      setDynamicCatalogItems(loaded);
+    } catch (e) {}
+  }, []);
+
+  // Compute effective items: fallback to shopItems prop, shopItemsList, or mockShopItems + dynamic inventory
+  const baseShopItems = (shopItems && shopItems.length > 0)
     ? shopItems
     : (shopItemsList && shopItemsList.length > 0 ? shopItemsList : mockShopItems);
+
+  const effectiveShopItems = React.useMemo(() => {
+    const existingIds = new Set(baseShopItems.map(i => i.id));
+    const merged = [...baseShopItems];
+    dynamicCatalogItems.forEach(dyn => {
+      if (!existingIds.has(dyn.id)) {
+        merged.push(dyn);
+        existingIds.add(dyn.id);
+      }
+    });
+    return merged;
+  }, [baseShopItems, dynamicCatalogItems]);
 
   const realAccountItems = effectiveShopItems.filter(item => item.is_real_account === true || item.id?.startsWith('real_'));
   const demoItems = effectiveShopItems.filter(item => !item.is_real_account && !item.id?.startsWith('real_'));
@@ -185,7 +232,63 @@ export const StorefrontView: React.FC<StorefrontViewProps> = (props) => {
       setShopItems(prev => [newItem, ...prev]);
     }
 
-    triggerNotification?.("🚀 Listing published to Live Accounts!");
+    // Turn into an active timeline Feed Post with unique bulletin board frame
+    const isGearListing = newListingType === 'gear';
+    const feedPostUuid = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cf_${Date.now()}`;
+    const sellerDisplayName = userProfile?.name || userProfile?.full_name || userProfile?.console_handle || 'Verified Account';
+
+    const classifiedFeedPost: any = {
+      id: feedPostUuid,
+      type: newListingType,
+      category: newListingType,
+      timestamp: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      timeAgo: 'Just now',
+      authorId: userProfile?.id || 'current_user',
+      authorName: sellerDisplayName,
+      authorAvatar: userProfile?.avatar || userProfile?.avatar_url || '',
+      authorRole: portalRole === 'band' ? 'Band / Artist' : portalRole === 'label' ? 'Record Label' : portalRole === 'promoter' ? 'Promoter' : 'Community Member',
+      location: newItem.location || 'Local Community',
+      message: newItem.description || `${newItem.name} - Available on Community Bulletin Board`,
+      content: newItem.description || `${newItem.name} - Available on Community Bulletin Board`,
+      image: newItem.thumbnail,
+      image_url: newItem.thumbnail,
+      images: newItem.thumbnail ? [newItem.thumbnail] : [],
+      tag: isGearListing ? 'GEAR SWAP' : 'CLASSIFIED',
+      classifiedData: {
+        listingId: newItem.id,
+        listingType: newListingType,
+        title: newItem.name,
+        price: newItem.price,
+        condition: newItem.condition,
+        brand: newItem.brand,
+        year: newItem.year,
+        location: newItem.location,
+        description: newItem.description,
+        image: newItem.thumbnail,
+        seller: sellerDisplayName
+      },
+      reactions: { flame: 0, horns: 0 },
+      comments: []
+    };
+
+    try {
+      await syncPostToSupabase(classifiedFeedPost, userProfile?.id);
+    } catch (syncErr) {
+      console.warn("Could not sync classified post to timeline feed:", syncErr);
+    }
+
+    if (props.onAddFeedPost) {
+      props.onAddFeedPost(classifiedFeedPost);
+    }
+    if (props.setFeed) {
+      props.setFeed((prev: any[]) => [classifiedFeedPost, ...prev]);
+    }
+    if (props.setLabelPosts) {
+      props.setLabelPosts((prev: any[]) => [classifiedFeedPost, ...prev]);
+    }
+
+    triggerNotification?.("🚀 Listing published to Marketplace & Community Bulletin Feed!");
     setIsPostListingOpen(false);
     setIsDemoMode(false); // Automatically switch to live view to showcase the published item
 
@@ -405,9 +508,11 @@ export const StorefrontView: React.FC<StorefrontViewProps> = (props) => {
                   
                   let matchesBrand = true;
                   if (shopBrandFilter) {
-                    const bf = shopBrandFilter.toLowerCase();
+                    const bf = shopBrandFilter.toLowerCase().trim();
                     const itemName = (item?.name || '').toLowerCase();
-                    const itemDesc = item.description.toLowerCase();
+                    const itemDesc = (item.description || '').toLowerCase();
+                    const itemArtist = ((item as any).artist || (item as any).band || (item as any).brand || (item as any).band_name || (item as any).seller || '').toLowerCase();
+                    const itemBandId = ((item as any).band_id || (item as any).bandId || '').toLowerCase();
                     
                     if (bf.includes('torture') || bf.includes('tdf') || bf.includes('picture company')) {
                       matchesBrand = 
@@ -417,7 +522,12 @@ export const StorefrontView: React.FC<StorefrontViewProps> = (props) => {
                         itemName.includes('virulent excision') ||
                         itemName.includes('heinous');
                     } else {
-                      matchesBrand = itemName.includes(bf) || itemDesc.includes(bf);
+                      matchesBrand = 
+                        itemArtist.includes(bf) || 
+                        (itemArtist.length > 2 && bf.includes(itemArtist)) ||
+                        itemName.includes(bf) || 
+                        itemDesc.includes(bf) ||
+                        (Boolean(itemBandId) && itemBandId.includes(bf));
                     }
                   }
 

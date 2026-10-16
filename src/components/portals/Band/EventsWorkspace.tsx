@@ -15,6 +15,7 @@ import FlightTrackerModal from './FlightTrackerModal';
 import TourChecklistView from './TourChecklistView';
 import OnRouteEssentialsView from './OnRouteEssentialsView';
 import TourManagerPackageModule from './TourManagerPackageModule';
+import CreativesHubView from './CreativesHubView';
 
 export default function EventsWorkspace(props: any) {
   const {
@@ -450,16 +451,25 @@ export default function EventsWorkspace(props: any) {
                               <Plus className="w-4 h-4" />
                             </button>
                             <button type="button" onClick={() => setDashboardV2ActiveNav('EVENTS')} className="text-[10.5px] font-mono text-zinc-500 hover:text-white transition-colors cursor-pointer">
-                              Total Shows: {shows.length}
+                              Total Shows: {filteredShows.length}
                             </button>
                           </div>
                         </div>
 
                         <div className="space-y-3 text-left relative z-10">
-                          {Array.from({
-          length: 3
-        }).map((_, index) => {
-          const show = sortedShows[index];
+                          {(() => {
+                            const todayStr = new Date().toISOString().split('T')[0];
+                            const upcomingStops = (sortedShows || []).filter((s: any) => {
+                              if (!s) return false;
+                              const sDate = s.date || s.show_date;
+                              if (sDate && String(sDate).split('T')[0] < todayStr) return false;
+                              if (s.additional_notes && String(s.additional_notes).includes('"archived":true')) return false;
+                              return true;
+                            });
+                            return Array.from({
+                              length: 3
+                            }).map((_, index) => {
+                              const show = upcomingStops[index];
           if (show) {
             const {
               month,
@@ -581,7 +591,8 @@ export default function EventsWorkspace(props: any) {
                                   <Plus className="w-3.5 h-3.5 text-zinc-700 group-hover:text-[#00ffcc] group-hover:translate-x-0.5 transition-all" />
                                 </div>;
           }
-        })}
+        });
+      })()}
                         </div>
                       </div>
                     </V2ExpandableCard>
@@ -1232,12 +1243,12 @@ export default function EventsWorkspace(props: any) {
                     </V2ExpandableCard>
                     <V2ExpandableCard theme="darkgrey" title="Setlist Manager" isExpanded={activeEventsSection === 'SETLISTS'} onToggle={() => setActiveEventsSection(activeEventsSection === 'SETLISTS' ? null : 'SETLISTS')}>
                       <div className="w-full">
-                        <SetlistsView shows={shows} onBack={() => {}} triggerNotification={triggerNotification} addLog={addLog} />
+                        <SetlistsView shows={filteredShows || shows} onBack={() => {}} triggerNotification={triggerNotification} addLog={addLog} bandName={activeBand?.name || 'Artist'} activeBandId={activeBand?.id || props.activeBandId} />
                       </div>
                     </V2ExpandableCard>
                     <V2ExpandableCard theme="darkgrey" title="Guest List Manager" isExpanded={activeEventsSection === 'GUEST_LIST'} onToggle={() => setActiveEventsSection(activeEventsSection === 'GUEST_LIST' ? null : 'GUEST_LIST')}>
                       <div className="w-full">
-                        <GuestlistsView shows={shows} setShows={setShows} onBack={() => {}} triggerNotification={triggerNotification} addLog={addLog} initialShowId={selectedGuestlistShowId} bandName={activeBand?.name || 'Artist'} />
+                        <GuestlistsView shows={filteredShows || shows} setShows={setShows} onBack={() => {}} triggerNotification={triggerNotification} addLog={addLog} initialShowId={selectedGuestlistShowId} bandName={activeBand?.name || 'Artist'} activeBandId={activeBand?.id || props.activeBandId} />
                       </div>
                     </V2ExpandableCard>
 
@@ -1280,6 +1291,21 @@ export default function EventsWorkspace(props: any) {
                     >
                       <div className="w-full">
                         <BlackBookView onBack={() => {}} triggerNotification={triggerNotification} userProfile={userProfile} setUserProfile={setUserProfile} activeBandName={activeBand?.name || ''} offers={offers} onUpdateOffer={handleUpdateOffer} userReviews={userReviews} venues={venues} setVenues={setVenues} initialTab="beacons" hideTabs={true} disableScrollToTop={true} />
+                      </div>
+                    </V2ExpandableCard>
+                    <V2ExpandableCard 
+                      theme="yellow" 
+                      title="Creatives Hub" 
+                      isExpanded={activeEventsSection === 'CREATIVES_HUB'} 
+                      onToggle={() => setActiveEventsSection(activeEventsSection === 'CREATIVES_HUB' ? null : 'CREATIVES_HUB')}
+                    >
+                      <div className="w-full bg-black">
+                        <CreativesHubView
+                          onBack={() => {}}
+                          triggerNotification={triggerNotification}
+                          addLog={addLog}
+                          activeBandName={activeBand?.name || 'Artist'}
+                        />
                       </div>
                     </V2ExpandableCard>
                     <V2ExpandableCard theme="yellow" title="Tactical Road Tools" isExpanded={activeEventsSection === 'NOTES'} onToggle={() => setActiveEventsSection(activeEventsSection === 'NOTES' ? null : 'NOTES')}>

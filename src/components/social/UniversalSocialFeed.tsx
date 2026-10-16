@@ -10,6 +10,7 @@ import { useSocialFeedSync } from "./hooks/useSocialFeedSync";
 import { mockShopItems } from '../../data/shopMockData';
 import { initialForumThreads } from '../../data/forumMockData';
 import { getAvatarBorderColorClass, getRoleBorderAndGlowClass, compressImage, isValidUUID, isValidUUIDLocal } from './utils/socialUtils';
+import { generateDeterministicUUID } from './follows/followService';
 import { fanTheme, royalBlueTheme, getSocialTheme } from './utils/themeUtils';
 import { useSocialPortalRole } from './hooks/useSocialPortalRole';
 import { SocialRoleProvider } from './context/SocialRoleContext';
@@ -25,8 +26,20 @@ import {
   resolveBandName,
   resolveBandBio,
   resolveBandLocation,
+  resolveCreativeName,
+  resolveCreativeHandle,
+  resolveCreativeLogo,
+  resolveCreativeCover,
+  resolveCreativeBio,
+  resolveCreativeLocation,
   resolveEffectiveAvatar,
-  resolveEffectiveCover
+  resolveEffectiveCover,
+  resolvePromoterName,
+  resolvePromoterHandle,
+  resolvePromoterLogo,
+  resolvePromoterCover,
+  resolvePromoterBio,
+  resolvePromoterLocation
 } from '../../utils/bandProfileUtils';
 import {
   loadDiscoverProfilesCache,
@@ -34,7 +47,7 @@ import {
   loadProfileLocalStorageCache,
   loadProfileIndexedDBCache
 } from './utils/feedCacheUtils';
-import { resolveActiveUserId, syncPostToSupabase } from './utils/postSyncUtils';
+import { resolveActiveUserId, syncPostToSupabase, generateUUID } from './utils/postSyncUtils';
 import { mergePostWithReactions } from './utils/reactionStore';
 import { useSocialProfileState } from './hooks/useSocialProfileState';
 import { FeedTopHeader } from './navigation/FeedTopHeader';
@@ -55,7 +68,8 @@ import { UploadClipModal } from './modals/UploadClipModal';
 import { UploadStoryModal } from './modals/UploadStoryModal';
 import { StoryViewerModal } from './modals/StoryViewerModal';
 import { EventCompanionModal } from './modals/EventCompanionModal';
-import { formatTimeAgo } from '../../utils/socialFeedUtils';
+import { formatTimeAgo, isPastShowDate } from '../../utils/socialFeedUtils';
+import { isValidStorageOrImageUrl } from '../../services/storageService';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { InteractiveCropperModal } from '../InteractiveCropperModal';
@@ -70,6 +84,8 @@ import { supabase } from '../../lib/supabaseClient';
 import { getSupabase, subscribeToTable, executeWithSchemaResilience, uploadBase64ToStorage, normalizeLoadedProfile, createShopMerchItem, fetchShopMerchItems, sanitizeMicroGenres, formatBandLocation, sanitizeShowForDb, ensureUUID } from '../../supabase';
 import { uploadFeedMedia } from '../../lib/storage';
 import { communityBandManager } from '../../lib/communityBands';
+import { hasRegisteredWorkspace } from '../../types';
+import { tourPackageManager } from '../../lib/tourPackageManager';
 import Barcode from 'react-barcode';
 import { MASTER_GENRES } from '../../constants/genres';
 import { InboxPreferences } from '../messaging/InboxPreferences';
@@ -78,8 +94,10 @@ import { getProfileGlowInfo } from '../../utils/profileGlow';
 import { triggerPictureViewer } from '../../utils/avatarPopupEvents';
 import { TimelineTab } from '../profile/TimelineTab';
 import { SocialSubNav } from './SocialSubNav';
+import { formatTimeTo12Hour } from '../../lib/timeUtils';
 import { SocialMapOverlay } from './SocialMapOverlay';
 import { SubViewControlPanels } from './SubViewControlPanels';
+import PromoterArchivesModal from './modals/PromoterArchivesModal';
 import CreateCommunityShowModal from './modals/CreateCommunityShowModal';
 import { InlineShareModal } from './modals/InlineShareModal';
 import { InlineReactionsModal } from './modals/InlineReactionsModal';
@@ -152,7 +170,9 @@ export function UniversalSocialFeed({
   onNavigateToTab,
   setActiveTab: propSetActiveTab,
   setDashboardV2ActiveNav,
-  dashboardV2ActiveNav
+  dashboardV2ActiveNav,
+  shows: propShows,
+  setShows: propSetShows
 }: any) {
   const portalRoleState = useSocialPortalRole({
     initialRole: propPortalRole,
@@ -184,16 +204,18 @@ export function UniversalSocialFeed({
   const [liveEvents, setLiveEvents] = useState<any[]>(() => {
     try {
       const rawDel = localStorage.getItem('nexus_deleted_community_shows');
-      if (!rawDel) return mockLiveTonight;
-      const delList: string[] = JSON.parse(rawDel);
+      const delList: string[] = rawDel ? JSON.parse(rawDel) : [];
       const delSet = new Set(delList.map(s => String(s).toLowerCase().trim()));
       return mockLiveTonight.filter(g => {
+        if (isPastShowDate(g.date) || g.id === '5c8a0bc3-aff4-491f-9693-d3ca3ed406ee' || (String(g.headliner || '').toLowerCase().includes('vader') && String(g.date || '').includes('2026-09-24'))) {
+          return false;
+        }
         const gId = String(g.id || '').toLowerCase().trim();
         const gSig = `${String(g.headliner || '').toLowerCase().trim()}__${String(g.date || '').toLowerCase().trim()}`;
         return !delSet.has(gId) && !delSet.has(gSig);
       });
     } catch {
-      return mockLiveTonight;
+      return mockLiveTonight.filter(g => !isPastShowDate(g.date));
     }
   });
   const [liveSetlists, setLiveSetlists] = useState<Record<string, string[]>>(bandSetlists);
@@ -281,6 +303,7 @@ export function UniversalSocialFeed({
   const [followingSearchQuery, setFollowingSearchQuery] = useState('');
   const [selectedGigOnMap, setSelectedGigOnMap] = useState<any>(null);
   const [showMapModal, setShowMapModal] = useState(false);
+  const [showPromoterArchivesModal, setShowPromoterArchivesModal] = useState(false);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [mapRadius, setMapRadius] = useState<number>(25);
   const [isLoading, setIsLoading] = useState(true);
@@ -323,7 +346,7 @@ export function UniversalSocialFeed({
       name: finalShowName,
       show_name: finalShowName,
       headliner: headlinerVal,
-      festival_name: payload.festival_name,
+      festival_name: payload.festival_name || payload.tour_name || payload.tourTitle || payload.tour_title,
       date: payload.date,
       show_date: payload.show_date || payload.date,
       status: payload.status || 'Active',
@@ -366,9 +389,29 @@ export function UniversalSocialFeed({
       const dateNorm = String(newShow.date || newShow.show_date || '').trim();
 
       // Clean up previous temporary or stale keys for this same show
+      const oldId = editingCommunityShow?.id || payload.id;
+      if (oldId && oldId !== showId) {
+        delete localStorageShowsMap[oldId];
+        try {
+          const rawDel = localStorage.getItem('nexus_deleted_community_shows');
+          const delList: string[] = rawDel ? JSON.parse(rawDel) : [];
+          if (!delList.includes(oldId)) delList.push(oldId);
+          localStorage.setItem('nexus_deleted_community_shows', JSON.stringify(delList));
+
+          const sb = getSupabase();
+          if (sb) {
+            (async () => {
+              try {
+                await sb.from('shows').delete().eq('id', oldId);
+              } catch (_) {}
+            })();
+          }
+        } catch (_) {}
+      }
+
       Object.keys(localStorageShowsMap).forEach(key => {
         const item = localStorageShowsMap[key];
-        if (key === payload.id || key === showId) {
+        if (key === payload.id || key === showId || key === oldId) {
           delete localStorageShowsMap[key];
         } else if (item) {
           const itemHeadliner = String(item.headliner || item.name || '').toLowerCase().trim();
@@ -418,9 +461,10 @@ export function UniversalSocialFeed({
           setEditingCommunityShow(null);
           
           try {
-            const doorsDisplay = newShow.doors_time 
-              ? (String(newShow.doors_time).toLowerCase().includes('door') ? newShow.doors_time : `Doors ${newShow.doors_time}`)
-              : (newShow.set_time ? `Set ${newShow.set_time}` : 'Doors 7:30 PM');
+            const formattedDoors = newShow.doors_time ? formatTimeTo12Hour(newShow.doors_time) : '';
+            const doorsDisplay = formattedDoors 
+              ? (String(formattedDoors).toLowerCase().includes('door') ? formattedDoors : `Doors ${formattedDoors}`)
+              : (newShow.set_time ? `Set ${formatTimeTo12Hour(newShow.set_time)}` : 'Doors 7:30 PM');
 
             const newGig = {
               ...newShow,
@@ -473,9 +517,10 @@ export function UniversalSocialFeed({
     setEditingCommunityShow(null);
 
     try {
-      const doorsDisplay = newShow.doors_time 
-        ? (String(newShow.doors_time).toLowerCase().includes('door') ? newShow.doors_time : `Doors ${newShow.doors_time}`)
-        : (newShow.set_time ? `Set ${newShow.set_time}` : 'Doors 7:30 PM');
+      const formattedDoors = newShow.doors_time ? formatTimeTo12Hour(newShow.doors_time) : '';
+      const doorsDisplay = formattedDoors 
+        ? (String(formattedDoors).toLowerCase().includes('door') ? formattedDoors : `Doors ${formattedDoors}`)
+        : (newShow.set_time ? `Set ${formatTimeTo12Hour(newShow.set_time)}` : 'Doors 7:30 PM');
 
       const newGig = {
         ...newShow,
@@ -872,8 +917,8 @@ export function UniversalSocialFeed({
   } = useSocialStoriesState();
 
   // Map Filter States
-  const [selectedCityFilter, setSelectedCityFilter] = useState('All');
-  const [mapFilterGenre, setMapFilterGenre] = useState('All');
+  const [selectedCityFilter, setSelectedCityFilter] = useState('all');
+  const [mapFilterGenre, setMapFilterGenre] = useState('all');
 
   // EPK Drag States
   const [isEpkDragOver, setIsEpkDragOver] = useState(false);
@@ -916,7 +961,7 @@ export function UniversalSocialFeed({
     return () => {
       window.removeEventListener('nexus_add_notification', handleAddNotification);
     };
-  }, [userProfile]);
+  }, [userProfile?.id]);
 
 
 
@@ -989,8 +1034,7 @@ export function UniversalSocialFeed({
   });
 
   // Fetch events and setlists with followed artist ranking and upcoming date formatting
-  useEffect(() => {
-    const fetchEventsAndSetlists = async () => {
+  const fetchEventsAndSetlists = useCallback(async () => {
       const supabaseClient = getSupabase();
       if (!supabaseClient) return;
 
@@ -1019,6 +1063,13 @@ export function UniversalSocialFeed({
             pDelList.forEach(item => deletedShowIds.add(String(item).toLowerCase().trim()));
           }
         } catch (e) {}
+
+        const allActiveTours = tourPackageManager.getAllTours();
+        const isTourEmbargoed = (tourIdOrTitle?: string) => {
+          if (!tourIdOrTitle) return false;
+          const matched = allActiveTours.find(t => t.id === tourIdOrTitle || (t.title && t.title.toLowerCase() === tourIdOrTitle.toLowerCase()));
+          return matched?.publicationStatus === 'embargoed_private';
+        };
 
         const { data: eventsData, error: eventsError } = await supabaseClient.from('nexus_events').select('*').order('created_at', { ascending: false });
         
@@ -1059,127 +1110,171 @@ export function UniversalSocialFeed({
           });
         }
 
-        // Also check if shows table has active dates if nexus_events is sparse
-        if (compiledGigs.length < 6) {
-          try {
-            const { data: showsData } = await supabaseClient
-              .from('shows')
-              .select('*')
-              .order('date', { ascending: true })
-              .limit(15);
+        // Unconditionally import and merge all active dates from the shows database table, local storage, and props
+        try {
+          const allRawShows: any[] = [];
 
-            if (showsData && showsData.length > 0) {
-              const showsGigs = showsData
-                .filter(s => {
-                  const sId = String(s.id || '').toLowerCase().trim();
-                  const sH = String(s.headliner || s.band_name || s.name || s.show_name || '').toLowerCase().trim();
-                  const sD = String(s.date || s.show_date || '').toLowerCase().trim();
-                  const sig = `${sH}__${sD}`;
-                  if (sId && deletedShowIds.has(sId)) return false;
-                  if (sH && sD && deletedShowIds.has(sig)) return false;
-                  return true;
-                })
-                .map(s => {
-                const extra = extendedMap[s.id] || (s.show_name ? Object.values(extendedMap).find((v: any) => v.name === s.show_name || v.show_name === s.show_name || (v.date === s.date && v.city === s.city)) : null);
-                const headlinerClean = (extra?.headliner || s.headliner || s.band_name || s.name || s.show_name || extra?.name || 'Headliner').trim();
-                const isFollowed = !!(localFollows[headlinerClean.toLowerCase()] || (s.band_id && localFollows[s.band_id]));
-                
-                let dateDisplay = 'Upcoming';
-                const rawDate = s.date || s.show_date || extra?.date;
-                if (rawDate) {
-                  try {
-                    const dateStr = String(rawDate).split('T')[0];
-                    const parts = dateStr.split('-');
-                    if (parts.length === 3) {
-                      const year = parseInt(parts[0], 10);
-                      const month = parseInt(parts[1], 10) - 1;
-                      const day = parseInt(parts[2], 10);
-                      const parsedDate = new Date(year, month, day);
-                      const today = new Date();
-                      const todayNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                      const tomorrowNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+          // 1. Fetch from Supabase shows table
+          const { data: showsData } = await supabaseClient
+            .from('shows')
+            .select('*')
+            .order('date', { ascending: true });
 
-                      if (parsedDate.getTime() === todayNorm.getTime()) {
-                        dateDisplay = 'Tonight';
-                      } else if (parsedDate.getTime() === tomorrowNorm.getTime()) {
-                        dateDisplay = 'Tomorrow';
-                      } else {
-                        dateDisplay = parsedDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-                      }
-                    }
-                  } catch (e) {}
-                }
-
-                const doorsVal = extra?.doors_time || s.doors_time;
-                const timeDisplay = doorsVal 
-                  ? (String(doorsVal).toLowerCase().includes('door') ? doorsVal : `Doors ${doorsVal}`) 
-                  : (s.set_time ? `Set ${s.set_time}` : (extra?.set_time ? `Set ${extra.set_time}` : (s.time || 'Doors 7:30 PM')));
-
-                const venueDisplay = extra?.venue || extra?.venue_name || s.venue || s.venue_name || s.venue_address || (s.name && !s.name.includes('Live') ? s.name : undefined) || 'Underground Venue';
-                
-                // Prioritize exact user prices and prevent falling back to hardcoded $25.00
-                let priceDisplay = extra?.price || s.price;
-                if (!priceDisplay) {
-                  if (extra?.day_of_show_price || s.day_of_show_price) {
-                    const dos = extra?.day_of_show_price || s.day_of_show_price;
-                    const presale = extra?.presale_price || s.presale_price;
-                    priceDisplay = presale ? `$${presale} / $${dos}` : (dos.startsWith('$') ? dos : `$${dos}`);
-                  } else if (extra?.presale_price || s.presale_price) {
-                    const presale = extra?.presale_price || s.presale_price;
-                    priceDisplay = presale.startsWith('$') ? presale : `$${presale}`;
-                  } else if (s.ticket_price) {
-                    priceDisplay = `$${s.ticket_price}`;
-                  } else if (extra?.external_ticket_url || s.external_ticket_url) {
-                    priceDisplay = 'External Tickets';
-                  } else if (s.is_community_submitted || extra?.is_community_submitted) {
-                    priceDisplay = 'Free / DIY';
-                  } else if (s.guarantee_amount && s.guarantee_amount > 0) {
-                    priceDisplay = `$${Math.min(45, Math.max(15, Math.round(s.guarantee_amount / 100)))}`;
-                  } else {
-                    priceDisplay = '$20.00';
-                  }
-                }
-
-                const rawCity = s.city || extra?.city;
-                const rawState = s.state_province || extra?.state_province;
-                const rawCountry = s.country || extra?.country;
-                const venueNameVal = extra?.venue_name || s.venue_name || extra?.venue || s.venue || 'Underground Venue';
-                const venueAddrVal = extra?.venue_address || s.venue_address;
-                const capVal = extra?.capacity || s.capacity || extra?.venue_capacity || s.venue_capacity || extra?.expected_attendance || s.expected_attendance;
-
-                return {
-                  ...s,
-                  ...(extra || {}),
-                  id: s.id,
-                  venue: venueDisplay,
-                  venue_name: venueNameVal,
-                  venue_address: venueAddrVal,
-                  capacity: capVal,
-                  venue_capacity: capVal,
-                  headliner: headlinerClean,
-                  time: timeDisplay,
-                  date: dateDisplay,
-                  rawDate: rawDate,
-                  city: rawCity,
-                  state_province: rawState,
-                  country: rawCountry,
-                  price: priceDisplay,
-                  day_of_show_price: extra?.day_of_show_price || s.day_of_show_price,
-                  presale_price: extra?.presale_price || s.presale_price,
-                  safety_code: extra?.safety_code || s.safety_code,
-                  isFollowed,
-                  external_ticket_url: extra?.external_ticket_url || s.external_ticket_url,
-                  ticket_url: extra?.ticket_url || s.ticket_url || extra?.external_ticket_url || s.external_ticket_url,
-                  ticketsAvailable: !!(extra?.external_ticket_url || s.external_ticket_url || extra?.ticket_url || s.ticket_url || priceDisplay),
-                  ticketStatus: 'active',
-                  is_community_submitted: !!(s.is_community_submitted || extra?.is_community_submitted)
-                };
-              });
-
-              compiledGigs = [...compiledGigs, ...showsGigs];
+          if (showsData && Array.isArray(showsData) && showsData.length > 0) {
+            allRawShows.push(...showsData);
+          } else {
+            // Fallback only if no shows in Supabase table
+            if (propShows && Array.isArray(propShows) && propShows.length > 0) {
+              allRawShows.push(...propShows);
             }
-          } catch (e) {}
-        }
+          }
+
+          if (allRawShows.length > 0) {
+            // Deduplicate raw shows by id or headliner + date
+            const dedupedRawShows: any[] = [];
+            const seenShowMap = new Set<string>();
+
+            allRawShows.forEach(s => {
+              if (!s) return;
+              const sId = String(s.id || '').toLowerCase().trim();
+              const sH = String(s.headliner || s.band_name || s.name || s.show_name || '').toLowerCase().trim();
+              const sD = String(s.date || s.show_date || '').toLowerCase().trim();
+              const sig = sId ? `id_${sId}` : `h_${sH}__${sD}`;
+              if (!seenShowMap.has(sig)) {
+                seenShowMap.add(sig);
+                dedupedRawShows.push(s);
+              }
+            });
+
+            const todayStr = new Date().toISOString().split('T')[0];
+            const showsGigs = dedupedRawShows
+              .filter(s => {
+                if (s.is_published === false || s.publication_status === 'embargoed_private' || s.publication_status === 'draft' || s.status === 'Draft' || s.status === 'Embargoed') {
+                  return false;
+                }
+                const sDate = s.date || s.show_date;
+                const sId = String(s.id || '').toLowerCase().trim();
+                const sH = String(s.headliner || s.band_name || s.name || s.show_name || '').toLowerCase().trim();
+                // Exclude shows that have already passed or are in community archives from UPCOMING live feeds (Exempt Nile)
+                if (!sH.includes('nile') && (isPastShowDate(sDate) || sId === '5c8a0bc3-aff4-491f-9693-d3ca3ed406ee' || (sH.includes('vader') && String(sDate).includes('2026-09-24')))) {
+                  return false;
+                }
+                if (s.additional_notes) {
+                  try {
+                    const extra = typeof s.additional_notes === 'string' ? JSON.parse(s.additional_notes) : s.additional_notes;
+                    if (extra.archived || extra.status === 'Archived' || extra.completed) return false;
+                    if (extra.tour_id && isTourEmbargoed(extra.tour_id)) return false;
+                  } catch (_) {}
+                }
+                const sD = String(s.date || s.show_date || '').toLowerCase().trim();
+                const sig = `${sH}__${sD}`;
+                if (sId && deletedShowIds.has(sId)) return false;
+                if (sH && sD && deletedShowIds.has(sig)) return false;
+                return true;
+              })
+              .map(s => {
+              const extra = extendedMap[s.id] || (s.show_name ? Object.values(extendedMap).find((v: any) => v.name === s.show_name || v.show_name === s.show_name || (v.date === s.date && v.city === s.city)) : null);
+              const headlinerClean = (extra?.headliner || s.headliner || s.band_name || s.name || s.show_name || extra?.name || 'Headliner').trim();
+              const isFollowed = !!(localFollows[headlinerClean.toLowerCase()] || (s.band_id && localFollows[s.band_id]));
+              
+              let dateDisplay = 'Upcoming';
+              const rawDate = s.date || s.show_date || extra?.date;
+              if (rawDate) {
+                try {
+                  const dateStr = String(rawDate).split('T')[0];
+                  const parts = dateStr.split('-');
+                  if (parts.length === 3) {
+                    const year = parseInt(parts[0], 10);
+                    const month = parseInt(parts[1], 10) - 1;
+                    const day = parseInt(parts[2], 10);
+                    const parsedDate = new Date(year, month, day);
+                    const today = new Date();
+                    const todayNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                    const tomorrowNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+
+                    if (parsedDate.getTime() === todayNorm.getTime()) {
+                      dateDisplay = 'Tonight';
+                    } else if (parsedDate.getTime() === tomorrowNorm.getTime()) {
+                      dateDisplay = 'Tomorrow';
+                    } else {
+                      dateDisplay = parsedDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+                    }
+                  }
+                } catch (e) {}
+              }
+
+              const doorsVal = extra?.doors_time || s.doors_time;
+              const formattedDoors = doorsVal ? formatTimeTo12Hour(doorsVal) : '';
+              const timeDisplay = formattedDoors 
+                ? (String(formattedDoors).toLowerCase().includes('door') ? formattedDoors : `Doors ${formattedDoors}`) 
+                : (s.set_time ? `Set ${formatTimeTo12Hour(s.set_time)}` : (extra?.set_time ? `Set ${formatTimeTo12Hour(extra.set_time)}` : (s.time || 'Doors 7:30 PM')));
+
+              const venueDisplay = extra?.venue || extra?.venue_name || s.venue || s.venue_name || s.venue_address || (s.name && !s.name.includes('Live') ? s.name : undefined) || 'Underground Venue';
+              
+              // Prioritize exact user prices and prevent falling back to hardcoded $25.00
+              let priceDisplay = extra?.price || s.price;
+              if (!priceDisplay) {
+                if (extra?.day_of_show_price || s.day_of_show_price) {
+                  const dos = extra?.day_of_show_price || s.day_of_show_price;
+                  const presale = extra?.presale_price || s.presale_price;
+                  priceDisplay = presale ? `$${presale} / $${dos}` : (dos.startsWith('$') ? dos : `$${dos}`);
+                } else if (extra?.presale_price || s.presale_price) {
+                  const presale = extra?.presale_price || s.presale_price;
+                  priceDisplay = presale.startsWith('$') ? presale : `$${presale}`;
+                } else if (s.ticket_price) {
+                  priceDisplay = `$${s.ticket_price}`;
+                } else if (extra?.external_ticket_url || s.external_ticket_url) {
+                  priceDisplay = 'External Tickets';
+                } else if (s.is_community_submitted || extra?.is_community_submitted) {
+                  priceDisplay = 'Free / DIY';
+                } else if (s.guarantee_amount && s.guarantee_amount > 0) {
+                  priceDisplay = `$${Math.min(45, Math.max(15, Math.round(s.guarantee_amount / 100)))}`;
+                } else {
+                  priceDisplay = '$20.00';
+                }
+              }
+
+              const rawCity = s.city || extra?.city;
+              const rawState = s.state_province || extra?.state_province;
+              const rawCountry = s.country || extra?.country;
+              const venueNameVal = extra?.venue_name || s.venue_name || extra?.venue || s.venue || 'Underground Venue';
+              const venueAddrVal = extra?.venue_address || s.venue_address;
+              const capVal = extra?.capacity || s.capacity || extra?.venue_capacity || s.venue_capacity || extra?.expected_attendance || s.expected_attendance;
+
+              return {
+                ...s,
+                ...(extra || {}),
+                id: s.id,
+                venue: venueDisplay,
+                venue_name: venueNameVal,
+                venue_address: venueAddrVal,
+                capacity: capVal,
+                venue_capacity: capVal,
+                headliner: headlinerClean,
+                time: timeDisplay,
+                date: dateDisplay,
+                rawDate: rawDate,
+                city: rawCity,
+                state_province: rawState,
+                country: rawCountry,
+                price: priceDisplay,
+                day_of_show_price: extra?.day_of_show_price || s.day_of_show_price,
+                presale_price: extra?.presale_price || s.presale_price,
+                safety_code: extra?.safety_code || s.safety_code,
+                isFollowed,
+                isFromShowsTable: true,
+                source: 'shows_table',
+                external_ticket_url: extra?.external_ticket_url || s.external_ticket_url,
+                ticket_url: extra?.ticket_url || s.ticket_url || extra?.external_ticket_url || s.external_ticket_url,
+                ticketsAvailable: !!(extra?.external_ticket_url || s.external_ticket_url || extra?.ticket_url || s.ticket_url || priceDisplay),
+                ticketStatus: 'active',
+                is_community_submitted: !!(s.is_community_submitted || extra?.is_community_submitted)
+              };
+            });
+
+            compiledGigs = [...compiledGigs, ...showsGigs];
+          }
+        } catch (e) {}
 
         // Clean up any stale duplicate keys from extendedMap that now exist in compiledGigs
         if (Object.keys(extendedMap).length > 0) {
@@ -1207,6 +1302,15 @@ export function UniversalSocialFeed({
           const localGigs = Object.values(extendedMap)
             .filter((localShow: any) => {
               if (!localShow) return false;
+              if (localShow.is_published === false || localShow.publication_status === 'embargoed_private' || localShow.publication_status === 'draft' || localShow.status === 'Draft' || localShow.status === 'Embargoed') {
+                return false;
+              }
+              if (localShow.additional_notes) {
+                try {
+                  const extra = typeof localShow.additional_notes === 'string' ? JSON.parse(localShow.additional_notes) : localShow.additional_notes;
+                  if (extra.tour_id && isTourEmbargoed(extra.tour_id)) return false;
+                } catch (_) {}
+              }
               const localId = String(localShow.id || '').toLowerCase().trim();
               const localH = String(localShow.headliner || localShow.name || '').toLowerCase().trim();
               const localD = String(localShow.date || localShow.show_date || '').toLowerCase().trim();
@@ -1318,8 +1422,22 @@ export function UniversalSocialFeed({
       } catch (err) {
         console.error("Failed to fetch events and setlists:", err);
       }
-    };
+  }, [propShows]);
+
+  useEffect(() => {
     fetchEventsAndSetlists();
+  }, [fetchEventsAndSetlists]);
+
+  useEffect(() => {
+    const handlePrefillShowCreator = (evt: any) => {
+      const parsed = evt?.detail;
+      if (parsed) {
+        setEditingCommunityShow(parsed);
+        setIsCommunityShowModalOpen(true);
+      }
+    };
+    window.addEventListener('nexus_prefill_show_creator', handlePrefillShowCreator);
+    return () => window.removeEventListener('nexus_prefill_show_creator', handlePrefillShowCreator);
   }, []);
 
   useEffect(() => {
@@ -1588,6 +1706,8 @@ export function UniversalSocialFeed({
     setEditingPostId,
     editingPostText,
     setEditingPostText,
+    editingPostImages,
+    setEditingPostImages,
     deleteConfirmPostId,
     setDeleteConfirmPostId,
     mentionQuery,
@@ -1642,6 +1762,20 @@ export function UniversalSocialFeed({
     setMerchDropPrice,
     merchDropThumbnail,
     setMerchDropThumbnail,
+    merchDropImages,
+    setMerchDropImages,
+    merchDropCategory,
+    setMerchDropCategory,
+    merchDropDescription,
+    setMerchDropDescription,
+    merchDropVariants,
+    setMerchDropVariants,
+    merchDropStock,
+    setMerchDropStock,
+    merchDropIsUnlimited,
+    setMerchDropIsUnlimited,
+    merchDropAllowNegotiation,
+    setMerchDropAllowNegotiation,
     merchDropIsTimed,
     setMerchDropIsTimed,
     merchDropTimerHours,
@@ -1715,6 +1849,24 @@ export function UniversalSocialFeed({
     setEventCost,
     eventTicketUrl,
     setEventTicketUrl,
+
+    // Classifieds & Gear Swap
+    classifiedType,
+    setClassifiedType,
+    classifiedTitle,
+    setClassifiedTitle,
+    classifiedPrice,
+    setClassifiedPrice,
+    classifiedCondition,
+    setClassifiedCondition,
+    classifiedBrand,
+    setClassifiedBrand,
+    classifiedYear,
+    setClassifiedYear,
+    classifiedLocation,
+    setClassifiedLocation,
+    classifiedDescription,
+    setClassifiedDescription,
 
     // Handlers
     handleDetectLocation,
@@ -1854,32 +2006,138 @@ export function UniversalSocialFeed({
 
     const handleAvatarUpdateEvent = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail && detail.avatarUrl) {
-        const autoPost: FeedItem = {
-          id: `avatar_update_${Date.now()}`,
-          type: 'post',
-          author: {
-            name: detail.authorName || userProfile?.name || 'User',
-            avatar: detail.avatarUrl,
-            role: detail.authorRole || portalRole || 'Artist',
-          },
-          timeAgo: 'Just now',
-            timestamp: new Date().toISOString(),
-          content: '✨ Updated profile picture! Check out the new look.',
-          tag: 'PROFILE SIGNAL',
-          image: detail.avatarUrl,
-          images: [detail.avatarUrl],
-          reactions: [{ type: 'flame', count: 1, active: true }],
-          comments: []
-        };
-        setFeed(prev => [autoPost, ...prev]);
-        syncPostToSupabase(autoPost);
+      if (!detail) return;
+      // Guard: Ignore if this update is for a band entity, community band, or release
+      if (detail.isBand || detail.type === 'band' || detail.isCommunityBand || detail.is_community_band) {
+        return;
+      }
+
+      const newAvatarUrl = detail.avatarUrl || detail.avatar_url || detail.logo_url;
+      if (newAvatarUrl && typeof newAvatarUrl === 'string') {
+        const isUserExplicit = Boolean(
+          detail.isUserAvatar ||
+          detail.target === 'user' ||
+          (detail.id && userProfile?.id && detail.id === userProfile.id) ||
+          (detail.authorName && userProfile?.name && detail.authorName.toLowerCase().trim() === userProfile.name.toLowerCase().trim())
+        );
+
+        // Do not default to current user if ID belongs to someone else
+        const targetUserId = detail.id || (isUserExplicit ? userProfile?.id : null);
+        const targetName = (detail.authorName || detail.name || (isUserExplicit ? userProfile?.name : '') || '').toLowerCase().trim();
+
+        if (isUserExplicit) {
+          setProfileAvatarUrl(newAvatarUrl);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('nexus_user_avatar', newAvatarUrl);
+            localStorage.setItem('nexus_avatar', newAvatarUrl);
+          }
+          if (setUserProfile) {
+            setUserProfile((prev: any) => prev ? {
+              ...prev,
+              avatar: newAvatarUrl,
+              avatar_url: newAvatarUrl,
+              logo_url: newAvatarUrl
+            } : prev);
+          }
+          setSelectedUserProfile((prev: any) => {
+            if (!prev) return prev;
+            if (prev.isYou || prev.id === userProfile?.id) {
+              return { ...prev, avatar: newAvatarUrl, avatar_url: newAvatarUrl, logo_url: newAvatarUrl };
+            }
+            return prev;
+          });
+        }
+
+        if (!targetUserId && !targetName) return;
+
+        // Dynamically update the author avatar across in-memory feed items without creating a duplicate post
+        setFeed(prev => prev.map(item => {
+          const rawItem = item as any;
+          const itemUserId = rawItem.user_id || rawItem.author_id || rawItem.authorId || rawItem.profile_id || item.author?.id;
+          const itemName = (item.author?.name || rawItem.authorName || '').toLowerCase().trim();
+          const itemHandle = ((item.author as any)?.handle || (item.author as any)?.console_handle || rawItem.authorHandle || '').toLowerCase().trim();
+          const itemIsBand = Boolean((item.author as any)?.isBand || rawItem.isBand || rawItem.workspace_type === 'band' || rawItem.authorRole === 'Band / Artist' || item.author?.role === 'Band / Artist');
+
+          // If this is a personal user avatar update and post was made strictly by another band entity, skip
+          if (isUserExplicit && itemIsBand && !detail.authorRole?.toLowerCase().includes('band')) return item;
+
+          const isMatchingPost = Boolean(
+            (targetUserId && itemUserId === targetUserId) ||
+            (targetName && (
+              itemName === targetName ||
+              itemName.includes(targetName) ||
+              targetName.includes(itemName) ||
+              (targetName.includes('miguel') && (itemName.includes('bdmceo') || itemHandle.includes('bdmceo'))) ||
+              (targetName.includes('bdmceo') && itemName.includes('miguel'))
+            )) ||
+            (isUserExplicit && (rawItem.isYou === true || item.author?.isYou === true))
+          );
+
+          if (isMatchingPost) {
+            return {
+              ...item,
+              authorAvatar: newAvatarUrl,
+              avatar: newAvatarUrl,
+              avatar_url: newAvatarUrl,
+              author_avatar: newAvatarUrl,
+              author: {
+                ...item.author,
+                avatar: newAvatarUrl,
+                avatar_url: newAvatarUrl
+              }
+            };
+          }
+          return item;
+        }));
+      }
+    };
+
+    const handleCoverUpdateEvent = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+      const newCoverUrl = detail.coverUrl || detail.cover_url || detail.banner_url || detail.bannerUrl;
+      if (newCoverUrl && typeof newCoverUrl === 'string') {
+        const isUserExplicit = Boolean(
+          (detail.id && userProfile?.id && detail.id === userProfile.id) ||
+          (detail.authorName && userProfile?.name && detail.authorName.toLowerCase().trim() === userProfile.name.toLowerCase().trim()) ||
+          detail.isUser ||
+          !detail.id
+        );
+
+        if (isUserExplicit) {
+          setProfileCoverUrl(newCoverUrl);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('nexus_user_banner', newCoverUrl);
+            localStorage.setItem('nexus_banner', newCoverUrl);
+            localStorage.setItem('nexus_promoter_cover', newCoverUrl);
+            localStorage.setItem('nexus_creative_banner', newCoverUrl);
+            localStorage.setItem('nexus_label_banner', newCoverUrl);
+            localStorage.setItem('nexus_band_cover', newCoverUrl);
+          }
+          if (setUserProfile) {
+            setUserProfile((prev: any) => prev ? {
+              ...prev,
+              banner: newCoverUrl,
+              banner_url: newCoverUrl,
+              cover_url: newCoverUrl,
+              promoter_cover_image: newCoverUrl,
+              creative_banner: newCoverUrl,
+              label_banner: newCoverUrl,
+              band_cover: newCoverUrl
+            } : prev);
+          }
+          setSelectedUserProfile((prev: any) => {
+            if (!prev) return prev;
+            return { ...prev, banner: newCoverUrl, banner_url: newCoverUrl, cover_url: newCoverUrl };
+          });
+        }
       }
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('nexus_avatar_updated', handleAvatarUpdateEvent);
+    window.addEventListener('nexus_cover_updated', handleCoverUpdateEvent);
 
     const currentUserId = userProfile?.id || 'guest';
     const userChanged = lastLoadedUserIdRef.current !== currentUserId;
@@ -1928,33 +2186,33 @@ export function UniversalSocialFeed({
       } else {
         // Professional portals
         defaultName = portalRole === 'band' ? resolveBandName(resolvedActiveBand || activeBand, userProfile)
-          : portalRole === 'creative' ? (userProfile?.creative_metadata?.business_name || 'Pro Creative')
-          : portalRole === 'promoter' ? (userProfile?.promoter_metadata?.brand_name || 'Pro Promoter')
+          : portalRole === 'creative' ? resolveCreativeName(userProfile)
+          : portalRole === 'promoter' ? resolvePromoterName(userProfile)
           : portalRole === 'label' ? (userProfile?.label_company_name || 'Pro Label')
           : (userProfile?.full_name || userProfile?.legal_name || userProfile?.name || 'Pro Account');
 
         defaultHandle = portalRole === 'band' ? resolveBandHandle(resolvedActiveBand || activeBand, userProfile)
-          : portalRole === 'creative' ? (userProfile?.creative_metadata?.business_name?.replace(/\s+/g, '') || 'creative_pro')
-          : portalRole === 'promoter' ? (userProfile?.promoter_metadata?.brand_name?.replace(/\s+/g, '') || 'promoter_pro')
+          : portalRole === 'creative' ? resolveCreativeHandle(userProfile)
+          : portalRole === 'promoter' ? resolvePromoterHandle(userProfile)
           : portalRole === 'label' ? (userProfile?.label_url_slug || 'label_pro')
           : (userProfile?.console_handle || userProfile?.handle || 'pro_account');
 
         defaultAvatar = portalRole === 'band' ? resolveBandLogo(resolvedActiveBand || activeBand, userProfile)
           : portalRole === 'label' ? (userProfile?.label_avatar || null)
-          : portalRole === 'creative' ? (userProfile?.creative_avatar || null)
-          : portalRole === 'promoter' ? ((userProfile as any)?.promoter_logo || null)
-          : (userProfile?.avatar_url || null);
+          : portalRole === 'creative' ? resolveCreativeLogo(userProfile)
+          : portalRole === 'promoter' ? resolvePromoterLogo(userProfile)
+          : (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null) || null);
 
         defaultCover = portalRole === 'band' ? resolveBandCover(resolvedActiveBand || activeBand, userProfile)
           : portalRole === 'label' ? (userProfile?.label_banner || null)
-          : portalRole === 'creative' ? (userProfile?.creative_banner || null)
-          : portalRole === 'promoter' ? ((userProfile as any)?.promoter_cover_image || null)
+          : portalRole === 'creative' ? resolveCreativeCover(userProfile)
+          : portalRole === 'promoter' ? resolvePromoterCover(userProfile)
           : (userProfile?.banner_url || null);
 
         defaultLocation = portalRole === 'band' ? resolveBandLocation(resolvedActiveBand || activeBand, userProfile)
           : portalRole === 'label' && userProfile?.label_headquarters ? userProfile.label_headquarters 
           : portalRole === 'creative' && userProfile?.creative_metadata?.base_location ? userProfile.creative_metadata.base_location
-          : portalRole === 'promoter' && (userProfile as any)?.promoter_city ? `${(userProfile as any).promoter_city}, ${(userProfile as any).promoter_state}`
+          : portalRole === 'promoter' ? resolvePromoterLocation(userProfile)
           : (signupLocation || userProfile?.location_code || userProfile?.city_state || 'Detroit, MI');
       }
 
@@ -1980,6 +2238,8 @@ let loadedFromLocalStorage = false;
 try {
   const parsed = loadProfileLocalStorageCache(portalRole, userProfile?.id);
   if (parsed) {
+    const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+
     if (portalRole === 'band') {
       setProfileFullLegalName(resolveBandName(resolvedActiveBand || activeBand, userProfile));
       setProfileHandle(resolveBandHandle(resolvedActiveBand || activeBand, userProfile));
@@ -1994,7 +2254,11 @@ try {
         : portalRole === 'label' ? userProfile?.label_company_name 
         : userProfile?.name || userProfile?.full_name;
       
-      setProfileFullLegalName(parentName || parsed.profileFullLegalName || 'Pro Account');
+      const safeParsedLegal = parsed.profileFullLegalName && (isOwnerMiguel || (!parsed.profileFullLegalName.toLowerCase().includes('miguel') && !parsed.profileFullLegalName.toLowerCase().includes('goregrinder')))
+        ? parsed.profileFullLegalName
+        : null;
+
+      setProfileFullLegalName(parentName || safeParsedLegal || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Pro Account'));
 
       const parentHandle = portalRole === 'creative' ? (userProfile?.creative_metadata?.business_name || userProfile?.business_name)?.toLowerCase().replace(/\s+/g, '')
         : portalRole === 'promoter' ? userProfile?.promoter_metadata?.brand_name?.toLowerCase().replace(/\s+/g, '')
@@ -2003,17 +2267,17 @@ try {
 
       if (parentHandle) {
         setProfileHandle(parentHandle);
-      } else if (parsed.profileHandle) {
+      } else if (parsed.profileHandle && (isOwnerMiguel || (!parsed.profileHandle.toLowerCase().includes('bdmceo') && !parsed.profileHandle.toLowerCase().includes('goregrinder')))) {
         setProfileHandle(parsed.profileHandle);
       }
 
       const parentAvatar = portalRole === 'label' ? userProfile?.label_avatar 
-        : portalRole === 'creative' ? userProfile?.creative_avatar || userProfile?.avatar_url
-        : portalRole === 'promoter' ? (userProfile as any)?.promoter_logo 
-        : userProfile?.avatar_url;
+        : portalRole === 'creative' ? (userProfile?.creative_avatar || userProfile?.creative_metadata?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null) || userProfile?.avatar_url)
+        : portalRole === 'promoter' ? ((userProfile as any)?.promoter_logo || userProfile?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null))
+        : (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null));
       
       if (parentAvatar) setProfileAvatarUrl(parentAvatar);
-      else if (parsed.profileAvatarUrl) setProfileAvatarUrl(parsed.profileAvatarUrl);
+      else if (parsed.profileAvatarUrl && (isOwnerMiguel || !parsed.profileAvatarUrl.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) setProfileAvatarUrl(parsed.profileAvatarUrl);
 
       const parentCover = portalRole === 'label' ? userProfile?.label_banner 
         : portalRole === 'creative' ? userProfile?.creative_banner || userProfile?.banner_url
@@ -2021,37 +2285,42 @@ try {
         : userProfile?.banner_url;
       
       if (parentCover) setProfileCoverUrl(parentCover);
-      else if (parsed.profileCoverUrl) setProfileCoverUrl(parsed.profileCoverUrl);
+      else if (parsed.profileCoverUrl && (isOwnerMiguel || !parsed.profileCoverUrl.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) setProfileCoverUrl(parsed.profileCoverUrl);
 
     } else {
       const uName = userProfile?.full_name || userProfile?.legal_name || userProfile?.name || userProfile?.screen_name;
-      if (uName && uName !== 'New User' && uName !== '') {
+      if (uName && uName !== 'New User' && uName !== '' && (isOwnerMiguel || (!uName.toLowerCase().includes('miguel') && !uName.toLowerCase().includes('goregrinder')))) {
         setProfileFullLegalName(uName);
-      } else if (parsed.profileFullLegalName) {
+      } else if (parsed.profileFullLegalName && (isOwnerMiguel || (!parsed.profileFullLegalName.toLowerCase().includes('miguel') && !parsed.profileFullLegalName.toLowerCase().includes('goregrinder')))) {
         setProfileFullLegalName(parsed.profileFullLegalName);
+      } else {
+        setProfileFullLegalName(isOwnerMiguel ? 'Miguel Goregrinder Medina' : (userProfile?.email ? userProfile.email.split('@')[0] : 'Scene Member'));
       }
 
       const uAvatar = userProfile?.avatar_url;
       const defaultAvatar = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Nexus%20Icon%20Circuits.png';
-      if (uAvatar && uAvatar !== defaultAvatar) {
+      if (uAvatar && uAvatar !== defaultAvatar && (isOwnerMiguel || !uAvatar.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) {
         setProfileAvatarUrl(uAvatar);
-      } else if (parsed.profileAvatarUrl) {
+      } else if (parsed.profileAvatarUrl && (isOwnerMiguel || !parsed.profileAvatarUrl.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) {
         setProfileAvatarUrl(parsed.profileAvatarUrl);
       }
 
       const uCover = userProfile?.banner_url;
-      if (uCover) {
+      if (uCover && (isOwnerMiguel || !uCover.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) {
         setProfileCoverUrl(uCover);
-      } else if (parsed.profileCoverUrl) {
+      } else if (parsed.profileCoverUrl && (isOwnerMiguel || !parsed.profileCoverUrl.includes('5403162d-1947-43aa-b5f6-38a1bd2a1b80'))) {
         setProfileCoverUrl(parsed.profileCoverUrl);
       }
     }
 
     const uHandle = userProfile?.handle || userProfile?.console_handle || userProfile?.screen_name?.replace(/\s+/g, '');
-    if (uHandle && uHandle !== '') {
-      setProfileHandle(uHandle);
-    } else if (parsed.profileHandle) {
-      setProfileHandle(parsed.profileHandle);
+    if (uHandle && uHandle !== '' && (isOwnerMiguel || (!uHandle.toLowerCase().includes('bdmceo') && !uHandle.toLowerCase().includes('goregrinder')))) {
+      setProfileHandle(uHandle.startsWith('@') ? uHandle : `@${uHandle}`);
+    } else if (parsed.profileHandle && (isOwnerMiguel || (!parsed.profileHandle.toLowerCase().includes('bdmceo') && !parsed.profileHandle.toLowerCase().includes('goregrinder')))) {
+      setProfileHandle(parsed.profileHandle.startsWith('@') ? parsed.profileHandle : `@${parsed.profileHandle}`);
+    } else {
+      const fallbackH = isOwnerMiguel ? '@bdmCEO' : (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@user'));
+      setProfileHandle(fallbackH);
     }
 
     const uEmail = userProfile?.email;
@@ -2117,35 +2386,14 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       return url;
     };
 
-    // Always restore avatar and cover urls from IndexedDB since they are excluded from localStorage
-    if (portalRole === 'band') {
-      setProfileAvatarUrl(resolveBandLogo(resolvedActiveBand || activeBand, userProfile));
-      setProfileCoverUrl(resolveBandCover(resolvedActiveBand || activeBand, userProfile));
-      setProfileFullLegalName(resolveBandName(resolvedActiveBand || activeBand, userProfile));
-      setProfileHandle(resolveBandHandle(resolvedActiveBand || activeBand, userProfile));
-      setProfileLocation(resolveBandLocation(resolvedActiveBand || activeBand, userProfile));
-      setProfileBlurb(resolveBandBio(resolvedActiveBand || activeBand, userProfile));
-    } else if (portalRole !== 'industry_pro' && portalRole !== 'fan_only') {
-      const parentAvatar = portalRole === 'label' ? userProfile?.label_avatar 
-        : portalRole === 'creative' ? userProfile?.creative_avatar || userProfile?.avatar_url
-        : portalRole === 'promoter' ? (userProfile as any)?.promoter_logo 
-        : userProfile?.avatar_url;
-      
-      setProfileAvatarUrl(getCleanUrl(parentAvatar) || getCleanUrl(data.profileAvatarUrl) || null);
-
-      const parentCover = portalRole === 'label' ? userProfile?.label_banner 
-        : portalRole === 'creative' ? userProfile?.creative_banner || userProfile?.banner_url
-        : portalRole === 'promoter' ? (userProfile as any)?.promoter_cover_image 
-        : userProfile?.banner_url;
-      
-      setProfileCoverUrl(getCleanUrl(parentCover) || getCleanUrl(data.profileCoverUrl) || null);
-    } else {
-      if (data.profileAvatarUrl && !data.profileAvatarUrl.startsWith('data:image')) {
-        setProfileAvatarUrl(data.profileAvatarUrl);
-      }
-      if (data.profileCoverUrl && !data.profileCoverUrl.startsWith('data:image')) {
-        setProfileCoverUrl(data.profileCoverUrl);
-      }
+    // Restore avatar and cover urls using centralized resolvers and only if valid
+    const resolvedHydratedAvatar = resolveEffectiveAvatar(portalRole, resolvedActiveBand || activeBand, userProfile, data?.profileAvatarUrl);
+    if (resolvedHydratedAvatar && isValidStorageOrImageUrl(resolvedHydratedAvatar)) {
+      setProfileAvatarUrl(resolvedHydratedAvatar);
+    }
+    const resolvedHydratedCover = resolveEffectiveCover(portalRole, resolvedActiveBand || activeBand, userProfile, data?.profileCoverUrl);
+    if (resolvedHydratedCover && isValidStorageOrImageUrl(resolvedHydratedCover)) {
+      setProfileCoverUrl(resolvedHydratedCover);
     }
 
     if (!loadedFromLocalStorage) {
@@ -2167,8 +2415,15 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
         
         setProfileHandle(parentHandle || data.profileHandle || 'pro_account');
       } else {
-        setProfileFullLegalName(data.profileFullLegalName || userProfile?.full_name || userProfile?.legal_name || userProfile?.name || userProfile?.screen_name || 'Fan Listener');
-        if (data.profileHandle) setProfileHandle(data.profileHandle);
+        const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+        const authenticName = userProfile?.full_name || userProfile?.legal_name || userProfile?.name || userProfile?.screen_name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : (data.profileFullLegalName || (userProfile?.email ? userProfile.email.split('@')[0] : 'Scene Member')));
+        setProfileFullLegalName(authenticName);
+        if (data.profileHandle && (isOwnerMiguel || (!data.profileHandle.toLowerCase().includes('bdmceo') && !data.profileHandle.toLowerCase().includes('goregrinder')))) {
+          setProfileHandle(data.profileHandle.startsWith('@') ? data.profileHandle : `@${data.profileHandle}`);
+        } else {
+          const fallbackH = isOwnerMiguel ? '@bdmCEO' : (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@user'));
+          setProfileHandle(fallbackH);
+        }
       }
 
       if (data.profileEmail) setProfileEmail(data.profileEmail);
@@ -2216,6 +2471,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('nexus_avatar_updated', handleAvatarUpdateEvent);
+      window.removeEventListener('nexus_cover_updated', handleCoverUpdateEvent);
     };
   }, [portalRole, userProfile?.id, activeBand?.id]);
 
@@ -2709,9 +2965,56 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
           activeTarget?.band_id
         );
 
+        const isPromoterTarget = Boolean(
+          activeTarget?.isPromoterProfile ||
+          activeTarget?.type === 'promoter' ||
+          activeTarget?.role === 'promoter' ||
+          activeTarget?.role === 'Promoter' ||
+          activeTarget?.portalRole === 'promoter' ||
+          activeTarget?.account_type === 'promoter' ||
+          (portalRole === 'promoter' && (activeTarget?.isYou || activeTarget?.id === userProfile?.id || activeTarget?.promoter_name || activeTarget?.agency_name)) ||
+          activeTarget?.agency_name ||
+          activeTarget?.promoter_name ||
+          activeTarget?.promoterName ||
+          activeTarget?.promoter_id ||
+          activeTarget?.registered_promoter_id
+        );
+
         let activeId: string | null = null;
 
-        if (isBandTarget) {
+        if (isPromoterTarget) {
+          // 1. Resolve Promoter-specific UUID (strictly separate from personal profile)
+          const candidatePromoterId = activeTarget.promoter_id || activeTarget.registered_promoter_id || (typeof activeTarget.promoter_metadata === 'object' ? activeTarget.promoter_metadata?.id : null) || (activeTarget.isPromoterProfile ? (activeTarget.raw_id || activeTarget.id) : null);
+          if (candidatePromoterId && isValidUUID(candidatePromoterId)) {
+            activeId = candidatePromoterId;
+          }
+
+          const promoterSearchName = (activeTarget.agency_name || activeTarget.promoter_name || activeTarget.promoterName || activeTarget.name || '').trim();
+          if ((!activeId || !isValidUUID(activeId)) && promoterSearchName) {
+            try {
+              const { data: pMatch } = await supabase
+                .from('profiles')
+                .select('id, promoter_id')
+                .or(`agency_name.ilike.%${promoterSearchName}%,promoter_name.ilike.%${promoterSearchName}%,full_name.ilike.%${promoterSearchName}%`)
+                .limit(1);
+              if (pMatch?.[0]?.promoter_id && isValidUUID(pMatch[0].promoter_id)) {
+                activeId = pMatch[0].promoter_id;
+              } else if (pMatch?.[0]?.id && isValidUUID(pMatch[0].id) && !activeTarget.isYou && activeTarget.id !== userProfile?.id) {
+                activeId = pMatch[0].id;
+              }
+            } catch (e) {}
+          }
+
+          if ((!activeId || !isValidUUID(activeId)) && (activeTarget.isYou || activeTarget.id === userProfile?.id) && (userProfile?.promoter_id || userProfile?.registered_promoter_id)) {
+            const upId = userProfile.promoter_id || userProfile.registered_promoter_id;
+            if (isValidUUID(upId)) activeId = upId;
+          }
+
+          if (!activeId || !isValidUUID(activeId)) {
+            const seed = `promoter-page-${promoterSearchName || activeTarget.id || 'promoter-entity'}`;
+            activeId = generateDeterministicUUID(seed);
+          }
+        } else if (isBandTarget) {
           // 1. Resolve Band-specific UUID
           const candidateBandId = activeTarget.band_id || (activeTarget.isBandProfile ? (activeTarget.raw_id || activeTarget.id) : null);
           if (candidateBandId && isValidUUID(candidateBandId)) {
@@ -2736,7 +3039,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
             activeId = userProfile.band_id;
           }
         } else {
-          // Personal / Creative / Label / Promoter resolution
+          // Personal / Creative / Label resolution
           if (activeTarget.creative_id && isValidUUID(activeTarget.creative_id)) activeId = activeTarget.creative_id;
           else if (activeTarget.registered_creative_id && isValidUUID(activeTarget.registered_creative_id)) activeId = activeTarget.registered_creative_id;
           else if (activeTarget.raw_id && isValidUUID(activeTarget.raw_id)) activeId = activeTarget.raw_id;
@@ -3236,17 +3539,17 @@ const getProfileForUser = (userParam: any) => {
 
   // Strict isCurrentUser resolution to prevent state overwrite when viewing friend profiles
   const isExplicitNotYou = typeof userParam === 'object' && userParam.isYou === false;
-  const hasIdMismatch = Boolean(targetId && myId && String(targetId) !== String(myId));
-  const hasEmailMismatch = Boolean(targetEmail && myEmail && targetEmail !== myEmail);
+  const isExplicitYou = typeof userParam === 'object' && userParam.isYou === true;
+  const hasIdMismatch = Boolean(targetId && myId && String(targetId) !== String(myId) && !isExplicitYou);
+  const hasEmailMismatch = Boolean(targetEmail && myEmail && targetEmail !== myEmail && !isExplicitYou);
 
-  const isCurrentUser = !isExplicitNotYou && !hasIdMismatch && !hasEmailMismatch && !!(
-    (typeof userParam === 'object' && userParam.isYou === true) ||
+  const isCurrentUser = isExplicitYou || (!isExplicitNotYou && !hasIdMismatch && !hasEmailMismatch && !!(
     (targetId && myId && String(targetId) === String(myId)) ||
     (targetEmail && myEmail && targetEmail === myEmail) ||
     (!targetId && !targetEmail && myHandleLower && myHandleLower !== 'user' && (cleanHandleLower === myHandleLower || targetNameLower === myHandleLower)) ||
     (!targetId && !targetEmail && myFullNameLower && myFullNameLower !== 'user' && myFullNameLower !== 'new user' && (cleanRealLower === myFullNameLower || targetNameLower === myFullNameLower)) ||
     (!targetId && !targetEmail && myNameLower && myNameLower !== 'user' && myNameLower !== 'new user' && targetNameLower === myNameLower)
-  );
+  ));
 
   if (isCurrentUser) {
     const isExplicitBand = (typeof userParam === 'object' && (userParam.isBandProfile || userParam.type === 'band' || userParam.role === 'Artist' || userParam.role === 'Band' || userParam.account_type === 'band')) ||
@@ -3256,18 +3559,45 @@ const getProfileForUser = (userParam: any) => {
     const isExplicitIndustryPro = (typeof userParam === 'object' && (userParam.role === 'Industry Pro' || userParam.account_type === 'industry_pro')) ||
       cleanHandleLower === 'bdmceo' || targetNameLower === 'bdmceo';
 
-    const isExplicitCreative = typeof userParam === 'object' && (userParam.role === 'Creative' || userParam.account_type === 'creative');
-    const isExplicitLabel = typeof userParam === 'object' && (userParam.role === 'Label' || userParam.account_type === 'label');
-    const isExplicitPromoter = typeof userParam === 'object' && (userParam.role === 'Promoter' || userParam.account_type === 'promoter');
+    const isExplicitCreative = Boolean(
+      (typeof userParam === 'object' && (
+        userParam.role?.toLowerCase() === 'creative' || 
+        userParam.account_type?.toLowerCase() === 'creative' ||
+        userParam.type?.toLowerCase() === 'creative' ||
+        userParam.portalRole?.toLowerCase() === 'creative' ||
+        userParam.isCreativeProfile === true ||
+        (userParam.name && String(userParam.name).toLowerCase().includes('vortex')) ||
+        (userParam.creative_name && String(userParam.creative_name).toLowerCase().includes('vortex')) ||
+        (userParam.business_name && String(userParam.business_name).toLowerCase().includes('vortex'))
+      ))
+    );
+    const isExplicitLabel = typeof userParam === 'object' && (userParam.role?.toLowerCase() === 'label' || userParam.account_type?.toLowerCase() === 'label' || userParam.type?.toLowerCase() === 'label');
+    const isExplicitPromoter = Boolean(
+      (typeof userParam === 'object' && (
+        userParam.role?.toLowerCase() === 'promoter' || 
+        userParam.account_type?.toLowerCase() === 'promoter' ||
+        userParam.type?.toLowerCase() === 'promoter' ||
+        userParam.portalRole?.toLowerCase() === 'promoter' ||
+        userParam.isPromoterProfile === true ||
+        userParam.is_promoter === true ||
+        (userParam.name && String(userParam.name).toLowerCase().includes('nexus live')) ||
+        (userParam.entity_name && String(userParam.entity_name).toLowerCase().includes('nexus live')) ||
+        (userParam.agency_name && String(userParam.agency_name).toLowerCase().includes('nexus live')) ||
+        (userParam.promoter_name && String(userParam.promoter_name).toLowerCase().includes('nexus live'))
+      ))
+    );
 
-    const activeRole = isExplicitBand ? 'band'
-      : isExplicitIndustryPro ? 'industry_pro'
+    const activeRole = (isExplicitCreative && !isExplicitBand) ? 'creative'
+      : (isExplicitPromoter && !isExplicitBand) ? 'promoter'
+      : (isExplicitLabel && !isExplicitBand) ? 'label'
+      : isExplicitBand ? 'band'
       : isExplicitCreative ? 'creative'
-      : isExplicitLabel ? 'label'
       : isExplicitPromoter ? 'promoter'
+      : isExplicitLabel ? 'label'
+      : isExplicitIndustryPro ? 'industry_pro'
       : (portalRole || userProfile?.active_workspace || userProfile?.account_type || 'fan_only');
 
-    if (activeRole === 'band' || isExplicitBand) {
+    if (activeRole === 'band' || (isExplicitBand && !isExplicitCreative && !isExplicitPromoter)) {
       return {
         id: activeBand?.id || userProfile?.id || null,
         name: activeBand?.name || userProfile?.bandName || 'Artist',
@@ -3282,6 +3612,7 @@ const getProfileForUser = (userParam: any) => {
         role: 'Artist',
         account_type: 'band',
         type: 'band',
+        portalRole: 'band',
         isBandProfile: true,
         isPersonal: false,
         isYou: true,
@@ -3298,32 +3629,41 @@ const getProfileForUser = (userParam: any) => {
       };
     }
 
-    if (activeRole === 'creative' || userProfile?.account_type === 'creative') {
-      const cBizName = userProfile?.creative_business_name || userProfile?.creative_name || profileFullLegalName || userProfile?.name || 'Pro Creative';
-      const cHandle = profileHandle || userProfile?.creative_handle || 'creative_pro';
+    if (activeRole === 'creative' || isExplicitCreative || userProfile?.account_type === 'creative') {
+      const cBizName = resolveCreativeName(userProfile);
+      const cHandle = resolveCreativeHandle(userProfile);
+      const cAvatar = resolveCreativeLogo(userProfile, typeof userParam === 'object' ? userParam.avatar || userParam.avatar_url : null);
+      const cCover = resolveCreativeCover(userProfile);
       return {
-        id: userProfile?.id || null,
+        id: (userParam as any)?.creative_id || userProfile?.id || 'c-vortex',
+        user_id: userProfile?.id || null,
         name: cBizName,
         business_name: cBizName,
         businessName: cBizName,
         creative_name: cBizName,
         creative_handle: cHandle,
         legalName: profileFullLegalName || userProfile?.full_name || userProfile?.name,
-        avatar: userProfile?.creative_avatar || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150',
-        avatar_url: userProfile?.creative_avatar || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150',
-        banner: userProfile?.creative_banner || userProfile?.banner_url || null,
-        banner_url: userProfile?.creative_banner || userProfile?.banner_url || null,
-        cover_url: userProfile?.creative_banner || userProfile?.banner_url || null,
-        location: userProfile?.location || 'USA / Global',
+        avatar: cAvatar,
+        avatar_url: cAvatar,
+        logo: cAvatar,
+        logo_url: cAvatar,
+        creative_avatar: cAvatar,
+        banner: cCover,
+        banner_url: cCover,
+        cover_url: cCover,
+        creative_banner: cCover,
+        location: resolveCreativeLocation(userProfile) || userProfile?.location || 'Detroit, MI',
         role: 'Creative',
         account_type: 'creative',
         type: 'creative',
-        isPersonal: true,
+        portalRole: 'creative',
+        isPersonal: false,
         isBandProfile: false,
+        isCreativeProfile: true,
         isYou: true,
         badges: ['🛠️ Creative Pro', '🎨 Designer'],
         customBadges: ['🛠️ Creative Pro', '🎨 Designer'],
-        bio: userProfile?.bio || profileBlurb || 'Professional creative specialist on the Nexus network.',
+        bio: resolveCreativeBio(userProfile),
         handle: cHandle,
         console_handle: cHandle,
         followersCount: currentUserStats?.followers ?? 0,
@@ -3341,16 +3681,17 @@ const getProfileForUser = (userParam: any) => {
         name: labelName,
         label_company_name: labelName,
         legalName: profileFullLegalName || userProfile?.full_name || userProfile?.name,
-        avatar: userProfile?.label_logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=150',
-        avatar_url: userProfile?.label_logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=150',
-        banner: userProfile?.label_banner || userProfile?.banner_url || null,
-        banner_url: userProfile?.label_banner || userProfile?.banner_url || null,
-        cover_url: userProfile?.label_banner || userProfile?.banner_url || null,
+        avatar: profileAvatarUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_avatar') || localStorage.getItem('nexus_user_avatar')) : null) || userProfile?.label_logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=150',
+        avatar_url: profileAvatarUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_avatar') || localStorage.getItem('nexus_user_avatar')) : null) || userProfile?.label_logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=150',
+        banner: profileCoverUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_banner') || localStorage.getItem('nexus_user_banner')) : null) || userProfile?.label_banner || userProfile?.banner_url || null,
+        banner_url: profileCoverUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_banner') || localStorage.getItem('nexus_user_banner')) : null) || userProfile?.label_banner || userProfile?.banner_url || null,
+        cover_url: profileCoverUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_banner') || localStorage.getItem('nexus_user_banner')) : null) || userProfile?.label_banner || userProfile?.banner_url || null,
         location: userProfile?.location || 'USA / Global',
         role: 'Label',
         account_type: 'label',
         type: 'label',
-        isPersonal: true,
+        portalRole: 'label',
+        isPersonal: false,
         isBandProfile: false,
         isYou: true,
         badges: ['💿 Record Label'],
@@ -3364,28 +3705,43 @@ const getProfileForUser = (userParam: any) => {
       };
     }
 
-    if (activeRole === 'promoter' || userProfile?.account_type === 'promoter') {
-      const promoterName = userProfile?.promoter_metadata?.brand_name || profileFullLegalName || userProfile?.name || 'Promoter';
-      const promoterHandle = profileHandle || 'promoter_pro';
+    const hasRegisteredPromoterAccess = hasRegisteredWorkspace(userProfile, 'promoter') || isMiguelNameOrProfile(userProfile);
+    if (hasRegisteredPromoterAccess && (activeRole === 'promoter' || isExplicitPromoter || userProfile?.account_type === 'promoter' || userProfile?.active_workspace === 'promoter')) {
+      const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+      const promoterName = userProfile?.promoter_metadata?.brand_name || userProfile?.promoter_agency || (isOwnerMiguel ? 'Nexus Live Productions' : (userProfile?.name ? `${userProfile.name} Productions` : 'Promoter Operations'));
+      const promoterHandle = resolvePromoterHandle(userProfile) || profileHandle || (isOwnerMiguel ? 'NexusLive' : 'promoter_ops');
+      const promoterLogo = resolvePromoterLogo(userProfile, typeof userParam === 'object' ? userParam.avatar || userParam.avatar_url || userParam.logo : null);
+      const promoterCover = resolvePromoterCover(userProfile);
+      const promoterLocation = resolvePromoterLocation(userProfile);
+      const promoterBioText = userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent live event promoter and concert coordinator.');
+
       return {
-        id: userProfile?.id || null,
+        id: (userParam as any)?.promoter_id || userProfile?.id || (isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : 'promoter_profile'),
+        user_id: userProfile?.id || null,
         name: promoterName,
         legalName: profileFullLegalName || userProfile?.full_name || userProfile?.name,
-        avatar: userProfile?.promoter_metadata?.logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=150',
-        avatar_url: userProfile?.promoter_metadata?.logo || userProfile?.avatar_url || 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=150',
-        banner: userProfile?.promoter_cover_image || userProfile?.banner_url || null,
-        banner_url: userProfile?.promoter_cover_image || userProfile?.banner_url || null,
-        cover_url: userProfile?.promoter_cover_image || userProfile?.banner_url || null,
-        location: userProfile?.location || 'USA / Global',
-        role: 'Promoter',
+        avatar: promoterLogo,
+        avatar_url: promoterLogo,
+        logo: promoterLogo,
+        logo_url: promoterLogo,
+        promoter_logo: promoterLogo,
+        banner: promoterCover,
+        banner_url: promoterCover,
+        cover_url: promoterCover,
+        promoter_cover_image: promoterCover,
+        location: promoterLocation,
+        role: 'Event Promoter',
         account_type: 'promoter',
         type: 'promoter',
-        isPersonal: true,
+        portalRole: 'promoter',
+        isPersonal: false,
         isBandProfile: false,
+        isPromoterProfile: true,
+        is_promoter: true,
         isYou: true,
-        badges: ['🎫 Promoter'],
-        customBadges: ['🎫 Promoter'],
-        bio: userProfile?.bio || profileBlurb || 'Concert promoter and event organizer on Nexus.',
+        badges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+        customBadges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+        bio: promoterBioText,
         handle: promoterHandle,
         console_handle: promoterHandle,
         followersCount: currentUserStats?.followers ?? 0,
@@ -3395,18 +3751,34 @@ const getProfileForUser = (userParam: any) => {
     }
 
     if (activeRole === 'industry_pro' || userProfile?.account_type === 'industry_pro') {
-      const pName = profileFullLegalName || userProfile?.full_name || userProfile?.name || 'Industry Pro';
+      const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+      const pName = profileFullLegalName || userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Industry Pro');
       const rawHandle = profileHandle || userProfile?.console_handle || userProfile?.handle;
-      const pHandle = (!rawHandle || rawHandle.toLowerCase().includes('virulent') || rawHandle === 'pro_user' || rawHandle === 'user') ? '@bdmCEO' : (rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`);
+      const userDefaultHandle = isOwnerMiguel ? '@bdmCEO' : (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@pro_user'));
+      const pHandle = (!rawHandle || (isOwnerMiguel && rawHandle.toLowerCase().includes('virulent')) || rawHandle === 'pro_user' || rawHandle === 'user' || (!isOwnerMiguel && (rawHandle.toLowerCase().includes('bdmceo') || rawHandle.toLowerCase().includes('goregrinder')))) 
+        ? userDefaultHandle 
+        : (rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`);
+      const savedUserBio = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_bio') : null;
+      const promoterBio = userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio;
+      const personalBio = (savedUserBio && savedUserBio !== promoterBio)
+        ? savedUserBio
+        : ((userProfile?.bio && userProfile.bio !== promoterBio)
+          ? userProfile.bio
+          : (isOwnerMiguel ? 'Extreme metal musician, archivist, and underground pit warrior.' : 'Underground music supporter and scene regular.'));
+      const effectiveBanner = profileCoverUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_banner')) : null) || userProfile?.banner_url || userProfile?.banner || null;
+      const cleanUserBanner = effectiveBanner;
+      const effectiveUserAvatar = profileAvatarUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null) || userProfile?.avatar_url || userProfile?.avatar;
+      const cleanAvatar = (effectiveUserAvatar && isValidStorageOrImageUrl(effectiveUserAvatar)) ? effectiveUserAvatar : (userProfile?.avatar_url || profileAvatarUrl || null);
+
       return {
         id: userProfile?.id || null,
         name: pName,
         legalName: pName,
-        avatar: userProfile?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-        avatar_url: userProfile?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-        banner: userProfile?.banner_url || null,
-        banner_url: userProfile?.banner_url || null,
-        cover_url: userProfile?.banner_url || null,
+        avatar: cleanAvatar,
+        avatar_url: cleanAvatar,
+        banner: cleanUserBanner,
+        banner_url: cleanUserBanner,
+        cover_url: cleanUserBanner,
         location: userProfile?.location || 'USA / Global',
         role: 'Industry Pro',
         account_type: 'industry_pro',
@@ -3416,7 +3788,7 @@ const getProfileForUser = (userParam: any) => {
         isYou: true,
         badges: userProfile?.badges?.length ? userProfile.badges : ['🤘 Fan', '⚡ Industry Pro'],
         customBadges: userProfile?.badges?.length ? userProfile.badges : ['🤘 Fan', '⚡ Industry Pro'],
-        bio: userProfile?.bio || profileBlurb || 'Industry professional on the Nexus network.',
+        bio: personalBio,
         handle: pHandle,
         console_handle: pHandle,
         followersCount: currentUserStats?.followers ?? 0,
@@ -3426,18 +3798,34 @@ const getProfileForUser = (userParam: any) => {
       };
     }
 
-    const fName = profileFullLegalName || userProfile?.full_name || userProfile?.name || 'Fan Listener';
+    const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+    const fName = profileFullLegalName || userProfile?.full_name || userProfile?.name || (isOwnerMiguel ? 'Miguel Goregrinder Medina' : 'Fan Listener');
     const rawFHandle = profileHandle || userProfile?.fan_handle || userProfile?.console_handle || userProfile?.handle;
-    const fHandle = (!rawFHandle || rawFHandle.toLowerCase().includes('virulent') || rawFHandle === 'listener' || rawFHandle === 'user') ? '@bdmCEO' : (rawFHandle.startsWith('@') ? rawFHandle : `@${rawFHandle}`);
+    const userDefaultFHandle = isOwnerMiguel ? '@bdmCEO' : (userProfile?.name && !userProfile.name.toLowerCase().includes('miguel') ? `@${userProfile.name.replace(/\s+/g, '_').toLowerCase()}` : (userProfile?.email ? `@${userProfile.email.split('@')[0]}` : '@listener'));
+    const fHandle = (!rawFHandle || (isOwnerMiguel && rawFHandle.toLowerCase().includes('virulent')) || rawFHandle === 'listener' || rawFHandle === 'user' || (!isOwnerMiguel && (rawFHandle.toLowerCase().includes('bdmceo') || rawFHandle.toLowerCase().includes('goregrinder')))) 
+      ? userDefaultFHandle 
+      : (rawFHandle.startsWith('@') ? rawFHandle : `@${rawFHandle}`);
+    const savedUserBio = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_bio') : null;
+    const promoterBio = userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio;
+    const personalBio = (savedUserBio && savedUserBio !== promoterBio)
+      ? savedUserBio
+      : ((userProfile?.bio && userProfile.bio !== promoterBio)
+        ? userProfile.bio
+        : (isOwnerMiguel ? 'Extreme metal musician, archivist, and underground pit warrior.' : 'Underground music supporter and scene regular.'));
+    const userBannerCandF = profileCoverUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_banner')) : null) || userProfile?.banner_url || userProfile?.banner || null;
+    const cleanUserBannerF = userBannerCandF;
+    const effectiveFanAvatar = profileAvatarUrl || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null) || userProfile?.avatar_url || userProfile?.avatar;
+    const cleanFanAvatar = (effectiveFanAvatar && isValidStorageOrImageUrl(effectiveFanAvatar)) ? effectiveFanAvatar : (userProfile?.avatar_url || profileAvatarUrl || null);
+
     return {
       id: userProfile?.id || null,
       name: fName,
       legalName: fName,
-      avatar: userProfile?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-      avatar_url: userProfile?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-      banner: userProfile?.banner_url || null,
-      banner_url: userProfile?.banner_url || null,
-      cover_url: userProfile?.banner_url || null,
+      avatar: cleanFanAvatar,
+      avatar_url: cleanFanAvatar,
+      banner: cleanUserBannerF,
+      banner_url: cleanUserBannerF,
+      cover_url: cleanUserBannerF,
       location: userProfile?.location || 'USA / Global',
       role: 'Fan Listener',
       account_type: 'fan_only',
@@ -3447,7 +3835,7 @@ const getProfileForUser = (userParam: any) => {
       isYou: true,
       badges: userProfile?.badges?.length ? userProfile.badges : ['🤘 Fan'],
       customBadges: userProfile?.badges?.length ? userProfile.badges : ['🤘 Fan'],
-      bio: userProfile?.bio || profileBlurb || 'Fan and scene listener on the Nexus network.',
+      bio: personalBio,
       handle: fHandle,
       console_handle: fHandle,
       followersCount: currentUserStats?.followers ?? 0,
@@ -3563,7 +3951,7 @@ const getProfileForUser = (userParam: any) => {
       top_song_url: isYou ? (profileTopSongUrl || userProfile?.top_song_url || '') : (dbProfile?.top_song_url || userParam?.top_song_url || ''),
       customBadges: isYou ? (
         portalRole === 'label' ? ['💿 Record Label'] :
-        portalRole === 'promoter' ? ['🎫 Promoter'] :
+        (portalRole === 'promoter' && (hasRegisteredWorkspace(userProfile, 'promoter') || isMiguelNameOrProfile(userProfile))) ? ['🎫 Promoter'] :
         portalRole === 'creative' ? ['🎨 Creative'] :
         portalRole === 'band' ? ['🎸 Artist'] :
         portalRole === 'industry_pro' ? ['💼 Industry Pro'] :
@@ -3590,7 +3978,24 @@ const getProfileForUser = (userParam: any) => {
     let bandMembers: any[] = [];
     if (isBand) {
       const lowerName = (user?.name || "User").toLowerCase();
-      if (isYou) {
+      const matchedCommBand = communityBandManager.findByName(user?.name || '') || communityBandManager.findMatch(user?.name || '');
+      
+      const candidateLineup = (userParam as any)?.lineup || (user as any)?.lineup;
+      if (candidateLineup && Array.isArray(candidateLineup) && candidateLineup.length > 0) {
+        bandMembers = candidateLineup.map((member: any, index: number) => ({
+          name: typeof member === 'string' ? member : member.name,
+          role: (typeof member === 'object' && member.role) ? member.role : 'Member',
+          avatar: (typeof member === 'object' && member.avatar) ? member.avatar : `https://images.unsplash.com/photo-${1500000000000 + (index * 100000)}?auto=format&fit=crop&q=80&w=100`,
+          activated: true
+        }));
+      } else if (matchedCommBand?.lineup && Array.isArray(matchedCommBand.lineup) && matchedCommBand.lineup.length > 0) {
+        bandMembers = matchedCommBand.lineup.map((member: any, index: number) => ({
+          name: typeof member === 'string' ? member : member.name,
+          role: (typeof member === 'object' && member.role) ? member.role : 'Member',
+          avatar: (typeof member === 'object' && member.avatar) ? member.avatar : `https://images.unsplash.com/photo-${1500000000000 + (index * 100000)}?auto=format&fit=crop&q=80&w=100`,
+          activated: true
+        }));
+      } else if (isYou) {
         const activeBandId = (activeBand as any)?.id || userProfile?.activeBandId || 'default';
         const savedLineupStr = localStorage.getItem(`nexus_core_band_lineup_${activeBandId}`);
         const localLineup = savedLineupStr ? JSON.parse(savedLineupStr) : [];
@@ -3670,16 +4075,58 @@ if (regWorkspaces.includes('creative') || creativeName) {
 }
 
 const isTargetMiguel = isMiguelNameOrProfile(targetProfObj) || (isYou && isMiguelNameOrProfile(userProfile));
-const rawBandNameVal = targetProfObj?.band_name || targetProfObj?.bandName;
-const bandNameVal = (isTargetMiguel || (rawBandNameVal && (rawBandNameVal.toLowerCase().includes('molested') || rawBandNameVal.toLowerCase().includes('dying fetus')))) ? 'Virulent Excision' : rawBandNameVal;
-if (regWorkspaces.includes('band') || (bandNameVal && isTargetMiguel)) {
-  const finalBandName = bandNameVal || (isTargetMiguel ? 'Virulent Excision' : null);
+const rawBandNameVal = targetProfObj?.band_name || targetProfObj?.bandName || (isYou ? userProfile?.band_name : null);
+const targetFullName = (
+  targetProfObj?.full_name ||
+  targetProfObj?.name ||
+  targetProfObj?.display_name ||
+  (isYou ? (userProfile?.full_name || userProfile?.name) : null) ||
+  ''
+).trim();
+
+// Find matched community band by direct name or member name (e.g. Andre Gonzalez -> Cordyceps, Christopher Wirstrom -> Cranial Impalement)
+const isEmmanuelTargetProfile = Boolean(
+  (targetFullName.toLowerCase().includes('emmanuel') && targetFullName.toLowerCase().includes('flores')) ||
+  (targetProfObj?.username && String(targetProfObj.username).toLowerCase().includes('emmanuel') && String(targetProfObj.username).toLowerCase().includes('flores'))
+);
+
+let resolvedBandForTies: any = null;
+if (!isTargetMiguel) {
+  if (rawBandNameVal && (!isEmmanuelTargetProfile || rawBandNameVal.toLowerCase() !== 'origin')) {
+    resolvedBandForTies = communityBandManager.findByName(rawBandNameVal) || communityBandManager.findMatch(rawBandNameVal);
+  }
+  if (!resolvedBandForTies && targetFullName && !isEmmanuelTargetProfile) {
+    resolvedBandForTies = communityBandManager.findByMember(targetFullName);
+  }
+  if (!resolvedBandForTies) {
+    const targetEmailLower = (targetProfObj?.email || dbProfile?.email || '').toLowerCase();
+    if (targetEmailLower.includes('exposedentrails')) {
+      resolvedBandForTies = communityBandManager.findByName('Cordyceps');
+    } else if (targetEmailLower.includes('wirstrom84')) {
+      resolvedBandForTies = communityBandManager.findByName('Cranial Impalement');
+    }
+  }
+}
+
+if (isEmmanuelTargetProfile && (resolvedBandForTies?.name?.toLowerCase() === 'origin' || (resolvedBandForTies as any)?.band_name?.toLowerCase() === 'origin')) {
+  resolvedBandForTies = null;
+}
+
+const bandNameVal = isTargetMiguel
+  ? 'Virulent Excision'
+  : (resolvedBandForTies?.name || resolvedBandForTies?.band_name || rawBandNameVal || null);
+
+if (regWorkspaces.includes('band') || (bandNameVal && (isTargetMiguel || resolvedBandForTies || rawBandNameVal))) {
+  const finalBandName = bandNameVal;
   if (finalBandName) {
-    const isVE = finalBandName.toLowerCase() === 'virulent excision';
+    const isVE = isTargetMiguel || finalBandName.toLowerCase() === 'virulent excision';
+    const bandAvatar = isVE
+      ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396'
+      : (resolvedBandForTies?.logo_url || resolvedBandForTies?.avatar_url || targetProfObj?.band_logo || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150');
     dynamicUserTies.push({
       name: finalBandName,
       role: 'Artist',
-      avatar: isVE ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396' : (targetProfObj?.avatar || targetProfObj?.avatar_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150')
+      avatar: bandAvatar
     });
   }
 }
@@ -3696,7 +4143,12 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   });
 }
 
-    const associatedProfiles = isBand ? bandMembers :
+    const isEmmanuelTarget = Boolean(
+      (targetFullName.toLowerCase().includes('emmanuel') && targetFullName.toLowerCase().includes('flores')) ||
+      (targetProfObj?.username && String(targetProfObj.username).toLowerCase().includes('emmanuel') && String(targetProfObj.username).toLowerCase().includes('flores'))
+    );
+
+    const rawAssociatedProfiles = isBand ? bandMembers :
       dynamicUserTies.length > 0 ? dynamicUserTies :
       userRoleLower.includes('label') ? [
         { name: 'Devourment', role: 'Artist', avatar: 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?auto=format&fit=crop&q=80&w=100' },
@@ -3705,6 +4157,10 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         { name: 'Incinerate', role: 'Artist', avatar: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&q=80&w=200' },
         { name: 'Stabbing', role: 'Artist', avatar: 'https://images.unsplash.com/photo-1506157786151-b8491531f063?auto=format&fit=crop&q=80&w=200' }
       ] : [];
+
+    const associatedProfiles = isEmmanuelTarget
+      ? rawAssociatedProfiles.filter(p => p.name?.toLowerCase() !== 'origin')
+      : rawAssociatedProfiles;
     const dbBanner = dbProfile?.banner_url || dbProfile?.creative_banner || dbProfile?.promoter_cover_image || dbProfile?.label_banner;
     const banner = (user as any).banner || dbBanner || (discoverProf as any)?.banner || registryData.banner || (isYou ? profileCoverUrl : undefined);
 
@@ -3759,8 +4215,8 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
     const resolvedLegalName = isYou 
       ? (portalRole === 'band' ? (activeBand?.name || userProfile?.bandName || profileFullLegalName)
          : portalRole === 'fan_only' ? (profileFullLegalName || userProfile?.full_name || userProfile?.name)
-         : portalRole === 'creative' ? (userProfile?.creative_metadata?.business_name || profileFullLegalName || 'Pro Creative')
-         : portalRole === 'promoter' ? (userProfile?.promoter_metadata?.brand_name || profileFullLegalName || 'Pro Promoter')
+         : portalRole === 'creative' ? resolveCreativeName(userProfile)
+         : portalRole === 'promoter' ? (resolvePromoterName(userProfile) || profileFullLegalName || 'Pro Promoter')
          : portalRole === 'label' ? (userProfile?.label_company_name || profileFullLegalName || 'Pro Label')
          : (profileFullLegalName || userProfile?.legal_name || userProfile?.full_name || userProfile?.name))
       : (userParam.name === 'GoregrindSlayer' ? 'Tyler Slamson' :
@@ -3773,8 +4229,8 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
     const resolvedHandle = isYou 
       ? (portalRole === 'band' ? (profileHandle || (activeBand?.name || '').replace(/\s+/g, ''))
          : portalRole === 'fan_only' ? (profileHandle || userProfile?.fan_handle || 'listener')
-         : portalRole === 'creative' ? (profileHandle || 'creative_pro')
-         : portalRole === 'promoter' ? (profileHandle || 'promoter_pro')
+         : portalRole === 'creative' ? (profileHandle || resolveCreativeHandle(userProfile))
+         : portalRole === 'promoter' ? (profileHandle || resolvePromoterHandle(userProfile) || 'promoter_pro')
          : portalRole === 'label' ? (profileHandle || userProfile?.label_url_slug || 'label_pro')
          : (profileHandle || userProfile?.console_handle || userProfile?.handle))
       : (userParam.name === 'GoregrindSlayer' ? 'GoregrindSlayer' :
@@ -3786,17 +4242,33 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
 
     const resolvedProfileId = dbProfile?.id || (userParam as any).id || (userParam as any).userId || (userParam as any).user_id || targetId || null;
 
+    const resolvedBandNameOutput = isTargetMiguel 
+      ? 'Virulent Excision' 
+      : (resolvedBandForTies?.name || dbProfile?.band_name || dbProfile?.bandName || (userParam as any)?.band_name || (userParam as any)?.bandName || null);
+    const resolvedBandIdOutput = isTargetMiguel
+      ? 'cbddb810-259b-4230-9968-3d402dfdb872'
+      : (resolvedBandForTies?.id || dbProfile?.band_id || (userParam as any)?.band_id || null);
+
     return {
+      ...(dbProfile || {}),
+      ...(typeof userParam === 'object' ? userParam : {}),
       id: resolvedProfileId,
       userId: resolvedProfileId,
       raw_id: resolvedProfileId,
-      name: user?.name || "User",
-      avatar: user?.avatar,
-      email: isYou ? userProfile?.email : (userParam.email || (realProfiles.find(p => (p?.name || "User").toLowerCase() === (user?.name || "User").toLowerCase()) as any)?.email),
+      name: user?.name || dbProfile?.name || dbProfile?.full_name || "User",
+      full_name: dbProfile?.full_name || (userParam as any)?.full_name || resolvedLegalName,
+      band_name: resolvedBandNameOutput,
+      bandName: resolvedBandNameOutput,
+      band_id: resolvedBandIdOutput,
+      registered_workspaces: dbProfile?.registered_workspaces || (userParam as any)?.registered_workspaces || [],
+      account_type: dbProfile?.account_type || (userParam as any)?.account_type || user?.role || 'industry_pro',
+      avatar: user?.avatar || dbProfile?.avatar_url || dbProfile?.avatar,
+      avatar_url: user?.avatar || dbProfile?.avatar_url || dbProfile?.avatar,
+      email: isYou ? userProfile?.email : (userParam.email || dbProfile?.email || (realProfiles.find(p => (p?.name || "User").toLowerCase() === (user?.name || "User").toLowerCase()) as any)?.email),
       banner,
       banner_url: dbProfile?.banner_url || dbProfile?.creative_banner || dbProfile?.promoter_cover_image || dbProfile?.label_banner || banner,
       cover_url: dbProfile?.cover_url || dbProfile?.promoter_cover_image || dbProfile?.creative_banner || banner,
-      role: user?.role || "Member",
+      role: user?.role || dbProfile?.role || dbProfile?.account_type || "Member",
       isYou,
       isFollowed,
       legalName: resolvedLegalName,
@@ -3915,12 +4387,23 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
       } catch (_) {}
     };
 
+    const handleOpenEventCompanion = (e: any) => {
+      const gig = e.detail;
+      if (gig) {
+        setActiveEventData(gig);
+        setIsEventModeActive(true);
+        setShowMapModal(false);
+      }
+    };
+
     handleUrlProfileRouting();
     window.addEventListener('popstate', handleUrlProfileRouting);
     window.addEventListener('openPublicProfile', handleOpenPublicProfile as any);
+    window.addEventListener('open-event-companion', handleOpenEventCompanion as any);
     return () => {
       window.removeEventListener('popstate', handleUrlProfileRouting);
       window.removeEventListener('openPublicProfile', handleOpenPublicProfile as any);
+      window.removeEventListener('open-event-companion', handleOpenEventCompanion as any);
     };
   }, [userProfile?.id, userProfile?.band_id]);
 
@@ -4084,8 +4567,58 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
     }
 
     setShopItemsList(prev => [newListingItem as any, ...prev]);
+
+    // Also turn this classified/gear item into an active feed post on the timeline
+    const isGearListing = newListingType === 'gear';
+    const feedPostUuid = generateUUID();
+    const sellerDisplayName = defaultUserHandle || userProfile?.name || 'Verified Member';
+
+    const classifiedFeedPost: any = {
+      id: feedPostUuid,
+      type: newListingType,
+      category: newListingType,
+      timestamp: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      timeAgo: 'Just now',
+      authorId: userProfile?.id || 'current_user',
+      authorName: sellerDisplayName,
+      authorAvatar: userProfile?.avatar || userProfile?.avatar_url || '',
+      authorRole: portalRole === 'band' ? 'Band / Artist' : portalRole === 'label' ? 'Record Label' : portalRole === 'promoter' ? 'Promoter' : 'Community Member',
+      location: newListingItem.location,
+      message: newListingDescription.trim() || `${newListingTitle.trim()} - Pinned to the Community Bulletin Board`,
+      content: newListingDescription.trim() || `${newListingTitle.trim()} - Pinned to the Community Bulletin Board`,
+      image: imageUrl,
+      image_url: imageUrl,
+      images: imageUrl ? [imageUrl] : [],
+      tag: isGearListing ? 'GEAR SWAP' : 'CLASSIFIED',
+      classifiedData: {
+        listingId: newListingItem.id,
+        listingType: newListingType,
+        title: newListingTitle.trim(),
+        price: newListingItem.price,
+        condition: newListingCondition,
+        brand: newListingBrand.trim() || 'Generic',
+        year: newListingYear.trim() || 'N/A',
+        location: newListingItem.location,
+        description: newListingDescription.trim(),
+        image: imageUrl,
+        seller: sellerDisplayName
+      },
+      reactions: { flame: 0, horns: 0 },
+      comments: []
+    };
+
+    try {
+      await syncPostToSupabase(classifiedFeedPost, userProfile?.id);
+    } catch (e) {
+      console.warn('Could not sync classified post:', e);
+    }
+
+    setFeed(prev => [classifiedFeedPost, ...prev]);
+    setLabelPosts(prev => [classifiedFeedPost, ...prev]);
+
     setIsPostListingOpen(false);
-    triggerNotification?.(`🚀 Successfully posted "${newListingTitle.trim()}" to the Community Marketplace!`);
+    triggerNotification?.(`🚀 Successfully posted "${newListingTitle.trim()}" to the Community Marketplace & Feed!`);
 
     // Reset fields
     setNewListingTitle('');
@@ -4164,7 +4697,14 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
           .order('created_at', { ascending: false });
 
         if (data && Array.isArray(data) && data.length > 0) {
-          const remoteNotifs = data.map((row: any) => ({
+          const remoteNotifs = data
+            .filter((row: any) => {
+              if (row.actor_id && (row.actor_id === userUUID || row.actor_id === userProfile?.id || row.actor_id === userProfile?.email)) return false;
+              if (row.actor_email && row.actor_email === userProfile?.email) return false;
+              if (row.data?.actor_id && (row.data?.actor_id === userUUID || row.data?.actor_id === userProfile?.id || row.data?.actor_id === userProfile?.email)) return false;
+              return true;
+            })
+            .map((row: any) => ({
             ...row,
             id: row.id,
             title: row.title || 'Notification',
@@ -4455,7 +4995,6 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   const startLongPress = (postId: string) => {
     longPressTimer.current = setTimeout(() => {
       setReactionMenuOpenFor(postId);
-      triggerNotification?.("Reaction dock deployed");
     }, 500);
   };
 
@@ -4895,9 +5434,28 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
             filterShowMerchDropsOnlyFromFollowed={filterShowMerchDropsOnlyFromFollowed}
             setFilterShowMerchDropsOnlyFromFollowed={setFilterShowMerchDropsOnlyFromFollowed}
             onOpenMapModal={() => setShowMapModal(true)}
+            onOpenArchivesModal={() => setShowPromoterArchivesModal(true)}
             onOpenShowCreator={() => { setEditingCommunityShow(null); setIsCommunityShowModalOpen(true); }}
             onEditShow={(gig) => { setEditingCommunityShow(gig); setIsCommunityShowModalOpen(true); }}
             onDeleteGig={handleDeleteUpcomingShowPermanently}
+            portalRole={portalRole}
+            userProfile={userProfile}
+            discoverProfiles={discoverProfiles}
+            allProfiles={allProfiles}
+            onToggleFollow={(p) => {
+              if (p) {
+                handleGlobalSearchFollowToggle(p.id, p.name);
+              }
+            }}
+            onSelectProfile={(p) => {
+              if (p) {
+                const prof = getProfileForUser(p);
+                if (prof) {
+                  handleSelectUserProfile(prof);
+                }
+              }
+            }}
+            triggerNotification={triggerNotification}
           />
         )}
       </div>
@@ -5026,6 +5584,22 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   setEventCost={setEventCost}
   eventTicketUrl={eventTicketUrl}
   setEventTicketUrl={setEventTicketUrl}
+  classifiedType={classifiedType}
+  setClassifiedType={setClassifiedType}
+  classifiedTitle={classifiedTitle}
+  setClassifiedTitle={setClassifiedTitle}
+  classifiedPrice={classifiedPrice}
+  setClassifiedPrice={setClassifiedPrice}
+  classifiedCondition={classifiedCondition}
+  setClassifiedCondition={setClassifiedCondition}
+  classifiedBrand={classifiedBrand}
+  setClassifiedBrand={setClassifiedBrand}
+  classifiedYear={classifiedYear}
+  setClassifiedYear={setClassifiedYear}
+  classifiedLocation={classifiedLocation}
+  setClassifiedLocation={setClassifiedLocation}
+  classifiedDescription={classifiedDescription}
+  setClassifiedDescription={setClassifiedDescription}
   stories={stories}
   setShowUploadStoryModal={setShowUploadStoryModal}
   setActiveStory={setActiveStory}
@@ -5044,6 +5618,8 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   handleAddComment={handleAddComment}
   setEditingPostId={setEditingPostId}
   setEditingPostText={setEditingPostText}
+  editingPostImages={editingPostImages}
+  setEditingPostImages={setEditingPostImages}
   handleSaveEdit={handleSaveEdit}
   handleDeletePost={handleDeletePost}
   setCheckoutItem={setCheckoutItem}
@@ -5361,7 +5937,7 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setItemImages={setItemImages}
         handleSaveItem={handleSaveItem}
 
-        // Map
+        // Map & Events Directory
         showMapModal={showMapModal}
         setShowMapModal={setShowMapModal}
         setSelectedGigOnMap={setSelectedGigOnMap}
@@ -5370,6 +5946,20 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setSelectedCityFilter={setSelectedCityFilter}
         mapFilterGenre={mapFilterGenre}
         setMapFilterGenre={setMapFilterGenre}
+        liveEvents={liveEvents}
+        setLiveEvents={setLiveEvents}
+        shows={propShows}
+        setShows={propSetShows}
+        onImportShowsFromTable={fetchEventsAndSetlists}
+        onOpenShowCreator={() => { setEditingCommunityShow(null); setIsCommunityShowModalOpen(true); }}
+        onSelectEvent={(gig) => {
+          setActiveEventData(gig);
+        }}
+        onOpenEventPage={(gig) => {
+          setActiveEventData(gig);
+          setIsEventModeActive(true);
+          setShowMapModal(false);
+        }}
 
         // Poll
         showPollModal={showPollModal}
@@ -5397,14 +5987,26 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setMerchDropPrice={setMerchDropPrice}
         merchDropThumbnail={merchDropThumbnail}
         setMerchDropThumbnail={setMerchDropThumbnail}
+        merchDropImages={merchDropImages}
+        setMerchDropImages={setMerchDropImages}
+        merchDropCategory={merchDropCategory}
+        setMerchDropCategory={setMerchDropCategory}
+        merchDropDescription={merchDropDescription}
+        setMerchDropDescription={setMerchDropDescription}
+        merchDropVariants={merchDropVariants}
+        setMerchDropVariants={setMerchDropVariants}
+        merchDropStock={merchDropStock}
+        setMerchDropStock={setMerchDropStock}
+        merchDropIsUnlimited={merchDropIsUnlimited}
+        setMerchDropIsUnlimited={setMerchDropIsUnlimited}
+        merchDropAllowNegotiation={merchDropAllowNegotiation}
+        setMerchDropAllowNegotiation={setMerchDropAllowNegotiation}
         merchDropIsTimed={merchDropIsTimed}
         setMerchDropIsTimed={setMerchDropIsTimed}
         merchDropTimerHours={merchDropTimerHours}
         setMerchDropTimerHours={setMerchDropTimerHours}
         merchDropTimerMinutes={merchDropTimerMinutes}
         setMerchDropTimerMinutes={setMerchDropTimerMinutes}
-        merchDropDescription=""
-        setMerchDropDescription={() => {}}
         handlePublishMerchDrop={() => {}}
 
         // DIY Event Modal
@@ -5608,6 +6210,15 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         onPrev={handlePrevStory}
         triggerNotification={triggerNotification}
         userProfile={userProfile}
+      />
+      {/* Historic Show Archives Modal */}
+      <PromoterArchivesModal
+        isOpen={showPromoterArchivesModal}
+        onClose={() => setShowPromoterArchivesModal(false)}
+        promoterProfile={userProfile}
+        userProfile={userProfile}
+        shows={liveEvents}
+        triggerNotification={triggerNotification}
       />
       </SocialThemeShell>
     </SocialRoleProvider>

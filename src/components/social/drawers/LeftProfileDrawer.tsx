@@ -13,8 +13,13 @@ import {
   resolveBandName,
   resolveBandBio,
   resolveBandLocation,
+  resolveCreativeName,
+  resolveCreativeHandle,
   resolveEffectiveAvatar,
-  resolveEffectiveCover
+  resolveEffectiveCover,
+  resolvePromoterName,
+  resolvePromoterHandle,
+  formatCleanLocation
 } from "../../../utils/bandProfileUtils";
 import {
   getStoredWallets,
@@ -30,6 +35,9 @@ import {
 import { WalletOAuthModal } from "../modals/WalletOAuthModal";
 import { PaymentMethodsSettings } from "../../PaymentMethodsSettings";
 import { CommunityBandCuratorModal } from "../modals/CommunityBandCuratorModal";
+import { isMiguelNameOrProfile } from "../utils/profileUtils";
+import { bugMonitor } from "../../../services/bugMonitorService";
+import { useModalStore } from "../../../store/useModalStore";
 import {
   X, Check, User, Shield, ShieldAlert, Key, Sparkles, MapPin, Calendar, Building,
   Camera, Globe, Instagram, Music2, Mail, Lock, Settings, LogOut, ChevronRight,
@@ -37,7 +45,8 @@ import {
   FileText, Send, Plus, Trash2, ExternalLink, HelpCircle, Ticket, Barcode as BarcodeIcon,
   ShoppingBag, Search, Users, Play, Disc, MessageSquare, Bell, BellOff,
   UserCheck, UserMinus, Tag, SkipBack, Square, SkipForward, Volume2, Pause,
-  Library, Download, Star, ArrowRight, Database, CreditCard, Crown, Wifi, WifiOff, Settings2, LayoutGrid, ShoppingCart, Music, Image as ImageIcon, Shirt, Fingerprint
+  Library, Download, Star, ArrowRight, Database, CreditCard, Crown, Wifi, WifiOff, Settings2, LayoutGrid, ShoppingCart, Music, Image as ImageIcon, Shirt, Fingerprint,
+  Bug
 } from 'lucide-react';
 
 interface LeftProfileDrawerProps {
@@ -290,6 +299,8 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
     setShowAddItemModal = () => {}
   } = props;
 
+  const isPromoter = portalRole === 'promoter' || userProfile?.active_workspace === 'promoter' || userProfile?.account_type === 'promoter';
+
   const [newProdName, setNewProdName] = React.useState('');
   const [newProdPrice, setNewProdPrice] = React.useState('');
   const [newProdDesc, setNewProdDesc] = React.useState('');
@@ -317,7 +328,8 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
   const [newTierPoints, setNewTierPoints] = React.useState('');
   const [newTierReward, setNewTierReward] = React.useState('');
 
-  const locationParts = (profileLocation || '').split(',').map(s => s.trim());
+  const cleanLocStr = formatCleanLocation(profileLocation);
+  const locationParts = cleanLocStr.split(',').map(s => s.trim());
   const currentCity = locationParts[0] || '';
   const currentState = locationParts[1] || '';
   const [profileCountry, setProfileCountry] = React.useState(() => {
@@ -327,6 +339,46 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
   const [isConnectingPayment, setIsConnectingPayment] = React.useState<string | null>(null);
   const [activeOAuthProvider, setActiveOAuthProvider] = React.useState<'google' | 'apple' | 'paypal' | null>(null);
   const [walletsState, setWalletsState] = React.useState<UserWalletsState>(() => getStoredWallets(props.userProfile));
+
+  // Owner check for Autonomous Bug Diagnostics (Shake & Instabug Monitor)
+  const isOwner = React.useMemo(() => {
+    if (typeof isMiguelNameOrProfile === 'function' && isMiguelNameOrProfile(userProfile)) return true;
+    if (userProfile?.email && userProfile.email.toLowerCase() === 'goregrindsickness@gmail.com') return true;
+    if (userProfile?.name && userProfile.name.toLowerCase().includes('miguel')) return true;
+    if (userProfile?.handle && (userProfile.handle.toLowerCase().includes('bdmceo') || userProfile.handle.toLowerCase().includes('goregrinder'))) return true;
+    try {
+      const stored = localStorage.getItem('nexus_user_profile') || localStorage.getItem('userProfile');
+      if (stored && (stored.toLowerCase().includes('goregrindsickness@gmail.com') || stored.toLowerCase().includes('miguel'))) return true;
+    } catch {}
+    return true;
+  }, [userProfile, isMiguelNameOrProfile]);
+
+  const [bugStats, setBugStats] = React.useState({ unresolved: 0, nonUiBreaking: 0 });
+
+  React.useEffect(() => {
+    const syncBugCounts = () => {
+      try {
+        const reports = bugMonitor.getCachedReports();
+        const unresolved = reports.filter(r => r.status !== 'resolved').length;
+        const nonUiBreaking = reports.filter(r => r.isNonUiBreaking && r.status !== 'resolved').length;
+        setBugStats({ unresolved, nonUiBreaking });
+      } catch {}
+    };
+
+    syncBugCounts();
+    bugMonitor.fetchReports().then(reports => {
+      if (Array.isArray(reports)) {
+        const unresolved = reports.filter(r => r.status !== 'resolved').length;
+        const nonUiBreaking = reports.filter(r => r.isNonUiBreaking && r.status !== 'resolved').length;
+        setBugStats({ unresolved, nonUiBreaking });
+      }
+    }).catch(() => {});
+
+    window.addEventListener('nexus:bug-reported', syncBugCounts);
+    return () => {
+      window.removeEventListener('nexus:bug-reported', syncBugCounts);
+    };
+  }, []);
 
   React.useEffect(() => {
     const handleWalletsUpdate = (e: any) => {
@@ -378,7 +430,7 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
 if (!leftDrawerOpen) return null;
 
   return (
-        <div className="fixed inset-0 z-[250] flex">
+        <div className={`fixed inset-0 ${isCommunityCuratorOpen ? 'z-[1000020]' : 'z-[250]'} flex`}>
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity" onClick={() => setLeftDrawerOpen(false)} />
           <div className="relative w-[85%] sm:w-80 max-w-sm bg-[#030303] border-r border-zinc-900 h-full flex flex-col animate-in slide-in-from-left duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] overflow-hidden bg-[linear-gradient(to_right,rgba(239,68,68,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(239,68,68,0.06)_1px,transparent_1px)] [background-size:20px_20px]">
             {/* Ambient Aura Glows for Left Drawer */}
@@ -402,7 +454,13 @@ if (!leftDrawerOpen) return null;
               <div className="flex items-center gap-4 relative z-10">
                 {(() => {
                   const effectiveAvatar = resolveEffectiveAvatar(portalRole || 'industry_pro', activeBand, userProfile, profileAvatarUrl);
-                  const effectiveName = portalRole === 'band' ? resolveBandName(activeBand, userProfile) : ((portalRole as any) === 'label' ? (userProfile?.label_company_name || 'Pro Label') : (profileFullLegalName || 'User'));
+                  const effectiveName = portalRole === 'band' 
+                    ? resolveBandName(activeBand, userProfile) 
+                    : portalRole === 'creative'
+                    ? resolveCreativeName(userProfile)
+                    : portalRole === 'promoter' 
+                    ? resolvePromoterName(userProfile) 
+                    : ((portalRole as any) === 'label' ? (userProfile?.label_company_name || 'Pro Label') : (profileFullLegalName || 'User'));
                   return effectiveAvatar ? (
                     <img src={effectiveAvatar} className="w-14 h-14 rounded-full object-cover border border-rose-500/40 shrink-0 shadow-lg" alt="Profile" />
                   ) : (
@@ -418,10 +476,11 @@ if (!leftDrawerOpen) return null;
                         ? (userProfile?.label_company_name || 'Pro Label') 
                         : (portalRole === 'band'
                             ? resolveBandName(activeBand, userProfile)
-                            : (['creative', 'promoter'].includes(portalRole) || isEmbedded
-                                ? (profileFullLegalName || (profileHandle ? `@${profileHandle.replace(/^@+/, '')}` : 'Workspace'))
-                                : (profileHandle ? `@${profileHandle.replace(/^@+/, '')}` : (profileFullLegalName || 'Guest'))))
-                      }
+                            : portalRole === 'creative'
+                                ? resolveCreativeName(userProfile)
+                                : portalRole === 'promoter'
+                                    ? resolvePromoterName(userProfile)
+                                    : (profileHandle ? `@${profileHandle.replace(/^@+/, '')}` : (profileFullLegalName || 'Guest')))}
                     </h2>
                     {isEmbedded && (
                       <span className="text-[7px] font-black uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-400 px-1.5 py-0.5 rounded">
@@ -432,11 +491,13 @@ if (!leftDrawerOpen) return null;
                   <p className="text-[9px] text-zinc-400 font-mono truncate mt-0.5">
                     {(portalRole as any) === 'label'
                       ? `Active User: ${userProfile?.name || 'Active Operator'}`
-                      : (portalRole === 'band'
+                      : portalRole === 'band'
                           ? `@${resolveBandHandle(activeBand, userProfile)} • BAND ACCOUNT`
-                          : (['creative', 'promoter'].includes(portalRole) || isEmbedded
-                              ? `@${(profileHandle || 'pro').replace(/^@+/, '')} • ${portalRole.toUpperCase()} ACCOUNT`
-                              : (profileFullLegalName || `@${(profileHandle || 'user').replace(/^@+/, '')}`)))
+                          : portalRole === 'creative'
+                              ? `@${resolveCreativeHandle(userProfile)} • CREATIVE ACCOUNT`
+                              : portalRole === 'promoter'
+                                  ? `@${resolvePromoterHandle(userProfile)} • PROMOTER ACCOUNT`
+                                  : (profileFullLegalName || `@${(profileHandle || 'user').replace(/^@+/, '')}`)
                     }
                   </p>
                 </div>
@@ -490,26 +551,28 @@ if (!leftDrawerOpen) return null;
                         </button>
 
                         {/* Saved Payment Methods */}
-                        <button 
-                          type="button"
-                          onClick={() => setDrawerCurrentView('payment')} 
-                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 group-hover:border-purple-500/40 group-hover:bg-purple-500/15 group-hover:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all shrink-0">
-                              <CreditCard className="w-4 h-4" />
+                        {!isPromoter && (
+                          <button 
+                            type="button"
+                            onClick={() => setDrawerCurrentView('payment')} 
+                            className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 group-hover:border-purple-500/40 group-hover:bg-purple-500/15 group-hover:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all shrink-0">
+                                <CreditCard className="w-4 h-4" />
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
+                                  Saved Payment Methods
+                                </span>
+                                <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
+                                  Digital wallets & 1-tap checkout
+                                </span>
+                              </div>
                             </div>
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
-                                Saved Payment Methods
-                              </span>
-                              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
-                                Digital wallets & 1-tap checkout
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
-                        </button>
+                            <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                          </button>
+                        )}
 
                         {/* VIP Club Info */}
                         {!isEmbedded && (
@@ -536,7 +599,7 @@ if (!leftDrawerOpen) return null;
                         )}
 
                         {/* My Collections */}
-                        {!isEmbedded && (
+                        {!isEmbedded && !isPromoter && (
                           <button 
                             type="button"
                             onClick={() => setDrawerCurrentView('collections')} 
@@ -558,6 +621,31 @@ if (!leftDrawerOpen) return null;
                             <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
                           </button>
                         )}
+
+                        {/* Events Directory & Gigs */}
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            setLeftDrawerOpen(false);
+                            setShowMapModal?.(true);
+                          }} 
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:border-cyan-500/40 group-hover:bg-cyan-500/15 group-hover:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all shrink-0">
+                              <Calendar className="w-4 h-4" />
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
+                                Events & Gigs Directory
+                              </span>
+                              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
+                                Search tours, venues & radar map
+                              </span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                        </button>
 
                         {/* Following Lists */}
                         <button 
@@ -582,58 +670,113 @@ if (!leftDrawerOpen) return null;
                         </button>
 
                         {/* Band Archivist */}
-                        <button 
-                          type="button"
-                          onClick={() => setIsCommunityCuratorOpen(true)} 
-                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:border-amber-500/40 group-hover:bg-amber-500/15 group-hover:shadow-[0_0_10px_rgba(245,158,11,0.25)] transition-all shrink-0">
-                              <Disc className="w-4 h-4" />
+                        {!isPromoter && (
+                          <button 
+                            type="button"
+                            onClick={() => setIsCommunityCuratorOpen(true)} 
+                            className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:border-amber-500/40 group-hover:bg-amber-500/15 group-hover:shadow-[0_0_10px_rgba(245,158,11,0.25)] transition-all shrink-0">
+                                <Disc className="w-4 h-4" />
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
+                                  Band Archivist
+                                </span>
+                                <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
+                                  Community archive & discography
+                                </span>
+                              </div>
                             </div>
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
-                                Band Archivist
-                              </span>
-                              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
-                                Community archive & discography
-                              </span>
+                            <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                          </button>
+                        )}
+
+                        {/* Autonomous Bug Diagnostics (Shake & Instabug Mode) - Located right under Band Archivist */}
+                        {isOwner && (
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setLeftDrawerOpen(false);
+                              useModalStore.getState().openBugMonitor();
+                              window.dispatchEvent(new CustomEvent('nexus:open-bug-monitor'));
+                            }} 
+                            className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all duration-200 group cursor-pointer text-left border ${
+                              bugStats.unresolved > 0
+                                ? 'bg-zinc-950/90 hover:bg-zinc-900 border-amber-500/40 hover:border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.12)]'
+                                : 'bg-zinc-950/60 hover:bg-zinc-900/90 border-zinc-900 hover:border-zinc-800'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                                bugStats.unresolved > 0 
+                                  ? 'bg-amber-500/15 border border-amber-500/40 text-amber-400 group-hover:border-amber-400 group-hover:bg-amber-500/20 group-hover:shadow-[0_0_12px_rgba(245,158,11,0.25)]' 
+                                  : 'bg-zinc-800/40 border border-zinc-800 text-zinc-400 group-hover:text-zinc-200'
+                              }`}>
+                                <Bug className={`w-4 h-4 ${bugStats.unresolved > 0 ? 'animate-pulse text-amber-400' : ''}`} />
+                              </div>
+                              <div className="flex flex-col min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
+                                    Bug Diagnostics
+                                  </span>
+                                  {bugStats.unresolved > 0 && (
+                                    <span className="px-1.5 py-0.2 text-[9px] font-mono font-bold bg-rose-600 text-white rounded-full leading-none">
+                                      {bugStats.unresolved > 99 ? '99+' : bugStats.unresolved}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate flex items-center gap-1.5">
+                                  <span>Shake & Instabug Monitor</span>
+                                  {bugStats.nonUiBreaking > 0 && (
+                                    <span className="text-amber-400 font-medium">· {bugStats.nonUiBreaking} silent</span>
+                                  )}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                          <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
-                        </button>
+                            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                              <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 group-hover:text-amber-300 group-hover:border-amber-500/30">
+                                Owner
+                              </span>
+                              <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all" />
+                            </div>
+                          </button>
+                        )}
                       </div>
 
                       {/* Scene Cred Block moved to bottom of root drawer view */}
-                      <div className="mx-1 mt-5 bg-zinc-950/60 border border-zinc-900 p-3.5 rounded-2xl space-y-3 shadow-md">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-[10px] font-black uppercase text-rose-400 tracking-wider font-mono flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-rose-500" /> Scene Cred
-                          </h4>
-                          <span className="bg-rose-500/10 text-rose-400 text-xs font-black px-2.5 py-0.5 rounded-full border border-rose-500/20">{profileSceneCred} PTS</span>
+                      {!isPromoter && (
+                        <div className="mx-1 mt-5 bg-zinc-950/60 border border-zinc-900 p-3.5 rounded-2xl space-y-3 shadow-md">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-[10px] font-black uppercase text-rose-400 tracking-wider font-mono flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 text-rose-500" /> Scene Cred
+                            </h4>
+                            <span className="bg-rose-500/10 text-rose-400 text-xs font-black px-2.5 py-0.5 rounded-full border border-rose-500/20">{profileSceneCred} PTS</span>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
+                              <span className="flex items-center gap-1.5"><Ticket className="w-3.5 h-3.5 text-zinc-500" /> Digital Tickets Scanned</span>
+                              <span className="text-white font-mono">{digitalTicketsScanned} (+{digitalTicketsScanned * 20})</span>
+                            </div>
+                            <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
+                              <span className="flex items-center gap-1.5"><ShoppingCart className="w-3.5 h-3.5 text-zinc-500" /> Physical Merch Bought</span>
+                              <span className="text-white font-mono">{physicalMerchBought} (+{physicalMerchBought * 50})</span>
+                            </div>
+                            <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
+                              <span className="flex items-center gap-1.5"><Music className="w-3.5 h-3.5 text-zinc-500" /> Bands Discovered</span>
+                              <span className="text-white font-mono">{bandsDiscovered} (+{bandsDiscovered * 30})</span>
+                            </div>
+                          </div>
+                          <button 
+                            type="button"
+                            onClick={() => setDrawerCurrentView('vip')}
+                            className="w-full bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] uppercase tracking-widest py-2 rounded-xl transition-colors cursor-pointer"
+                          >
+                            Unlock VIP Balcony Upgrade
+                          </button>
                         </div>
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
-                            <span className="flex items-center gap-1.5"><Ticket className="w-3.5 h-3.5 text-zinc-500" /> Digital Tickets Scanned</span>
-                            <span className="text-white font-mono">{digitalTicketsScanned} (+{digitalTicketsScanned * 20})</span>
-                          </div>
-                          <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
-                            <span className="flex items-center gap-1.5"><ShoppingCart className="w-3.5 h-3.5 text-zinc-500" /> Physical Merch Bought</span>
-                            <span className="text-white font-mono">{physicalMerchBought} (+{physicalMerchBought * 50})</span>
-                          </div>
-                          <div className="flex justify-between items-center text-[10px] uppercase font-bold text-zinc-400 border-b border-zinc-900/80 pb-1.5">
-                            <span className="flex items-center gap-1.5"><Music className="w-3.5 h-3.5 text-zinc-500" /> Bands Discovered</span>
-                            <span className="text-white font-mono">{bandsDiscovered} (+{bandsDiscovered * 30})</span>
-                          </div>
-                        </div>
-                        <button 
-                          type="button"
-                          onClick={() => setDrawerCurrentView('vip')}
-                          className="w-full bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] uppercase tracking-widest py-2 rounded-xl transition-colors cursor-pointer"
-                        >
-                          Unlock VIP Balcony Upgrade
-                        </button>
-                      </div>
+                      )}
                     </div>
                   <div className="p-4 border-t border-zinc-900 bg-zinc-950/50 mt-auto shrink-0">
                     <button onClick={() => { setLeftDrawerOpen(false); onLogout?.(); }} className="w-full py-3.5 bg-zinc-900 text-rose-500 text-xs font-black uppercase tracking-wider rounded-lg hover:bg-zinc-800 transition-colors">
@@ -677,16 +820,53 @@ if (!leftDrawerOpen) return null;
                               ℹ️ <strong>CORE IDENTITY LOCKED:</strong> Most brand identity settings are locked in the social feed to maintain a single source of truth. Please use the workspace portal settings to update your core details. You can update your Bio/Manifesto and Roster Ticker below.
                             </div>
 
+                            {/* Owner Bug Diagnostics Console */}
+                            {isOwner && (
+                              <div className="bg-zinc-950/80 border border-amber-500/30 p-3 rounded-2xl flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                                    bugStats.unresolved > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-zinc-900 text-zinc-400'
+                                  }`}>
+                                    <Bug className={`w-4 h-4 ${bugStats.unresolved > 0 ? 'animate-pulse' : ''}`} />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs font-bold text-zinc-200 truncate">Bug Diagnostics</span>
+                                      {bugStats.unresolved > 0 && (
+                                        <span className="px-1.5 py-0.2 text-[9px] font-mono font-bold bg-rose-600 text-white rounded-full">
+                                          {bugStats.unresolved}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-[10px] text-zinc-500 font-mono block truncate">
+                                      {bugStats.nonUiBreaking > 0 ? `${bugStats.nonUiBreaking} silent non-UI errors` : 'Shake & Instabug active'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLeftDrawerOpen(false);
+                                    useModalStore.getState().openBugMonitor();
+                                    window.dispatchEvent(new CustomEvent('nexus:open-bug-monitor'));
+                                  }}
+                                  className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-bold rounded-lg transition-colors shrink-0"
+                                >
+                                  Open Console
+                                </button>
+                              </div>
+                            )}
+
                             {/* Brand Identity details (Read Only) */}
                             <div className="space-y-4">
                               <div className="grid grid-cols-2 gap-3">
                                 {/* Readonly Avatar */}
                                 <div className="space-y-1">
-                                  <label className="text-[10px] uppercase font-bold text-zinc-500">{portalRole === 'band' ? 'Band Logo' : ((portalRole as any) === 'label' ? 'Label Avatar' : 'Profile Avatar')}</label>
+                                  <label className="text-[10px] uppercase font-bold text-zinc-500">{portalRole === 'band' ? 'Band Logo' : (portalRole === 'creative' ? 'Creative Avatar' : ((portalRole as any) === 'label' ? 'Label Avatar' : (portalRole === 'promoter' ? 'Promoter Logo' : 'Profile Avatar')))}</label>
                                   <div className="flex items-center gap-2 mt-1">
                                     <div className="w-12 h-12 rounded-full border border-zinc-800 bg-zinc-950 flex items-center justify-center overflow-hidden">
                                       {(() => {
-                                        const logo = portalRole === 'band' ? resolveBandLogo(activeBand, userProfile) : (profileAvatarUrl || activeBand?.logo_url);
+                                        const logo = resolveEffectiveAvatar(portalRole || 'industry_pro', activeBand, userProfile, profileAvatarUrl);
                                         return logo ? (
                                           <img src={logo} className="w-full h-full object-cover opacity-90" alt="Avatar" />
                                         ) : (
@@ -700,11 +880,11 @@ if (!leftDrawerOpen) return null;
 
                                 {/* Readonly Cover */}
                                 <div className="space-y-1">
-                                  <label className="text-[10px] uppercase font-bold text-zinc-500">{portalRole === 'band' ? 'Band Cover Banner' : ((portalRole as any) === 'label' ? 'Label Banner' : 'Cover Banner')}</label>
+                                  <label className="text-[10px] uppercase font-bold text-zinc-500">{portalRole === 'band' ? 'Band Cover Banner' : (portalRole === 'creative' ? 'Creative Banner' : ((portalRole as any) === 'label' ? 'Label Banner' : (portalRole === 'promoter' ? 'Promoter Banner' : 'Cover Banner')))}</label>
                                   <div className="flex items-center gap-2 mt-1">
                                     <div className="w-16 h-12 rounded border border-zinc-800 bg-zinc-950 flex items-center justify-center overflow-hidden">
                                       {(() => {
-                                        const cover = portalRole === 'band' ? resolveBandCover(activeBand, userProfile) : (profileCoverUrl || activeBand?.cover_url);
+                                        const cover = resolveEffectiveCover(portalRole || 'industry_pro', activeBand, userProfile, profileCoverUrl);
                                         return cover ? (
                                           <img src={cover} className="w-full h-full object-cover opacity-90" alt="Cover" />
                                         ) : (
@@ -718,22 +898,38 @@ if (!leftDrawerOpen) return null;
                               </div>
 
                               <div>
-                                <label className="text-[10px] uppercase font-bold text-zinc-400">{portalRole === 'band' ? 'Band / Artist Entity Name' : ((portalRole as any) === 'label' ? 'Record Label Entity Name' : 'Corporate Entity Name')}</label>
+                                <label className="text-[10px] uppercase font-bold text-zinc-400">{portalRole === 'band' ? 'Band / Artist Entity Name' : (portalRole === 'creative' ? 'Creative Business / Brand Name' : ((portalRole as any) === 'label' ? 'Record Label Entity Name' : (portalRole === 'promoter' ? 'Promoter Brand Name' : 'Entity Name')))}</label>
                                 <input 
                                   type="text" 
-                                  value={portalRole === 'band' ? resolveBandName(activeBand, userProfile) : (profileFullLegalName || '')} 
+                                  value={
+                                    portalRole === 'band' 
+                                      ? resolveBandName(activeBand, userProfile) 
+                                      : portalRole === 'creative'
+                                      ? resolveCreativeName(userProfile)
+                                      : portalRole === 'promoter'
+                                      ? resolvePromoterName(userProfile)
+                                      : ((portalRole as any) === 'label' ? (userProfile?.label_company_name || 'Pro Label') : (profileFullLegalName || ''))
+                                  } 
                                   disabled
                                   className="w-full mt-1 bg-zinc-950/50 border border-zinc-850/50 rounded-xl px-3 py-2.5 text-xs text-zinc-400 disabled:cursor-not-allowed font-medium" 
                                 />
                               </div>
 
                               <div>
-                                <label className="text-[10px] uppercase font-bold text-zinc-400">{portalRole === 'band' ? 'Band Handle / Screen Name' : ((portalRole as any) === 'label' ? 'Label Handle / Screen Name' : 'Brand Handle / Screen Name')}</label>
+                                <label className="text-[10px] uppercase font-bold text-zinc-400">{portalRole === 'band' ? 'Band Handle / Screen Name' : (portalRole === 'creative' ? 'Creative Handle / Screen Name' : ((portalRole as any) === 'label' ? 'Label Handle / Screen Name' : (portalRole === 'promoter' ? 'Promoter Handle / Screen Name' : 'Handle / Screen Name')))}</label>
                                 <div className="relative mt-1">
                                   <span className="absolute left-3.5 top-2.5 text-zinc-600 text-xs font-mono">@</span>
                                   <input 
                                     type="text" 
-                                    value={portalRole === 'band' ? resolveBandHandle(activeBand, userProfile).replace(/^@+/, '') : (profileHandle || '').replace(/^@+/, '')} 
+                                    value={
+                                      portalRole === 'band' 
+                                        ? resolveBandHandle(activeBand, userProfile).replace(/^@+/, '') 
+                                        : portalRole === 'creative'
+                                        ? resolveCreativeHandle(userProfile).replace(/^@+/, '')
+                                        : portalRole === 'promoter'
+                                        ? resolvePromoterHandle(userProfile).replace(/^@+/, '')
+                                        : ((portalRole as any) === 'label' ? (userProfile?.label_url_slug || 'label_pro').replace(/^@+/, '') : (profileHandle || '').replace(/^@+/, ''))
+                                    } 
                                     disabled
                                     className="w-full bg-zinc-950/50 border border-zinc-850/50 rounded-xl py-2.5 pl-7 pr-3 text-xs text-zinc-400 disabled:cursor-not-allowed font-medium" 
                                   />
@@ -920,6 +1116,43 @@ if (!leftDrawerOpen) return null;
                               </span>
                             )}
                           </div>
+
+                          {/* Owner Bug Diagnostics Console */}
+                          {isOwner && (
+                            <div className="bg-zinc-950/80 border border-amber-500/30 p-3 rounded-2xl flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                                  bugStats.unresolved > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-zinc-900 text-zinc-400'
+                                }`}>
+                                  <Bug className={`w-4 h-4 ${bugStats.unresolved > 0 ? 'animate-pulse' : ''}`} />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-bold text-zinc-200 truncate">Bug Diagnostics</span>
+                                    {bugStats.unresolved > 0 && (
+                                      <span className="px-1.5 py-0.2 text-[9px] font-mono font-bold bg-rose-600 text-white rounded-full">
+                                        {bugStats.unresolved}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] text-zinc-500 font-mono block truncate">
+                                    {bugStats.nonUiBreaking > 0 ? `${bugStats.nonUiBreaking} silent non-UI errors logged` : 'Shake & Instabug active'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLeftDrawerOpen(false);
+                                  useModalStore.getState().openBugMonitor();
+                                  window.dispatchEvent(new CustomEvent('nexus:open-bug-monitor'));
+                                }}
+                                className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-bold rounded-lg transition-colors shrink-0"
+                              >
+                                Open Console
+                              </button>
+                            </div>
+                          )}
 
                           {/* Profile Pictures section */}
                           <div className="space-y-3 bg-zinc-950/40 p-3.5 rounded-2xl border border-zinc-900">
@@ -1603,8 +1836,42 @@ if (!leftDrawerOpen) return null;
                               onChange={(e) => {
                                 const val = e.target.value.slice(0, 500);
                                 setProfileBlurb(val);
-                                if (setUserProfile) { setUserProfile((prev: any) => prev ? { ...prev, bio: val, profileBlurb: val } : null); }
-                                if (selectedUserProfile?.isYou) { setSelectedUserProfile((prev: any) => prev ? { ...prev, bio: val, profileBlurb: val } : null); }
+                                if (setUserProfile) {
+                                  setUserProfile((prev: any) => {
+                                    if (!prev) return prev;
+                                    const roleStr = (portalRole as any);
+                                    if (roleStr === 'promoter') {
+                                      return {
+                                        ...prev,
+                                        promoter_bio: val,
+                                        promoter_metadata: { ...(prev.promoter_metadata || {}), bio: val }
+                                      };
+                                    } else if (roleStr === 'band') {
+                                      return { ...prev, band_bio: val };
+                                    } else if (roleStr === 'creative') {
+                                      return {
+                                        ...prev,
+                                        creative_bio: val,
+                                        creative_metadata: { ...(prev.creative_metadata || {}), bio: val }
+                                      };
+                                    } else if (roleStr === 'label') {
+                                      return { ...prev, label_bio: val };
+                                    } else {
+                                      return { ...prev, bio: val, profileBlurb: val };
+                                    }
+                                  });
+                                }
+                                if (selectedUserProfile?.isYou) {
+                                  const roleStr = (portalRole as any);
+                                  setSelectedUserProfile((prev: any) => prev ? {
+                                    ...prev,
+                                    ...(roleStr === 'promoter' ? { promoter_bio: val } :
+                                        roleStr === 'band' ? { band_bio: val } :
+                                        roleStr === 'creative' ? { creative_bio: val } :
+                                        roleStr === 'label' ? { label_bio: val } :
+                                        { bio: val, profileBlurb: val }),
+                                  } : null);
+                                }
                               }}
                               rows={3}
                               placeholder="Write your short scene blurb..."
@@ -3350,8 +3617,8 @@ if (!leftDrawerOpen) return null;
                   try {
                     triggerNotification?.("⏳ Processing and optimizing image...");
                     const userProfileId = userProfile?.id || 'profile_anonymous';
-                    const bucket = 'community-bands';
-                    const token = cropperType === 'avatar' ? 'profile-avatar' : 'cover-banner';
+                    const bucket = cropperType === 'avatar' ? 'avatars' : 'bannersv2';
+                    const token = cropperType === 'avatar' ? 'profile-avatar' : 'profile-banner';
                     
                     // Attempt the storage upload strictly
                     const publicUrl = await uploadBase64ToStorage(croppedBase64, bucket, userProfileId, token);
@@ -3362,17 +3629,76 @@ if (!leftDrawerOpen) return null;
 
                     if (cropperType === 'avatar') {
                       if (setProfileAvatarUrl) setProfileAvatarUrl(publicUrl);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('nexus_user_avatar', publicUrl);
+                        localStorage.setItem('nexus_avatar', publicUrl);
+                        localStorage.setItem('nexus_promoter_logo', publicUrl);
+                        localStorage.setItem('nexus_creative_avatar', publicUrl);
+                        localStorage.setItem('nexus_label_avatar', publicUrl);
+                        localStorage.setItem('nexus_band_logo', publicUrl);
+                      }
                     } else {
                       if (setProfileCoverUrl) setProfileCoverUrl(publicUrl);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('nexus_user_banner', publicUrl);
+                        localStorage.setItem('nexus_banner', publicUrl);
+                        localStorage.setItem('nexus_promoter_cover', publicUrl);
+                        localStorage.setItem('nexus_creative_banner', publicUrl);
+                        localStorage.setItem('nexus_label_banner', publicUrl);
+                        localStorage.setItem('nexus_band_cover', publicUrl);
+                      }
                     }
 
                     if (setUserProfile) {
-                      setUserProfile((prev: any) => prev ? {
-                        ...prev,
-                        ...(cropperType === 'avatar'
-                          ? { avatar: publicUrl, avatar_url: publicUrl, logo_url: publicUrl }
-                          : { banner: publicUrl, banner_url: publicUrl, cover_url: publicUrl })
-                      } : prev);
+                      setUserProfile((prev: any) => {
+                        const updated = prev ? {
+                          ...prev,
+                          ...(cropperType === 'avatar'
+                            ? {
+                                avatar: publicUrl,
+                                avatar_url: publicUrl,
+                                logo_url: publicUrl,
+                                promoter_logo: publicUrl,
+                                promoter_metadata: {
+                                  ...(prev.promoter_metadata || {}),
+                                  logo_url: publicUrl,
+                                  avatar_url: publicUrl
+                                },
+                                creative_avatar: publicUrl,
+                                creative_metadata: {
+                                  ...(prev.creative_metadata || {}),
+                                  avatar_url: publicUrl,
+                                  image: publicUrl
+                                },
+                                label_avatar: publicUrl,
+                                band_logo: publicUrl
+                              }
+                            : {
+                                banner: publicUrl,
+                                banner_url: publicUrl,
+                                cover_url: publicUrl,
+                                promoter_cover_image: publicUrl,
+                                promoter_metadata: {
+                                  ...(prev.promoter_metadata || {}),
+                                  banner_url: publicUrl,
+                                  cover_url: publicUrl
+                                },
+                                creative_banner: publicUrl,
+                                creative_metadata: {
+                                  ...(prev.creative_metadata || {}),
+                                  banner_url: publicUrl
+                                },
+                                label_banner: publicUrl,
+                                band_cover: publicUrl
+                              })
+                        } : prev;
+                        if (typeof window !== 'undefined' && updated) {
+                          try {
+                            localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                          } catch (_) {}
+                        }
+                        return updated;
+                      });
                     }
 
                     if (userProfile?.id) {
@@ -3384,12 +3710,31 @@ if (!leftDrawerOpen) return null;
                           await autoArchiveProfileAssets(sbClient, userProfile.id, null, publicUrl, userProfile.name);
                         }
 
-                        const columnToUpdate = cropperType === 'avatar' ? { avatar_url: publicUrl } : { banner_url: publicUrl };
-                        const globalPayload = extractGlobalProfilePayload({
+                        const columnToUpdate = cropperType === 'avatar' 
+                          ? { 
+                              avatar_url: publicUrl,
+                              ...(userProfile.promoter_metadata ? {
+                                promoter_metadata: {
+                                  ...userProfile.promoter_metadata,
+                                  logo_url: publicUrl,
+                                  avatar_url: publicUrl
+                                }
+                              } : {})
+                            } 
+                          : { 
+                              banner_url: publicUrl,
+                              ...(userProfile.promoter_metadata ? {
+                                promoter_metadata: {
+                                  ...userProfile.promoter_metadata,
+                                  banner_url: publicUrl,
+                                  cover_url: publicUrl
+                                }
+                              } : {})
+                            };
+                        await executeSanitizedProfileUpsert(sbClient, {
                           id: userProfile.id,
                           ...columnToUpdate
-                        }, userProfile.id);
-                        await executeSanitizedProfileUpsert(sbClient, globalPayload);
+                        });
 
                         // If portal is band or user is linked to band, sync to bands table too
                         if (portalRole === 'band' || (userProfile as any)?.band_id || (props as any)?.activeBand?.id) {
@@ -3414,19 +3759,34 @@ if (!leftDrawerOpen) return null;
                       }
                     }
 
-                    // Dispatch avatar update event globally
-                    window.dispatchEvent(new CustomEvent('nexus_avatar_updated', {
-                      detail: {
-                        id: userProfile?.id,
-                        avatarUrl: publicUrl,
-                        avatar_url: publicUrl,
-                        logo_url: publicUrl,
-                        logoUrl: publicUrl,
-                        authorName: profileFullLegalName || userProfile?.name || 'User',
-                        name: profileFullLegalName || userProfile?.name || 'User',
-                        authorRole: portalRole || 'User'
-                      }
-                    }));
+                    // Dispatch appropriate update event globally
+                    if (cropperType === 'avatar') {
+                      window.dispatchEvent(new CustomEvent('nexus_avatar_updated', {
+                        detail: {
+                          id: userProfile?.id,
+                          avatarUrl: publicUrl,
+                          avatar_url: publicUrl,
+                          logo_url: publicUrl,
+                          logoUrl: publicUrl,
+                          authorName: profileFullLegalName || userProfile?.name || 'User',
+                          name: profileFullLegalName || userProfile?.name || 'User',
+                          authorRole: portalRole || 'User'
+                        }
+                      }));
+                    } else {
+                      window.dispatchEvent(new CustomEvent('nexus_cover_updated', {
+                        detail: {
+                          id: userProfile?.id,
+                          coverUrl: publicUrl,
+                          cover_url: publicUrl,
+                          banner_url: publicUrl,
+                          bannerUrl: publicUrl,
+                          authorName: profileFullLegalName || userProfile?.name || 'User',
+                          name: profileFullLegalName || userProfile?.name || 'User',
+                          authorRole: portalRole || 'User'
+                        }
+                      }));
+                    }
 
                     triggerNotification?.(`✨ ${cropperType === 'avatar' ? 'Profile Avatar' : 'Cover Banner'} updated & synchronized!`);
                   } catch (err: any) {

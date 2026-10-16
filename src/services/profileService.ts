@@ -2,6 +2,7 @@ import { normalizeRegisteredWorkspaces } from '../types';
 import { executeWithSchemaResilience } from './schemaResilienceService';
 import { isMiguelNameOrProfile } from '../components/social/utils/profileUtils';
 import { isCommunityBandRecord } from '../lib/seedBandsData';
+import { isPromoterAvatarUrl, isPromoterCoverUrl, DEFAULT_PERSONAL_AVATAR, DEFAULT_PERSONAL_COVER } from '../utils/bandProfileUtils';
 
 export const PROFILES_COLUMNS = [
   'id',
@@ -118,39 +119,78 @@ export function normalizeLoadedProfile(data: any): any {
     }
   }
 
-  // 2. Extract nested custom fields from metadata if they are missing at top-level
-  const metadataContainers = [
-    data.creative_metadata,
-    data.promoter_metadata,
-    data.label_metadata,
-    data.band_metadata,
-    data.user_metadata,
-  ];
-
-  for (const metaObj of metadataContainers) {
-    if (metaObj && typeof metaObj === 'object') {
-      for (const [key, val] of Object.entries(metaObj)) {
-        if (
-          key !== 'custom_fields' &&
-          (!(key in normalized) || normalized[key] === undefined || normalized[key] === null)
-        ) {
-          normalized[key] = val;
-        }
+  // 2. Extract nested custom fields ONLY from user_metadata (workspace metadata must remain isolated to their respective roles)
+  if (data.user_metadata && typeof data.user_metadata === 'object') {
+    for (const [key, val] of Object.entries(data.user_metadata)) {
+      if (
+        key !== 'custom_fields' &&
+        (!(key in normalized) || normalized[key] === undefined || normalized[key] === null)
+      ) {
+        normalized[key] = val;
       }
-      if (metaObj.custom_fields && typeof metaObj.custom_fields === 'object') {
-        for (const [key, val] of Object.entries(metaObj.custom_fields)) {
-          if (!(key in normalized) || normalized[key] === undefined || normalized[key] === null) {
-            normalized[key] = val;
-          }
+    }
+    if (data.user_metadata.custom_fields && typeof data.user_metadata.custom_fields === 'object') {
+      for (const [key, val] of Object.entries(data.user_metadata.custom_fields)) {
+        if (!(key in normalized) || normalized[key] === undefined || normalized[key] === null) {
+          normalized[key] = val;
         }
       }
     }
   }
 
-  const possibleCustomFields = [
+  // Ensure promoter_metadata is synthesized and fully populated ONLY for actual promoter profiles or Miguel
+  const isOwnerMiguel = isMiguelNameOrProfile(normalized);
+  const isPromoterUser = Boolean(
+    isOwnerMiguel ||
+    normalized.account_type === 'promoter' ||
+    normalized.active_workspace === 'promoter' ||
+    (normalized.promoter_id && normalized.promoter_id !== normalized.id) ||
+    (Array.isArray(normalized.registered_workspaces) && normalized.registered_workspaces.some((w: any) => {
+      const type = typeof w === 'string' ? w : (w?.type || w?.key || '');
+      return String(type).toLowerCase() === 'promoter';
+    })) ||
+    (normalized.promoter_metadata && (normalized.promoter_metadata.is_registered === true || normalized.promoter_metadata.brand_name))
+  );
+
+  if (isPromoterUser) {
+    if (!normalized.promoter_metadata || typeof normalized.promoter_metadata !== 'object') {
+      normalized.promoter_metadata = {};
+    }
+    const pm = normalized.promoter_metadata;
+    pm.brand_name = pm.brand_name || pm.agency_name || pm.entity_name || normalized.promoter_agency || normalized.promoter_brand || normalized.promoter_name || normalized.entity_name || normalized.corporate_name || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations');
+    pm.agency_name = pm.agency_name || pm.brand_name;
+    pm.business_name = pm.business_name || pm.brand_name || pm.agency_name;
+    pm.city = pm.city || normalized.promoter_city || normalized.city;
+    pm.state = pm.state || normalized.promoter_state || normalized.state_province || normalized.state;
+    pm.logo_url = pm.logo_url || pm.avatar_url || normalized.promoter_logo || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : '');
+    pm.banner_url = pm.banner_url || pm.cover_url || normalized.promoter_cover_image || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : '');
+    pm.bio = pm.bio || normalized.promoter_bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.');
+
+    // Backfill namespaced promoter properties so promoter components never fall back to empty or stale local storage
+    normalized.promoter_id = normalized.promoter_id || pm.id || (normalized.id && normalized.id !== 'guest' ? normalized.id : undefined);
+    normalized.promoter_name = pm.brand_name;
+    normalized.promoter_agency = pm.agency_name;
+    normalized.promoter_brand = pm.brand_name;
+    normalized.promoter_logo = pm.logo_url;
+    normalized.promoter_cover_image = pm.banner_url;
+    normalized.promoter_bio = pm.bio;
+    normalized.promoter_city = pm.city || normalized.promoter_city || normalized.city;
+    normalized.promoter_state = pm.state || normalized.promoter_state;
+    normalized.promoter_booking_email = pm.booking_email || normalized.promoter_booking_email || normalized.email;
+  } else {
+    // Non-promoter: do not synthesize promoter identity or badges
+    delete normalized.promoter_agency;
+    delete normalized.promoter_brand;
+    delete normalized.promoter_name;
+    if (!normalized.promoter_id || normalized.promoter_id === normalized.id) {
+      delete normalized.promoter_id;
+    }
+  }
+
+  // Extract only dedicated namespaced custom fields from metadata without touching top-level personal banner/avatar/bio
+  const namespacedCustomFields = [
     'pin',
     'location_code',
-    'banner_url',
     'console_handle',
     'clearance_tier',
     'sub_tier',
@@ -160,10 +200,6 @@ export function normalizeLoadedProfile(data: any): any {
     'screen_name',
     'nexus_consent_checked',
     'label_tax_registration_number',
-    'role',
-    'name',
-    'bandName',
-    'band_id',
     'metal_archives_url',
     'metal_archives',
     'creative_id',
@@ -181,18 +217,17 @@ export function normalizeLoadedProfile(data: any): any {
     'creative_instagram',
     'creative_website',
     'creative_bio',
-    'business_name',
   ];
-  for (const key of possibleCustomFields) {
+  for (const key of namespacedCustomFields) {
     if (!(key in normalized) || normalized[key] === undefined || normalized[key] === null) {
       const metadataVal =
+        normalized.user_metadata?.[key] ||
         normalized.creative_metadata?.[key] ||
         normalized.promoter_metadata?.[key] ||
         normalized.label_metadata?.[key] ||
         normalized.band_metadata?.[key] ||
-        normalized.user_metadata?.[key] ||
-        normalized.creative_metadata?.custom_fields?.[key] ||
-        normalized.promoter_metadata?.custom_fields?.[key];
+        normalized.user_metadata?.custom_fields?.[key] ||
+        normalized.creative_metadata?.custom_fields?.[key];
       if (metadataVal !== undefined && metadataVal !== null) {
         normalized[key] = metadataVal;
       }
@@ -218,20 +253,34 @@ export function normalizeLoadedProfile(data: any): any {
     }
   }
 
-  // Ensure band identity integrity: prevent community bands (e.g. Necroticgorebeast) from corrupting personal band profile
+  // Sanitize personal avatar_url & banner_url: isolate promoter assets when in personal / industry pro context
+  const isPromoterContext = normalized.account_type === 'promoter' || normalized.active_workspace === 'promoter';
+  if (!isPromoterContext) {
+    if (isPromoterAvatarUrl(normalized.avatar_url, normalized) || isPromoterAvatarUrl(normalized.avatar, normalized)) {
+      const savedUserAvatar = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null;
+      normalized.avatar_url = savedUserAvatar && !isPromoterAvatarUrl(savedUserAvatar, normalized) ? savedUserAvatar : DEFAULT_PERSONAL_AVATAR;
+      normalized.avatar = normalized.avatar_url;
+    }
+    if (isPromoterCoverUrl(normalized.banner_url, normalized) || isPromoterCoverUrl(normalized.cover_url, normalized) || isPromoterCoverUrl(normalized.banner, normalized)) {
+      const savedUserBanner = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_banner')) : null;
+      normalized.banner_url = savedUserBanner && !isPromoterCoverUrl(savedUserBanner, normalized) ? savedUserBanner : DEFAULT_PERSONAL_COVER;
+      normalized.cover_url = normalized.banner_url;
+      normalized.banner = normalized.banner_url;
+    }
+  }
+
+  // Ensure band identity integrity: preserve Miguel's band Virulent Excision, and allow all valid user/community bands
   if (isMiguelNameOrProfile(normalized)) {
     normalized.band_id = 'cbddb810-259b-4230-9968-3d402dfdb872';
     normalized.band_name = 'Virulent Excision';
     normalized.bandName = 'Virulent Excision';
   } else {
-    if (normalized.band_id && isCommunityBandRecord(normalized.band_id)) {
-      normalized.band_id = undefined;
-    }
-    if (normalized.band_name && (isCommunityBandRecord(normalized.band_name) || String(normalized.band_name).toLowerCase().includes('necroticgorebeast'))) {
+    // Only strip demo band necroticgorebeast if accidentally assigned
+    if (normalized.band_name && String(normalized.band_name).toLowerCase().includes('necroticgorebeast')) {
       normalized.band_name = undefined;
       normalized.bandName = undefined;
     }
-    if (normalized.bandName && (isCommunityBandRecord(normalized.bandName) || String(normalized.bandName).toLowerCase().includes('necroticgorebeast'))) {
+    if (normalized.bandName && String(normalized.bandName).toLowerCase().includes('necroticgorebeast')) {
       normalized.bandName = undefined;
     }
   }
@@ -327,15 +376,15 @@ export function sanitizeProfilePayload(rawPayload: any): any {
   // 3. Map explicit fallback/alias fields for key database columns:
   if (
     !cleanProfilePayload.full_name &&
-    (rawPayload.full_name ||
-      rawPayload.name ||
-      rawPayload.legal_name ||
-      rawPayload.legalName ||
-      rawPayload.CreativeName ||
-      rawPayload.creative_business_name ||
-      rawPayload.creativename)
+    (rawPayload.full_name !== undefined ||
+      rawPayload.name !== undefined ||
+      rawPayload.legal_name !== undefined ||
+      rawPayload.legalName !== undefined ||
+      rawPayload.CreativeName !== undefined ||
+      rawPayload.creative_business_name !== undefined ||
+      rawPayload.creativename !== undefined)
   ) {
-    cleanProfilePayload.full_name =
+    const candidateName =
       rawPayload.full_name ||
       rawPayload.name ||
       rawPayload.legal_name ||
@@ -343,15 +392,21 @@ export function sanitizeProfilePayload(rawPayload: any): any {
       rawPayload.CreativeName ||
       rawPayload.creative_business_name ||
       rawPayload.creativename;
+    if (candidateName) {
+      cleanProfilePayload.full_name = candidateName;
+    }
   }
 
   // console_handle <- console_handle || handle || screen_name || creative_handle
   if (
     !cleanProfilePayload.console_handle &&
-    (rawPayload.console_handle || rawPayload.handle || rawPayload.creative_handle)
+    (rawPayload.console_handle !== undefined || rawPayload.handle !== undefined || rawPayload.creative_handle !== undefined)
   ) {
-    cleanProfilePayload.console_handle =
+    const candidateHandle =
       rawPayload.console_handle || rawPayload.handle || rawPayload.creative_handle;
+    if (candidateHandle) {
+      cleanProfilePayload.console_handle = candidateHandle;
+    }
   }
 
   // bio <- bio || profileBlurb || blurb || about
@@ -362,115 +417,110 @@ export function sanitizeProfilePayload(rawPayload: any): any {
     rawPayload.about !== undefined
   ) {
     const candidateBio = rawPayload.bio ?? rawPayload.profileBlurb ?? rawPayload.blurb ?? rawPayload.about;
-    if (candidateBio !== undefined && candidateBio !== null) {
-      cleanProfilePayload.bio = String(candidateBio);
+    if (candidateBio !== undefined) {
+      cleanProfilePayload.bio = candidateBio !== null ? String(candidateBio) : null;
     }
   }
 
   // update_ticker <- update_ticker || rosterTicker
   if (rawPayload.update_ticker !== undefined || rawPayload.rosterTicker !== undefined) {
     const candidateTicker = rawPayload.update_ticker ?? rawPayload.rosterTicker;
-    if (candidateTicker !== undefined && candidateTicker !== null) {
-      cleanProfilePayload.update_ticker = String(candidateTicker);
+    if (candidateTicker !== undefined) {
+      cleanProfilePayload.update_ticker = candidateTicker !== null ? String(candidateTicker) : null;
     }
   }
 
-  // Avatar URL resolving
-  let uploadedAvatarUrl: string | null = null;
-  let existingAvatarUrl: string | null = null;
+  // Avatar URL resolving only if an avatar field was provided
+  const hasAvatarField =
+    rawPayload.avatar_url !== undefined ||
+    rawPayload.avatarUrl !== undefined ||
+    rawPayload.avatar !== undefined ||
+    rawPayload.profileAvatarUrl !== undefined ||
+    rawPayload.logo_url !== undefined;
 
-  const avatarCandidates = [
-    rawPayload.avatar_url,
-    rawPayload.avatarUrl,
-    rawPayload.avatar,
-    rawPayload.creative_avatar,
-    rawPayload.profileAvatarUrl,
-    rawPayload.label_avatar,
-    rawPayload.promoter_logo,
-    rawPayload.logo_url,
-  ];
+  if (hasAvatarField) {
+    let chosenAvatarUrl: string | null = null;
+    const avatarCandidates = [
+      rawPayload.avatar_url,
+      rawPayload.avatarUrl,
+      rawPayload.avatar,
+      rawPayload.profileAvatarUrl,
+      rawPayload.logo_url,
+    ];
 
-  for (const cand of avatarCandidates) {
-    if (typeof cand === 'string' && cand.trim().length > 0 && !cand.startsWith('data:image/')) {
-      if (!existingAvatarUrl && !cand.includes('Nexus%20Icon%20Circuits.png')) {
-        existingAvatarUrl = cand;
+    for (const cand of avatarCandidates) {
+      if (typeof cand === 'string' && cand.trim().length > 0) {
+        if (!cand.includes('Nexus%20Icon%20Circuits.png')) {
+          chosenAvatarUrl = cand.trim();
+          break;
+        }
       }
     }
+
+    if (chosenAvatarUrl !== null) {
+      cleanProfilePayload.avatar_url = chosenAvatarUrl;
+    } else if (rawPayload.avatar_url === null || rawPayload.avatar === null) {
+      cleanProfilePayload.avatar_url = null;
+    }
   }
 
-  if (
-    typeof cleanProfilePayload.avatar_url === 'string' &&
-    cleanProfilePayload.avatar_url.trim().length > 0 &&
-    !cleanProfilePayload.avatar_url.startsWith('data:image/')
-  ) {
-    uploadedAvatarUrl = cleanProfilePayload.avatar_url;
-  }
+  // Banner URL resolving only if a banner field was provided
+  const hasBannerField =
+    rawPayload.banner_url !== undefined ||
+    rawPayload.bannerUrl !== undefined ||
+    rawPayload.banner !== undefined ||
+    rawPayload.cover_url !== undefined ||
+    rawPayload.profileCoverUrl !== undefined;
 
-  cleanProfilePayload.avatar_url = uploadedAvatarUrl || existingAvatarUrl || null;
+  if (hasBannerField) {
+    let chosenBannerUrl: string | null = null;
+    const bannerCandidates = [
+      rawPayload.banner_url,
+      rawPayload.bannerUrl,
+      rawPayload.banner,
+      rawPayload.cover_url,
+      rawPayload.profileCoverUrl,
+    ];
 
-  // Banner URL resolving
-  let uploadedBannerUrl: string | null = null;
-  let existingBannerUrl: string | null = null;
-
-  const bannerCandidates = [
-    rawPayload.banner_url,
-    rawPayload.bannerUrl,
-    rawPayload.banner,
-    rawPayload.cover_url,
-    rawPayload.creative_banner,
-    rawPayload.promoter_cover_image,
-    rawPayload.label_banner,
-    rawPayload.profileCoverUrl,
-  ];
-
-  for (const cand of bannerCandidates) {
-    if (typeof cand === 'string' && cand.trim().length > 0 && !cand.startsWith('data:image/')) {
-      if (!existingBannerUrl) {
-        existingBannerUrl = cand;
+    for (const cand of bannerCandidates) {
+      if (typeof cand === 'string' && cand.trim().length > 0) {
+        chosenBannerUrl = cand.trim();
+        break;
       }
     }
-  }
 
-  if (
-    typeof cleanProfilePayload.banner_url === 'string' &&
-    cleanProfilePayload.banner_url.trim().length > 0 &&
-    !cleanProfilePayload.banner_url.startsWith('data:image/')
-  ) {
-    uploadedBannerUrl = cleanProfilePayload.banner_url;
-  }
-
-  cleanProfilePayload.banner_url = uploadedBannerUrl || existingBannerUrl || null;
-
-  // Preserving active_workspace if present or defaulting to industry_pro / fan_only
-  if (!cleanProfilePayload.active_workspace && rawPayload.active_workspace) {
-    cleanProfilePayload.active_workspace = rawPayload.active_workspace;
-  } else if (!cleanProfilePayload.active_workspace) {
-    const isFan = ['fan', 'fan_only', 'fan listener', 'fan only supporter', 'user'].includes(
-      String(rawPayload.account_type || rawPayload.role || '').toLowerCase().trim()
-    );
-    cleanProfilePayload.active_workspace = isFan ? 'fan_only' : 'industry_pro';
-  }
-
-  // CRITICAL REQUIREMENT: account_type column on profiles table can ONLY EVER be "fan" or "industry pro"
-  const rawAccVal = cleanProfilePayload.account_type || rawPayload.account_type || rawPayload.role || '';
-  if (rawAccVal) {
-    const lowerAcc = String(rawAccVal).toLowerCase().trim();
-    if (['fan', 'fan_only', 'fan listener', 'fan only supporter', 'user'].includes(lowerAcc)) {
-      cleanProfilePayload.account_type = 'fan';
-    } else {
-      cleanProfilePayload.account_type = 'industry pro';
+    if (chosenBannerUrl !== null) {
+      cleanProfilePayload.banner_url = chosenBannerUrl;
+    } else if (rawPayload.banner_url === null || rawPayload.cover_url === null) {
+      cleanProfilePayload.banner_url = null;
     }
-  } else {
-    cleanProfilePayload.account_type = 'fan';
+  }
+
+  // Preserving active_workspace only if present in payload
+  if (cleanProfilePayload.active_workspace !== undefined || rawPayload.active_workspace !== undefined) {
+    cleanProfilePayload.active_workspace = cleanProfilePayload.active_workspace || rawPayload.active_workspace;
+  }
+
+  // account_type column on profiles table can ONLY EVER be "fan" or "industry pro"
+  if (cleanProfilePayload.account_type !== undefined || rawPayload.account_type !== undefined || rawPayload.role !== undefined) {
+    const rawAccVal = cleanProfilePayload.account_type || rawPayload.account_type || rawPayload.role || '';
+    if (rawAccVal) {
+      const lowerAcc = String(rawAccVal).toLowerCase().trim();
+      if (['fan', 'fan_only', 'fan listener', 'fan only supporter', 'user'].includes(lowerAcc)) {
+        cleanProfilePayload.account_type = 'fan';
+      } else {
+        cleanProfilePayload.account_type = 'industry pro';
+      }
+    }
   }
 
   // top_song_title <- top_song_title || favoriteSong
-  if (!cleanProfilePayload.top_song_title && rawPayload.favoriteSong) {
+  if (cleanProfilePayload.top_song_title === undefined && rawPayload.favoriteSong !== undefined) {
     cleanProfilePayload.top_song_title = rawPayload.favoriteSong;
   }
 
   // genre_tags <- genre_tags || genres
-  if (!cleanProfilePayload.genre_tags && rawPayload.genres && Array.isArray(rawPayload.genres)) {
+  if (cleanProfilePayload.genre_tags === undefined && rawPayload.genres !== undefined && Array.isArray(rawPayload.genres)) {
     cleanProfilePayload.genre_tags = rawPayload.genres;
   }
 
@@ -510,76 +560,116 @@ export function extractGlobalProfilePayload(rawPayload: any, userId?: string): R
   if (!rawPayload || typeof rawPayload !== 'object') return {};
 
   const uId = userId || rawPayload.id || rawPayload.user_id;
-  const fullName =
-    rawPayload.full_name ||
-    rawPayload.name ||
-    rawPayload.legal_name ||
-    rawPayload.display_name ||
-    'User';
+  const payload: Record<string, any> = {};
+  if (uId) payload.id = uId;
 
-  const avatarUrl =
-    rawPayload.avatar_url ||
-    rawPayload.avatarUrl ||
-    rawPayload.profileAvatarUrl ||
-    (typeof rawPayload.avatar === 'string' && !rawPayload.avatar.startsWith('data:') ? rawPayload.avatar : null);
+  if (rawPayload.email !== undefined) payload.email = rawPayload.email;
 
-  const bannerUrl =
-    rawPayload.banner_url ||
-    rawPayload.bannerUrl ||
-    rawPayload.profileCoverUrl ||
-    (typeof rawPayload.banner === 'string' && !rawPayload.banner.startsWith('data:') ? rawPayload.banner : null) ||
-    rawPayload.cover_url ||
-    null;
+  if (
+    rawPayload.full_name !== undefined ||
+    rawPayload.name !== undefined ||
+    rawPayload.legal_name !== undefined ||
+    rawPayload.display_name !== undefined
+  ) {
+    payload.full_name =
+      rawPayload.full_name ||
+      rawPayload.name ||
+      rawPayload.legal_name ||
+      rawPayload.display_name;
+  }
 
-  const bio =
-    rawPayload.bio ??
-    rawPayload.profileBlurb ??
-    rawPayload.blurb ??
-    rawPayload.about ??
-    null;
+  if (rawPayload.console_handle !== undefined || rawPayload.handle !== undefined || rawPayload.screen_name !== undefined) {
+    payload.console_handle = rawPayload.console_handle || rawPayload.handle || rawPayload.screen_name;
+  }
 
-  const rawAccountType = String(rawPayload.account_type || rawPayload.role || '').toLowerCase().trim();
-  const isFan = ['fan', 'fan_only', 'fan listener', 'fan only supporter', 'user'].includes(rawAccountType);
-  const accountType = isFan ? 'fan' : 'industry pro';
+  if (
+    rawPayload.avatar_url !== undefined ||
+    rawPayload.avatarUrl !== undefined ||
+    rawPayload.profileAvatarUrl !== undefined ||
+    rawPayload.avatar !== undefined
+  ) {
+    const avatarUrl =
+      rawPayload.avatar_url ||
+      rawPayload.avatarUrl ||
+      rawPayload.profileAvatarUrl ||
+      (typeof rawPayload.avatar === 'string' && !rawPayload.avatar.startsWith('data:') ? rawPayload.avatar : null);
+    payload.avatar_url = avatarUrl;
+  }
 
-  const payload: Record<string, any> = {
-    id: uId,
-    email: rawPayload.email || undefined,
-    full_name: fullName,
-    console_handle: rawPayload.console_handle || rawPayload.handle || undefined,
-    avatar_url: avatarUrl || null,
-    banner_url: bannerUrl || null,
-    bio: bio ? String(bio) : null,
-    city: rawPayload.city || undefined,
-    state_province: rawPayload.state_province || rawPayload.state || undefined,
-    country: rawPayload.country || 'USA',
-    zip_code: rawPayload.zip_code || rawPayload.zip || undefined,
-    pin: rawPayload.pin || undefined,
-    phone: rawPayload.phone ? String(rawPayload.phone).replace(/\D/g, '') : undefined,
-    account_type: accountType,
-    active_workspace: rawPayload.active_workspace !== undefined ? rawPayload.active_workspace : (isFan ? 'fan_only' : 'industry_pro'),
-    allowed_workspaces: rawPayload.allowed_workspaces !== undefined ? rawPayload.allowed_workspaces : (isFan ? ['fan'] : ['industry pro', 'band', 'promoter', 'creative', 'label']),
-    registered_workspaces: rawPayload.registered_workspaces !== undefined
-      ? normalizeRegisteredWorkspaces(
-          !isFan
-            ? (Array.isArray(rawPayload.registered_workspaces) ? rawPayload.registered_workspaces : [rawPayload.registered_workspaces]).filter((w: any) => {
-                const str = typeof w === 'string' ? w.toLowerCase().trim() : (w?.type || '').toLowerCase().trim();
-                return str !== 'fan' && str !== 'fan_only';
-              })
-            : rawPayload.registered_workspaces
-        )
-      : undefined,
-    creative_id: rawPayload.creative_id || undefined,
-    creative_name: rawPayload.creative_name || undefined,
-    promoter_id: rawPayload.promoter_id || undefined,
-    label_id: rawPayload.label_id || undefined,
-    band_id: isMiguelNameOrProfile(rawPayload) ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (isCommunityBandRecord(rawPayload.band_id) ? undefined : (rawPayload.band_id || undefined)),
-    band_name: isMiguelNameOrProfile(rawPayload) ? 'Virulent Excision' : ((rawPayload.band_name && (isCommunityBandRecord(rawPayload.band_name) || String(rawPayload.band_name).toLowerCase().includes('necroticgorebeast'))) ? undefined : (rawPayload.band_name || rawPayload.bandName || undefined)),
-    genre_tags: Array.isArray(rawPayload.genre_tags) ? rawPayload.genre_tags : (Array.isArray(rawPayload.genres) ? rawPayload.genres : undefined),
-    top_song_title: rawPayload.top_song_title || rawPayload.favoriteSong || undefined,
-    top_song_url: rawPayload.top_song_url || undefined,
-    update_ticker: rawPayload.update_ticker || rawPayload.rosterTicker || undefined,
-  };
+  if (
+    rawPayload.banner_url !== undefined ||
+    rawPayload.bannerUrl !== undefined ||
+    rawPayload.profileCoverUrl !== undefined ||
+    rawPayload.banner !== undefined ||
+    rawPayload.cover_url !== undefined
+  ) {
+    const bannerUrl =
+      rawPayload.banner_url ||
+      rawPayload.bannerUrl ||
+      rawPayload.profileCoverUrl ||
+      (typeof rawPayload.banner === 'string' && !rawPayload.banner.startsWith('data:') ? rawPayload.banner : null) ||
+      rawPayload.cover_url ||
+      null;
+    payload.banner_url = bannerUrl;
+  }
+
+  if (
+    rawPayload.bio !== undefined ||
+    rawPayload.profileBlurb !== undefined ||
+    rawPayload.blurb !== undefined ||
+    rawPayload.about !== undefined
+  ) {
+    const bio = rawPayload.bio ?? rawPayload.profileBlurb ?? rawPayload.blurb ?? rawPayload.about;
+    payload.bio = bio ? String(bio) : null;
+  }
+
+  if (rawPayload.city !== undefined) payload.city = rawPayload.city;
+  if (rawPayload.state_province !== undefined || rawPayload.state !== undefined) {
+    payload.state_province = rawPayload.state_province || rawPayload.state;
+  }
+  if (rawPayload.country !== undefined) payload.country = rawPayload.country;
+  if (rawPayload.zip_code !== undefined || rawPayload.zip !== undefined) {
+    payload.zip_code = rawPayload.zip_code || rawPayload.zip;
+  }
+  if (rawPayload.pin !== undefined) payload.pin = rawPayload.pin;
+  if (rawPayload.phone !== undefined) {
+    payload.phone = rawPayload.phone ? String(rawPayload.phone).replace(/\D/g, '') : null;
+  }
+
+  if (rawPayload.account_type !== undefined || rawPayload.role !== undefined) {
+    const rawAccountType = String(rawPayload.account_type || rawPayload.role || '').toLowerCase().trim();
+    const isFan = ['fan', 'fan_only', 'fan listener', 'fan only supporter', 'user'].includes(rawAccountType);
+    payload.account_type = isFan ? 'fan' : 'industry pro';
+  }
+
+  if (rawPayload.active_workspace !== undefined) payload.active_workspace = rawPayload.active_workspace;
+  if (rawPayload.allowed_workspaces !== undefined) payload.allowed_workspaces = rawPayload.allowed_workspaces;
+  if (rawPayload.registered_workspaces !== undefined) {
+    payload.registered_workspaces = normalizeRegisteredWorkspaces(rawPayload.registered_workspaces);
+  }
+
+  if (rawPayload.creative_id !== undefined) payload.creative_id = rawPayload.creative_id;
+  if (rawPayload.creative_name !== undefined) payload.creative_name = rawPayload.creative_name;
+  if (rawPayload.promoter_id !== undefined) payload.promoter_id = rawPayload.promoter_id;
+  if (rawPayload.label_id !== undefined) payload.label_id = rawPayload.label_id;
+
+  if (rawPayload.band_id !== undefined) {
+    payload.band_id = isMiguelNameOrProfile(rawPayload) ? 'cbddb810-259b-4230-9968-3d402dfdb872' : rawPayload.band_id;
+  }
+  if (rawPayload.band_name !== undefined || rawPayload.bandName !== undefined) {
+    payload.band_name = isMiguelNameOrProfile(rawPayload) ? 'Virulent Excision' : ((rawPayload.band_name && String(rawPayload.band_name).toLowerCase().includes('necroticgorebeast')) ? null : (rawPayload.band_name || rawPayload.bandName));
+  }
+
+  if (rawPayload.genre_tags !== undefined || rawPayload.genres !== undefined) {
+    payload.genre_tags = Array.isArray(rawPayload.genre_tags) ? rawPayload.genre_tags : (Array.isArray(rawPayload.genres) ? rawPayload.genres : undefined);
+  }
+  if (rawPayload.top_song_title !== undefined || rawPayload.favoriteSong !== undefined) {
+    payload.top_song_title = rawPayload.top_song_title || rawPayload.favoriteSong;
+  }
+  if (rawPayload.top_song_url !== undefined) payload.top_song_url = rawPayload.top_song_url;
+  if (rawPayload.update_ticker !== undefined || rawPayload.rosterTicker !== undefined) {
+    payload.update_ticker = rawPayload.update_ticker || rawPayload.rosterTicker;
+  }
 
   return sanitizeProfileUpsertPayload(payload);
 }
@@ -684,6 +774,24 @@ export async function autoArchiveProfileAssets(
       userProfileName || existingProfile.full_name || existingProfile.name || 'Nexus Member';
 
     const insertArchivePost = async (folderName: string, mediaUrl: string, captionText: string) => {
+      // Deduplicate: check if this media URL is already archived for this user in nexus_posts
+      if (supabaseClient) {
+        try {
+          const { data: existingPost } = await supabaseClient
+            .from('nexus_posts')
+            .select('id')
+            .eq('profile_id', userId)
+            .eq('media_url', mediaUrl)
+            .limit(1);
+          if (existingPost && existingPost.length > 0) {
+            console.log(`[AutoArchive] Media asset ${mediaUrl} already archived for user ${userId}, skipping duplicate.`);
+            return;
+          }
+        } catch (e) {
+          // continue with insertion
+        }
+      }
+
       const postUuid =
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
@@ -706,6 +814,10 @@ export async function autoArchiveProfileAssets(
         gallery_folder: folderName,
         folder: folderName,
         is_archived_asset: true,
+        is_gallery_only: true,
+        gallery_only: true,
+        post_to_feed: false,
+        hidden_from_feed: true,
       };
 
       if (supabaseClient) {
@@ -726,19 +838,18 @@ export async function autoArchiveProfileAssets(
         }
       }
 
+      // Add quietly to local vault cache for Photo Pit / Gallery view without spamming public feed
       try {
-        const cachedFeedRaw =
-          localStorage.getItem('nexus_social_feed_cache') || localStorage.getItem('nexus_social_feed_v2');
-        let feedItems: any[] = [];
-        if (cachedFeedRaw) {
+        const vaultRaw = localStorage.getItem('nexus_dbUserPosts');
+        let vaultItems: any[] = [];
+        if (vaultRaw) {
           try {
-            feedItems = JSON.parse(cachedFeedRaw);
+            vaultItems = JSON.parse(vaultRaw);
           } catch (e) {}
         }
-        if (!feedItems.some((item: any) => item.image === mediaUrl || item.media_url === mediaUrl)) {
-          feedItems.unshift(postObj);
-          localStorage.setItem('nexus_social_feed_cache', JSON.stringify(feedItems));
-          localStorage.setItem('nexus_social_feed_v2', JSON.stringify(feedItems));
+        if (!vaultItems.some((item: any) => item.image === mediaUrl || item.media_url === mediaUrl || item.id === postUuid)) {
+          vaultItems.unshift(postObj);
+          localStorage.setItem('nexus_dbUserPosts', JSON.stringify(vaultItems));
         }
       } catch (e) {}
     };
@@ -823,7 +934,18 @@ export async function executeSanitizedProfileUpsert(
     (Array.isArray(sanitizedPayload) ? sanitizedPayload[0]?.name : null);
 
   if (userId && (newAvatarUrl || newBannerUrl) && supabaseClient) {
-    await autoArchiveProfileAssets(supabaseClient, userId, newAvatarUrl, newBannerUrl, userProfileName);
+    autoArchiveProfileAssets(supabaseClient, userId, newAvatarUrl, newBannerUrl, userProfileName).catch(() => {});
+  }
+
+  // If updating a single user profile record, attempt targeted UPDATE first to protect un-passed fields
+  if (userId && !Array.isArray(sanitizedPayload) && supabaseClient) {
+    const updateResult = await executeWithSchemaResilience(async (payload) => {
+      return await supabaseClient.from('profiles').update(payload).eq('id', userId).select();
+    }, sanitizedPayload);
+
+    if (!updateResult?.error && Array.isArray(updateResult?.data) && updateResult.data.length > 0) {
+      return updateResult;
+    }
   }
 
   const result = await executeWithSchemaResilience(async (payload) => {

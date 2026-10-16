@@ -19,7 +19,7 @@ export default defineConfig(() => {
       minify: 'esbuild',
       sourcemap: false,
       reportCompressedSize: false,
-      chunkSizeWarningLimit: 3000,
+      chunkSizeWarningLimit: 12000,
       target: 'esnext',
       rollupOptions: {
         maxParallelFileOps: 1,

@@ -38,10 +38,10 @@ export function compressAndTranscodeImageToWebP(file: any): Promise<any> {
       img.onload = () => {
         let width = img.width;
         let height = img.height;
-        const maxEdge = 1200;
+        const maxEdge = 1080;
 
         // Strip EXIF coordinates/camera tags by drawing onto 2D canvas,
-        // and systematically downscale to maximum 1200px constraint on longest edge
+        // and systematically downscale to maximum 1080px constraint on longest edge
         if (width > maxEdge || height > maxEdge) {
           if (width > height) {
             height = Math.round((height * maxEdge) / width);
@@ -108,49 +108,24 @@ export function compressAndTranscodeImageToWebP(file: any): Promise<any> {
  */
 export function isValidStorageOrImageUrl(
   url?: string | null,
-  bucketType?: 'community-bands' | 'avatars' | 'bannersv2' | 'inventory-items' | 'any'
+  _bucketType?: 'community-bands' | 'avatars' | 'bannersv2' | 'inventory-items' | 'any'
 ): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
-  if (!trimmed) return false;
-
-  // Rule 1: Allow Valid Supabase Storage URLs
-  if (
-    trimmed.includes('/storage/v1/object/public/stories/') ||
-    trimmed.includes('/storage/v1/object/public/inventory-items/') ||
-    trimmed.includes('/storage/v1/object/public/community-bands/') ||
-    trimmed.includes('/storage/v1/object/public/avatars/') ||
-    trimmed.includes('/storage/v1/object/public/bannersv2/') ||
-    trimmed.includes('/storage/v1/object/public/clips/') ||
-    trimmed.includes('/storage/v1/object/public/') ||
-    trimmed.includes('/stories/') ||
-    trimmed.includes('/inventory-items/') ||
-    trimmed.includes('/community-bands/') ||
-    trimmed.includes('/avatars/') ||
-    trimmed.includes('/bannersv2/') ||
-    trimmed.includes('/clips/')
-  ) {
-    if (!trimmed.includes('Nexus%20Icon%20Circuits.png') && !trimmed.includes('Nexus Icon Circuits.png')) {
-      return true;
-    }
-  }
-
-  // Explicitly reject fallback asset and default unsplash placeholders
-  if (
-    trimmed.includes('Nexus%20Icon%20Circuits.png') ||
-    trimmed.includes('Nexus Icon Circuits.png') ||
-    trimmed.includes('unsplash.com')
-  ) {
-    return false;
-  }
+  if (!trimmed || trimmed.includes('undefined') || trimmed.includes('null')) return false;
 
   // Base64 data URIs
   if (trimmed.startsWith('data:image/')) {
     return true;
   }
 
-  // Any other valid HTTP/HTTPS image URL (not fallback or unsplash)
+  // Any valid HTTP or HTTPS image URL
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return true;
+  }
+
+  // Relative storage paths
+  if (trimmed.startsWith('/')) {
     return true;
   }
 
@@ -223,7 +198,14 @@ export async function uploadBase64ToStorage(
     const cleanToken = String(fileNameToken || 'asset').toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_');
 
     let primaryBucket = 'community-bands';
-    if (cleanRequested === 'stories' || cleanRequested.includes('stori') || cleanToken.includes('story')) {
+    if (
+      cleanRequested === 'archives' ||
+      cleanRequested.includes('archive') ||
+      cleanToken.includes('archive') ||
+      cleanToken.includes('flyer')
+    ) {
+      primaryBucket = 'archives';
+    } else if (cleanRequested === 'stories' || cleanRequested.includes('stori') || cleanToken.includes('story')) {
       primaryBucket = 'stories';
     } else if (cleanRequested === 'clips' || cleanRequested.includes('clip') || cleanToken.includes('clip')) {
       primaryBucket = 'clips';
@@ -266,14 +248,21 @@ export async function uploadBase64ToStorage(
       primaryBucket = cleanRequested;
     }
 
+    const isArchiveRequested =
+      cleanRequested === 'archives' ||
+      cleanRequested.includes('archive') ||
+      cleanToken.includes('archive') ||
+      cleanToken.includes('flyer');
     const isStoryRequested = cleanRequested === 'stories' || cleanRequested.includes('stori') || cleanToken.includes('story');
     const isClipRequested = cleanRequested === 'clips' || cleanRequested.includes('clip') || cleanToken.includes('clip');
     const bucketCandidates = Array.from(
       new Set(
         [
           primaryBucket,
+          ...(isArchiveRequested ? ['archives', 'public-assets', 'community-bands', 'feed_media', 'bannersv2'] : []),
           ...(isStoryRequested ? ['stories', 'photo-pit', 'clips', 'public-assets', 'media'] : []),
           ...(isClipRequested ? ['clips'] : []),
+          'archives',
           'stories',
           'photo-pit',
           'community-bands',
@@ -316,7 +305,7 @@ export async function uploadBase64ToStorage(
             .from(targetBucket)
             .upload(currentPath, blob, {
               upsert: true,
-              cacheControl: '3600',
+              cacheControl: '31536000',
               contentType: mimeType,
             });
 
@@ -324,7 +313,7 @@ export async function uploadBase64ToStorage(
             const finalPath = uploadData.path || currentPath;
             const { data: publicUrlData } = client.storage.from(targetBucket).getPublicUrl(finalPath);
             if (publicUrlData?.publicUrl && !publicUrlData.publicUrl.startsWith('data:')) {
-              const finalPublicUrl = `${publicUrlData.publicUrl}?t=${timestamp}`;
+              const finalPublicUrl = publicUrlData.publicUrl;
               console.log(`[STORAGE UPLOAD SUCCESS] Stored image in bucket "${targetBucket}" (${finalPath}):`, finalPublicUrl);
               return finalPublicUrl;
             }
@@ -419,6 +408,69 @@ export async function uploadCommunityBandMedia(
     return typeof imageInput === 'string' ? imageInput : '';
   } catch (err) {
     console.warn(`[uploadCommunityBandMedia] Error uploading ${mediaType}:`, err);
+    return typeof imageInput === 'string' ? imageInput : '';
+  }
+}
+
+/**
+ * Standardized single helper utility for uploading historic show flyer / poster media
+ * ensuring it is routed directly to the 'archives' storage bucket with WebP compression and fallback resilience.
+ */
+export async function uploadArchiveFlyer(
+  imageInput: string | File | Blob | null | undefined,
+  showId: string = 'archive-show',
+  customTitle: string = 'flyer'
+): Promise<string> {
+  if (!imageInput) return '';
+  if (typeof imageInput === 'string' && !imageInput.startsWith('data:')) {
+    return imageInput; // Already a remote storage URL
+  }
+
+  try {
+    const resolvedShowId = showId || `show_${Date.now()}`;
+    const cleanToken = `flyer_${customTitle.substring(0, 30).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+    // 1. Transcode/compress image to lightweight WebP
+    let processedFile: any = imageInput;
+    if (typeof imageInput === 'string' && imageInput.startsWith('data:')) {
+      processedFile = await compressAndTranscodeImageToWebP(imageInput);
+    } else if (typeof imageInput === 'object' && (imageInput instanceof File || imageInput instanceof Blob)) {
+      processedFile = await compressAndTranscodeImageToWebP(imageInput);
+    }
+
+    // 2. Convert processed file/blob to base64 string for uploadBase64ToStorage
+    let base64String = '';
+    if (typeof processedFile === 'string') {
+      base64String = processedFile;
+    } else if (processedFile instanceof File || processedFile instanceof Blob) {
+      base64String = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string) || '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(processedFile);
+      });
+    }
+
+    if (!base64String) {
+      return typeof imageInput === 'string' ? imageInput : '';
+    }
+
+    // 3. Upload directly into 'archives' bucket
+    const publicUrl = await uploadBase64ToStorage(
+      base64String,
+      'archives',
+      resolvedShowId,
+      cleanToken
+    );
+
+    if (publicUrl && !publicUrl.startsWith('data:')) {
+      console.log(`[ARCHIVES STORAGE SUCCESS] Flyer uploaded to 'archives' bucket:`, publicUrl);
+      return publicUrl;
+    }
+
+    return publicUrl || (typeof imageInput === 'string' ? imageInput : '');
+  } catch (err) {
+    console.warn(`[uploadArchiveFlyer] Error uploading archive flyer to 'archives' bucket:`, err);
     return typeof imageInput === 'string' ? imageInput : '';
   }
 }
@@ -554,7 +606,7 @@ export async function ensureImagesUploadedToStorage(payload: any): Promise<any> 
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;
 
-    if (import.meta.env.DEV && false) {
+    if (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.DEV && false) {
       console.log('[Debug Payload Incoming]:', item);
     }
 
@@ -835,11 +887,19 @@ export async function ensureImagesUploadedToStorage(payload: any): Promise<any> 
  * with fallbacks to other public media buckets if needed, and returns the accessible public URL.
  */
 export async function uploadClipVideoFile(
-  file: File | Blob,
+  file: File | Blob | string,
   userId: string = 'user',
   fileNameToken: string = 'clip'
 ): Promise<string> {
   if (!file) return '';
+
+  if (typeof file === 'string') {
+    if (file.startsWith('http://') || file.startsWith('https://')) {
+      if (!file.startsWith('blob:')) {
+        return file;
+      }
+    }
+  }
 
   const client = getRawSupabase() || rawClient || getSupabase();
   if (!client) {
@@ -853,6 +913,29 @@ export async function uploadClipVideoFile(
     const cleanAuthId = String(authUserId).replace(/[^a-zA-Z0-9_-]/g, '_');
     const cleanToken = String(fileNameToken || 'clip').replace(/[^a-zA-Z0-9_-]/g, '_');
     const timestamp = Date.now();
+
+    let uploadPayload: Blob | File;
+    if (typeof file === 'string' && file.startsWith('data:')) {
+      try {
+        const parts = file.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'video/mp4';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        uploadPayload = new Blob([u8arr], { type: mime });
+      } catch (convErr) {
+        console.warn('[STORAGE] Data URL conversion failed:', convErr);
+        return '';
+      }
+    } else if (typeof file === 'object' && file !== null) {
+      uploadPayload = file as Blob | File;
+    } else {
+      return '';
+    }
     
     // Bucket creation check (safe try-catch)
     try {
@@ -860,8 +943,8 @@ export async function uploadClipVideoFile(
     } catch (_) {}
 
     let rawName = 'clip.mp4';
-    if (file && typeof file === 'object' && 'name' in file && typeof (file as any).name === 'string') {
-      rawName = (file as any).name;
+    if (uploadPayload && typeof uploadPayload === 'object' && 'name' in uploadPayload && typeof (uploadPayload as any).name === 'string') {
+      rawName = (uploadPayload as any).name;
     }
     const extMatch = rawName.match(/\.([a-zA-Z0-9]+)$/);
     const ext = extMatch ? extMatch[1].toLowerCase() : 'mp4';
@@ -869,8 +952,8 @@ export async function uploadClipVideoFile(
     const safeFileName = `${cleanBaseName || 'clip'}.${ext}`;
 
     let contentType = 'video/mp4';
-    if (file && typeof file === 'object' && 'type' in file && typeof (file as any).type === 'string' && (file as any).type && (file as any).type !== 'application/octet-stream') {
-      contentType = (file as any).type;
+    if (uploadPayload && typeof uploadPayload === 'object' && 'type' in uploadPayload && typeof (uploadPayload as any).type === 'string' && (uploadPayload as any).type && (uploadPayload as any).type !== 'application/octet-stream') {
+      contentType = (uploadPayload as any).type;
     } else if (ext === 'webm') {
       contentType = 'video/webm';
     } else if (ext === 'mov') {
@@ -879,41 +962,76 @@ export async function uploadClipVideoFile(
       contentType = 'video/mp4';
     }
 
-    const bucketCandidates = ['clips', 'photo-pit', 'media', 'public-assets'];
+    // Primary Strategy: Direct binary upload to Supabase 'clips' storage bucket (instant, no Base64 conversion overhead)
+    const flatPath = `${cleanToken}_${cleanAuthId}_${timestamp}_${safeFileName}`;
+    try {
+      const { data: uploadData, error: uploadError } = await client.storage
+        .from('clips')
+        .upload(flatPath, uploadPayload, {
+          upsert: true,
+          cacheControl: '3600',
+          contentType,
+        });
 
-    for (const targetBucket of bucketCandidates) {
-      const flatPath = `${cleanToken}_${cleanAuthId}_${timestamp}_${safeFileName}`;
-      const folderPath = `${cleanAuthId}/${cleanToken}_${timestamp}_${safeFileName}`;
-      const simplePath = `${timestamp}_${safeFileName}`;
-
-      for (const currentPath of [flatPath, folderPath, simplePath]) {
-        try {
-          const { data: uploadData, error: uploadError } = await client.storage
-            .from(targetBucket)
-            .upload(currentPath, file, {
-              upsert: true,
-              cacheControl: '3600',
-              contentType,
-            });
-
-          if (!uploadError && uploadData) {
-            const finalPath = uploadData.path || currentPath;
-            const { data: publicUrlData } = client.storage.from(targetBucket).getPublicUrl(finalPath);
-            if (publicUrlData?.publicUrl) {
-              const finalPublicUrl = publicUrlData.publicUrl;
-              console.log(`[STORAGE UPLOAD SUCCESS] Stored clip in bucket "${targetBucket}" (${finalPath}):`, finalPublicUrl);
-              return finalPublicUrl;
-            }
-          } else if (uploadError) {
-            console.warn(`[STORAGE UPLOAD ATTEMPT] Bucket "${targetBucket}" path "${currentPath}" error:`, uploadError.message);
-          }
-        } catch (attemptErr: any) {
-          console.warn(`[STORAGE UPLOAD ATTEMPT ERROR] ${targetBucket}/${currentPath}:`, attemptErr?.message || attemptErr);
+      if (!uploadError && uploadData) {
+        const finalPath = uploadData.path || flatPath;
+        const { data: publicUrlData } = client.storage.from('clips').getPublicUrl(finalPath);
+        if (publicUrlData?.publicUrl) {
+          console.log(`[STORAGE UPLOAD DIRECT SUCCESS] Stored clip in bucket "clips":`, publicUrlData.publicUrl);
+          return publicUrlData.publicUrl;
         }
+      } else if (uploadError) {
+        console.warn(`[STORAGE UPLOAD DIRECT WARNING] Direct upload to clips bucket failed, trying secondary fallback:`, uploadError.message);
       }
+    } catch (directErr: any) {
+      console.warn(`[STORAGE UPLOAD DIRECT EXCEPTION] Direct clips bucket exception:`, directErr?.message || directErr);
     }
 
-    console.warn('[STORAGE UPLOAD NOTICE] Could not upload clip video to storage buckets.');
+    // Secondary Strategy: For small files (< 8MB) or data URLs, try /api/upload endpoint
+    try {
+      let base64String = '';
+      if (typeof file === 'string' && file.startsWith('data:')) {
+        base64String = file;
+      } else if (uploadPayload && uploadPayload.size < 250 * 1024 * 1024) {
+        base64String = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(uploadPayload);
+        });
+      }
+
+      if (base64String) {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64Data: base64String,
+            bucket: 'clips',
+            userId: cleanAuthId,
+            fileNameToken: cleanToken
+          })
+        });
+
+        if (response.ok) {
+          const resJson = await response.json();
+          if (resJson.publicUrl) {
+            console.log(`[STORAGE UPLOAD FAST-PATH SUCCESS] Saved clip via /api/upload:`, resJson.publicUrl);
+            return resJson.publicUrl;
+          }
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[STORAGE UPLOAD FAST-PATH WARNING] Fast-path /api/upload exception, falling back:', apiErr);
+    }
+
+    // Local object URL fallback if online upload couldn't complete
+    if (typeof file === 'object' && file !== null) {
+      const localBlobUrl = URL.createObjectURL(file as Blob);
+      console.log(`[STORAGE UPLOAD FALLBACK] Using local blob playback URL:`, localBlobUrl);
+      return localBlobUrl;
+    }
+
     return '';
   } catch (err: any) {
     console.error('[STORAGE HELPER ERROR] Failed uploading clip file:', err);

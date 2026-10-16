@@ -8,6 +8,7 @@ import {
   resolveValidClipUserId,
   generateClipUUID,
 } from '../utils/clipsPersistenceService';
+import { ensureProfileRowExists } from '../utils/postSyncUtils';
 
 interface UploadClipModalProps {
   showUploadClipModal: boolean;
@@ -56,7 +57,7 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
 }) => {
   const [isUploadingClip, setIsUploadingClip] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadInBackground, setUploadInBackground] = useState(true);
+  const [uploadInBackground, setUploadInBackground] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
 
   const handlePostClip = async () => {
@@ -90,9 +91,6 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
     const localPreviewUrl = selectedClipFile ? URL.createObjectURL(selectedClipFile) : (newClipVideoUrl || '');
     if (!finalVideoUrl && localPreviewUrl) {
       finalVideoUrl = localPreviewUrl;
-    }
-    if (!finalVideoUrl) {
-      finalVideoUrl = 'https://assets.mixkit.co/videos/preview/mixkit-rock-band-performing-on-stage-41584-large.mp4';
     }
 
     const cleanTags = newClipTags
@@ -144,7 +142,7 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
     const persistClipToSupabase = async (activeUrl: string) => {
       if (!supabaseClient) return null;
       try {
-        const payload = {
+        const payload: any = {
           id: clipId,
           user_id: validUserId,
           profile_id: validUserId,
@@ -167,7 +165,7 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
 
         const { data, error: insErr } = await supabaseClient
           .from('clips')
-          .insert([payload])
+          .upsert([payload], { onConflict: 'id' })
           .select();
 
         if (!insErr && data && data[0]) {
@@ -176,19 +174,41 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
         }
 
         if (insErr) {
-          console.warn('[UploadClipModal] Extended insert failed, trying core columns fallback:', insErr.message);
+          console.warn('[UploadClipModal] Extended upsert warning:', insErr.message, insErr.code);
+          // If foreign key constraint failed on user_id, retry with verified active user UUID
+          if (insErr.code === '23503') {
+            console.log('[UploadClipModal] Ensuring profile row exists for validUserId and retrying...');
+            try {
+              await ensureProfileRowExists(supabaseClient, validUserId, userProfile);
+              const { data: retryData, error: retryErr } = await supabaseClient
+                .from('clips')
+                .upsert([payload], { onConflict: 'id' })
+                .select();
+              if (!retryErr && retryData && retryData[0]) {
+                console.log('[UploadClipModal] Clip persisted on retry:', retryData[0].id);
+                return retryData[0];
+              }
+            } catch (pErr) {
+              console.warn('[UploadClipModal] Profile row check error:', pErr);
+            }
+          }
+
+          // Core schema fallback
           const corePayload = {
             id: clipId,
-            user_id: validUserId,
+            user_id: payload.user_id || validUserId,
             video_url: activeUrl,
             title: title,
             description: caption,
             thumbnail_url: thumbUrl || null,
-            likes_count: 1
+            duration: 15,
+            likes_count: 1,
+            comments_count: 0,
+            shares_count: 0
           };
           const { data: coreData, error: coreErr } = await supabaseClient
             .from('clips')
-            .insert([corePayload])
+            .upsert([corePayload], { onConflict: 'id' })
             .select();
           if (!coreErr && coreData && coreData[0]) {
             console.log('[UploadClipModal] Core fallback persisted to database:', coreData[0].id);
@@ -225,6 +245,9 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
       // Execute background storage upload and DB persistence asynchronously
       (async () => {
         try {
+          // First persist initial record to database
+          await persistClipToSupabase(finalVideoUrl);
+
           let remoteUrl = '';
           try {
             remoteUrl = await uploadClipVideoFile(selectedClipFile, validUserId, 'clip');
@@ -232,10 +255,24 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
             console.warn('[UploadClipModal] Background storage upload error:', storageErr);
           }
 
-          const permanentUrl = remoteUrl || finalVideoUrl;
-          await persistClipToSupabase(permanentUrl);
-
           if (remoteUrl) {
+            // Update remote URL in Supabase database
+            try {
+              if (supabaseClient) {
+                await supabaseClient.from('clips').update({ video_url: remoteUrl }).eq('id', clipId);
+              }
+            } catch (upErr) {
+              console.warn('[UploadClipModal] Failed to update remote URL in DB:', upErr);
+            }
+
+            try {
+              await fetch('/api/clips', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...newClipObj, video_url: remoteUrl, videoUrl: remoteUrl }),
+              });
+            } catch (_) {}
+
             // Update local state with permanent Supabase Storage URL
             setClips(prev =>
               prev.map(c =>
@@ -271,7 +308,7 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
       setUploadProgress(35);
       setUploadStatusText('Uploading video to clips storage bucket...');
 
-      let remoteUrl = newClipVideoUrl;
+      let remoteUrl = '';
       if (selectedClipFile) {
         try {
           remoteUrl = await uploadClipVideoFile(selectedClipFile, validUserId, 'clip');
@@ -279,17 +316,28 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
         } catch (storageErr) {
           console.warn("[UploadClipModal] uploadClipVideoFile error:", storageErr);
         }
+      } else if (newClipVideoUrl && (newClipVideoUrl.startsWith('http://') || newClipVideoUrl.startsWith('https://') || newClipVideoUrl.startsWith('/uploads/')) && !newClipVideoUrl.startsWith('blob:')) {
+        remoteUrl = newClipVideoUrl;
       }
 
-      if (remoteUrl) {
-        newClipObj.video_url = remoteUrl;
-        newClipObj.videoUrl = remoteUrl;
-      }
+      const isRemotePermanent = remoteUrl && (remoteUrl.startsWith('http://') || remoteUrl.startsWith('https://') || remoteUrl.startsWith('/uploads/')) && !remoteUrl.startsWith('blob:');
+      const activeClipUrl = isRemotePermanent ? remoteUrl : (localPreviewUrl || finalVideoUrl || '');
+      
+      newClipObj.video_url = activeClipUrl;
+      newClipObj.videoUrl = activeClipUrl;
 
       setUploadProgress(90);
       setUploadStatusText('Saving clip record to database...');
 
-      await persistClipToSupabase(remoteUrl || finalVideoUrl);
+      await persistClipToSupabase(isRemotePermanent ? remoteUrl : activeClipUrl);
+
+      try {
+        await fetch('/api/clips', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newClipObj),
+        });
+      } catch (_) {}
 
       setUploadProgress(100);
       setUploadStatusText('Complete!');
@@ -434,9 +482,12 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-mono font-bold text-zinc-400 uppercase block mb-1">
-                    GENRE TAGS (COMMA SEPARATED)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-mono font-bold text-zinc-400 uppercase">
+                      GENRE TAGS (COMMA SEPARATED)
+                    </label>
+                    <span className="text-[10px] text-zinc-500 font-mono">Tap pills below to toggle</span>
+                  </div>
                   <input
                     type="text"
                     placeholder="SLAM, TECHNICAL DEATH, LIVE"
@@ -444,6 +495,35 @@ export const UploadClipModal: React.FC<UploadClipModalProps> = ({
                     onChange={(e) => setNewClipTags(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
                   />
+                  {/* Preset Tag Quick Selection Chips */}
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {['SLAM', 'GOREGRIND', 'DEATHCORE', 'BRUTAL DEATH', 'HARDCORE', 'BEATDOWN', 'TECH DEATH', 'BLACK METAL', 'BREAKDOWN', 'LIVE'].map((tag) => {
+                      const activeTags = newClipTags.split(',').map((t: string) => t.trim().toUpperCase());
+                      const isSelected = activeTags.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              const filtered = activeTags.filter((t: string) => t !== tag && t.length > 0);
+                              setNewClipTags(filtered.join(', '));
+                            } else {
+                              const existing = activeTags.filter((t: string) => t.length > 0);
+                              setNewClipTags([...existing, tag].join(', '));
+                            }
+                          }}
+                          className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer border ${
+                            isSelected
+                              ? 'bg-rose-600 border-rose-500 text-white shadow-[0_0_8px_rgba(244,63,94,0.4)]'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                          }`}
+                        >
+                          #{tag}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
