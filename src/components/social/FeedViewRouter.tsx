@@ -668,11 +668,21 @@ export const FeedViewRouter: React.FC<any> = (props) => {
           <div className="max-w-2xl mx-auto pt-2 pb-28 sm:pb-24 px-4">
             <WelcomeStarterCard
               userProfile={userProfile}
+              setUserProfile={setUserProfile}
+              portalRole={portalRole}
+              activeBand={activeBand}
+              bands={props.bands}
               feed={feed}
+              clips={clips}
+              shopItems={shopItems}
+              liveEvents={props.liveEvents}
               discoverProfiles={discoverProfiles}
               profileAvatarUrl={profileAvatarUrl}
               profileCoverUrl={props.profileCoverUrl}
               profileBlurb={props.profileBlurb}
+              prefPushNotifications={props.prefPushNotifications}
+              setPrefPushNotifications={props.setPrefPushNotifications}
+              triggerNotification={triggerNotification}
               onFollowBandsAction={() => {
                 if (typeof document !== 'undefined') {
                   const searchInput = document.querySelector<HTMLInputElement>(
@@ -695,7 +705,29 @@ export const FeedViewRouter: React.FC<any> = (props) => {
                   props.setLeftDrawerOpen(true);
                 }
               }}
+              onSelectCirclesAction={() => {
+                setActiveTab?.('forum');
+                setTimeout(() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('nexus:open-circle-selector'));
+                  }
+                }, 120);
+              }}
               onDropPostAction={() => setIsComposerModalOpen(true)}
+              onRsvpShowAction={() => {
+                if (props.setShowMapModal) {
+                  props.setShowMapModal(true);
+                } else if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('nexus:open-events-directory'));
+                }
+              }}
+              onClaimEntityAction={() => {
+                if (props.setLeftDrawerOpen && props.setDrawerCurrentView) {
+                  props.setDrawerCurrentView('public_entities');
+                  props.setLeftDrawerOpen(true);
+                }
+              }}
+              onPublishReleaseAction={() => setIsComposerModalOpen(true)}
             />
 
             {/* Category Filter Bar positioned right above the feed stream */}

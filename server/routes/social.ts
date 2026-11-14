@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import webpush from 'web-push';
 import {
   getSupabaseService,
   getUserOwnedEntityIds,
@@ -10,8 +9,10 @@ import {
 } from '../lib/supabaseAdmin';
 import {
   uploadsDir,
-  loadPushSubscriptionsAsync,
 } from '../lib/clients';
+import {
+  dispatchPushToUsers,
+} from '../lib/pushDispatcher';
 import {
   requireAuth,
 } from '../middleware/auth';
@@ -86,13 +87,34 @@ socialRouter.post(
   async (req: express.Request, res: express.Response) => {
     try {
       const { profileId } = req.params;
-      const { reactionType } = req.body;
+      const emojiToKey: Record<string, string> = {
+        '🔥': 'fire',
+        '🤘': 'horns',
+        '❤️': 'heart',
+        '💀': 'skull',
+        '👏': 'clap',
+        '😮': 'wow',
+        '🌟': 'star',
+        '⚡': 'bolt',
+      };
+      const rawType = req.body?.reactionType || (req.body?.emoji ? emojiToKey[String(req.body.emoji)] : '');
+      const reactionType = rawType ? String(rawType) : '';
       const userId = req.authUser!.id;
       if (!reactionType) {
         return res.status(400).json({ error: 'Missing reactionType' });
       }
-      const allowedReactions = new Set(['horns', 'fire', 'skull', 'heart', 'likes']);
-      if (!allowedReactions.has(String(reactionType))) {
+      const allowedReactions = new Set([
+        'horns',
+        'fire',
+        'skull',
+        'heart',
+        'likes',
+        'clap',
+        'wow',
+        'star',
+        'bolt',
+      ]);
+      if (!allowedReactions.has(reactionType)) {
         return res.status(400).json({ error: 'Invalid reactionType' });
       }
       const all = await loadAvatarInteractions();
@@ -104,11 +126,20 @@ socialRouter.post(
         };
       }
       const entry = all[profileId];
+      if (!entry.reactions || typeof entry.reactions !== 'object' || Array.isArray(entry.reactions)) {
+        entry.reactions = { horns: 0, fire: 0, skull: 0, heart: 0 };
+      }
+      if (!entry.userReactions || typeof entry.userReactions !== 'object') {
+        entry.userReactions = {};
+      }
+      if (!Array.isArray(entry.comments)) {
+        entry.comments = [];
+      }
       if (!entry.userReactions[userId]) entry.userReactions[userId] = {};
 
       const wasActive = Boolean(entry.userReactions[userId][reactionType]);
       entry.userReactions[userId][reactionType] = !wasActive;
-      const currentCount = entry.reactions[reactionType] || 0;
+      const currentCount = Number(entry.reactions[reactionType]) || 0;
       entry.reactions[reactionType] = wasActive
         ? Math.max(0, currentCount - 1)
         : currentCount + 1;
@@ -129,8 +160,15 @@ socialRouter.post(
   async (req: express.Request, res: express.Response) => {
     try {
       const { profileId } = req.params;
-      const { comment } = req.body;
-      if (!comment || !comment.text || typeof comment.text !== 'string') {
+      const comment = req.body?.comment && typeof req.body.comment === 'object'
+        ? req.body.comment
+        : {
+            text: req.body?.text,
+            authorName: req.body?.authorName || req.body?.username,
+            authorAvatar: req.body?.authorAvatar || req.body?.avatarUrl,
+            authorRole: req.body?.authorRole,
+          };
+      if (!comment || !comment.text || typeof comment.text !== 'string' || !comment.text.trim()) {
         return res.status(400).json({ error: 'Missing comment text' });
       }
       const all = await loadAvatarInteractions();
@@ -140,6 +178,9 @@ socialRouter.post(
           userReactions: {},
           comments: [],
         };
+      }
+      if (!Array.isArray(all[profileId].comments)) {
+        all[profileId].comments = [];
       }
       const newComment = {
         id: comment.id || `avc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -550,7 +591,7 @@ socialRouter.post(
             },
             { onConflict: 'id' }
           )
-          .catch(() => {});
+          .then(() => {}, () => {});
 
         await supabase
           .from('nexus_posts')
@@ -563,7 +604,7 @@ socialRouter.post(
             },
             { onConflict: 'id' }
           )
-          .catch(() => {});
+          .then(() => {}, () => {});
       }
 
       return res.json({ success: true, story: mergedStory });
@@ -900,7 +941,7 @@ socialRouter.post(
             },
             { onConflict: 'id' }
           )
-          .catch(() => {});
+          .then(() => {}, () => {});
 
         const backupPostId = String(clipId).startsWith('clip_')
           ? clipId
@@ -916,7 +957,7 @@ socialRouter.post(
             },
             { onConflict: 'id' }
           )
-          .catch(() => {});
+          .then(() => {}, () => {});
       }
 
       return res.json({ success: true, clip: mergedClip });
@@ -1213,7 +1254,7 @@ socialRouter.post(
         if (sb && isUUID) {
           const { data: pData } = await sb
             .from('nexus_posts')
-            .select('profile_id, data')
+            .select('id, profile_id, data')
             .eq('id', cleanPostId)
             .limit(1);
           if (pData && pData.length > 0) {
@@ -1261,47 +1302,25 @@ socialRouter.post(
           postAuthorId !== userId &&
           postAuthorId !== authUser.id
         ) {
-          const allSubs = await loadPushSubscriptionsAsync();
-          const targetSubs = allSubs.filter((s) => {
-            if (s.userId && s.userId === postAuthorId) return true;
-            if (
-              postAuthorEmail &&
-              s.userEmail &&
-              s.userEmail.toLowerCase() === postAuthorEmail.toLowerCase()
-            )
-              return true;
-            return false;
-          });
-
-          if (targetSubs.length > 0) {
-            const pushPayload = JSON.stringify({
-              title: `💬 ${author} commented on your transmission`,
-              body: `"${text.slice(0, 100)}${text.length > 100 ? '...' : ''}"`,
-              icon: '/icon-192.png',
-              badge: '/icon-192.png',
+          await dispatchPushToUsers({
+            userIds: [postAuthorId],
+            userEmails: postAuthorEmail ? [postAuthorEmail] : undefined,
+            excludeUserId: authUser.id,
+            title: `💬 ${author} commented on your transmission`,
+            body: `"${text.slice(0, 100)}${text.length > 100 ? '...' : ''}"`,
+            tag: `nexus-comment-${cleanPostId}`,
+            data: {
+              type: 'notice',
+              targetId: cleanPostId,
+              route: '/social',
               targetTab: 'social',
               category: 'artist_interactions',
               priority: 'P1',
-              data: {
-                postId: cleanPostId,
-                commentId: validId,
-                type: 'comment',
-                commenterId: userId,
-              },
-              timestamp: Date.now(),
-            });
-
-            targetSubs.forEach(async (entry) => {
-              try {
-                if (
-                  entry.subscription &&
-                  !entry.subscription.endpoint?.startsWith('native://')
-                ) {
-                  await webpush.sendNotification(entry.subscription, pushPayload);
-                }
-              } catch (_) {}
-            });
-          }
+              postId: cleanPostId,
+              commentId: validId,
+              commenterId: userId,
+            },
+          });
         }
       } catch (pushErr) {
         console.warn('[PUSH COMMENT DISPATCH NOTICE]', pushErr);
@@ -1749,3 +1768,210 @@ socialRouter.post(
     }
   }
 );
+
+// ============================================================
+// DIRECT MESSAGE CREATION + SERVER-TRIGGERED PUSH DISPATCH
+// ============================================================
+async function handleCreateDirectMessage(req: express.Request, res: express.Response) {
+  try {
+    const authUser = req.authUser!;
+    const sb = getSupabaseService();
+    const ownedIds = await getUserOwnedEntityIds(sb, authUser);
+
+    const {
+      recipientId: rawRecipientId,
+      receiver_id,
+      recipient_id,
+      recipientEmail,
+      message,
+      content,
+      text,
+      mediaUrl,
+      media_url,
+      attachment_url,
+      senderName,
+      senderId: requestedSenderId,
+    } = req.body || {};
+
+    const rawText = String(message ?? content ?? text ?? '').trim();
+    const resolvedMediaUrl = mediaUrl || media_url || attachment_url || null;
+    const rawTarget = String(rawRecipientId || receiver_id || recipient_id || '').trim();
+
+    if (!rawTarget && !recipientEmail) {
+      return res.status(400).json({ error: 'recipientId or recipientEmail is required' });
+    }
+    if (!rawText && !resolvedMediaUrl) {
+      return res.status(400).json({ error: 'Message content or attachment is required' });
+    }
+
+    const verifiedSenderId =
+      requestedSenderId && hasAnyOwnershipMatch(authUser, ownedIds, [String(requestedSenderId)])
+        ? String(requestedSenderId)
+        : authUser.id;
+
+    let resolvedRecipientId = rawTarget;
+    let resolvedRecipientEmail = recipientEmail ? String(recipientEmail).trim().toLowerCase() : '';
+    if (!resolvedRecipientEmail && resolvedRecipientId.includes('@')) {
+      resolvedRecipientEmail = resolvedRecipientId.toLowerCase();
+    }
+
+    let senderProfileName = senderName ? String(senderName).trim() : '';
+
+    if (sb) {
+      try {
+        if (!senderProfileName) {
+          const { data: senderProf } = await sb
+            .from('profiles')
+            .select('full_name, console_handle')
+            .eq('id', authUser.id)
+            .maybeSingle();
+          if (senderProf) {
+            senderProfileName = senderProf.full_name || senderProf.console_handle || '';
+          }
+        }
+
+        if ((!resolvedRecipientId || resolvedRecipientId.includes('@')) && resolvedRecipientEmail) {
+          const { data: recProf } = await sb
+            .from('profiles')
+            .select('id, email')
+            .eq('email', resolvedRecipientEmail)
+            .maybeSingle();
+          if (recProf?.id) {
+            resolvedRecipientId = recProf.id;
+          }
+        } else if (resolvedRecipientId && !resolvedRecipientEmail) {
+          const { data: recProf } = await sb
+            .from('profiles')
+            .select('id, email')
+            .eq('id', resolvedRecipientId)
+            .maybeSingle();
+          if (recProf?.email) {
+            resolvedRecipientEmail = String(recProf.email).trim().toLowerCase();
+          }
+        }
+      } catch (_) {}
+    }
+
+    const displaySender =
+      senderProfileName ||
+      authUser.userMetadata?.full_name ||
+      authUser.userMetadata?.name ||
+      authUser.email?.split('@')[0] ||
+      'Nexus Contact';
+
+    const cleanMessageBody = rawText || 'Sent an attachment';
+    const nowIso = new Date().toISOString();
+
+    let insertedChat: any = {
+      id: `dm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      sender_id: verifiedSenderId,
+      receiver_id: resolvedRecipientId || resolvedRecipientEmail,
+      recipient_id: resolvedRecipientId || resolvedRecipientEmail,
+      message: cleanMessageBody,
+      content: cleanMessageBody,
+      ...(resolvedMediaUrl ? { media_url: resolvedMediaUrl, attachment_url: resolvedMediaUrl } : {}),
+      is_read: false,
+      created_at: nowIso,
+    };
+
+    if (sb) {
+      const insertPayload: Record<string, any> = {
+        sender_id: verifiedSenderId,
+        receiver_id: resolvedRecipientId || resolvedRecipientEmail,
+        recipient_id: resolvedRecipientId || resolvedRecipientEmail,
+        message: cleanMessageBody,
+        content: cleanMessageBody,
+        is_read: false,
+        created_at: nowIso,
+      };
+      if (resolvedMediaUrl) {
+        insertPayload.media_url = resolvedMediaUrl;
+        insertPayload.attachment_url = resolvedMediaUrl;
+      }
+
+      const { data: chatRow, error: chatErr } = await sb
+        .from('nexus_chats')
+        .insert([insertPayload])
+        .select()
+        .maybeSingle();
+
+      if (!chatErr && chatRow) {
+        insertedChat = chatRow;
+      } else if (chatErr) {
+        console.warn('[SOCIAL DM] Supabase nexus_chats insert notice:', chatErr.message);
+      }
+
+      const recipientTarget = resolvedRecipientId || resolvedRecipientEmail;
+      if (recipientTarget && recipientTarget !== verifiedSenderId) {
+        try {
+          await sb.from('nexus_notifications').insert([
+            {
+              id:
+                typeof crypto !== 'undefined' && crypto.randomUUID
+                  ? crypto.randomUUID()
+                  : `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              user_id: recipientTarget,
+              actor_id: verifiedSenderId,
+              title: '💬 NEW MESSAGE',
+              message: `New message from ${displaySender}: "${cleanMessageBody.slice(0, 60)}"`,
+              content: cleanMessageBody,
+              category: 'CHAT',
+              type: 'direct_message',
+              is_read: false,
+              read: false,
+              created_at: nowIso,
+            },
+          ]);
+        } catch (_) {}
+      }
+    }
+
+    let pushResult = {
+      success: true,
+      delivered: 0,
+      failed: 0,
+      fcmDelivered: 0,
+      fcmSkipped: 0,
+      webPushDelivered: 0,
+      deactivatedCount: 0,
+      deactivatedTokens: [] as string[],
+    };
+
+    const recipientTarget = resolvedRecipientId || resolvedRecipientEmail;
+    if (recipientTarget && recipientTarget !== verifiedSenderId && recipientTarget !== authUser.id) {
+      pushResult = await dispatchPushToUsers({
+        userIds: resolvedRecipientId ? [resolvedRecipientId] : [],
+        userEmails: resolvedRecipientEmail ? [resolvedRecipientEmail] : [],
+        excludeUserId: verifiedSenderId,
+        excludeUserEmail: authUser.email,
+        title: `💬 Direct Message from ${displaySender}`,
+        body: cleanMessageBody.slice(0, 120),
+        tag: `nexus-dm-${verifiedSenderId}`,
+        data: {
+          type: 'dm',
+          targetId: String(insertedChat?.id || verifiedSenderId),
+          route: '/messages',
+          targetTab: 'messages',
+          category: 'direct_messages',
+          priority: 'P1',
+          senderId: verifiedSenderId,
+          senderName: displaySender,
+          messageId: String(insertedChat?.id || ''),
+        },
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: insertedChat,
+      pushResult,
+    });
+  } catch (err: any) {
+    console.error('[SOCIAL DM ERROR]', err);
+    return res.status(500).json({ error: err.message || 'Failed to create direct message' });
+  }
+}
+
+socialRouter.post('/api/social/dm', requireAuth, apiMutationLimiter, express.json(), handleCreateDirectMessage);
+socialRouter.post('/api/dm', requireAuth, apiMutationLimiter, express.json(), handleCreateDirectMessage);
+

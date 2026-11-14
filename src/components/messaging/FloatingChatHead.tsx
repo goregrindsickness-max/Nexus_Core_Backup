@@ -5,6 +5,7 @@ import { markChatAsRead, handleMarkAllAsRead } from '../../lib/chat';
 import { extractUUID } from '../../utils/socialFeedUtils';
 import { useUserPresence, presenceManager, formatPresenceStatus } from '../../lib/presence';
 import { pushManager } from '../../lib/pushNotifications';
+import { authFetch, getSupabaseAccessToken } from '../../utils/apiConfig';
 import { 
   X, 
   Send, 
@@ -926,8 +927,32 @@ export const FloatingChatHead: React.FC = () => {
 
     const insertSender = currentUserProfileId || senderId;
     const insertReceiver = resolvedRecipientId;
+    const validPushEmail = recipientEmail && !recipientEmail.endsWith('@nexus.network') ? recipientEmail : undefined;
 
-    if (supabase) {
+    let serverDispatched = false;
+    if (insertReceiver && insertReceiver !== insertSender) {
+      try {
+        const accessToken = await getSupabaseAccessToken();
+        if (accessToken) {
+          const apiRes = await authFetch('/api/social/dm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              recipientId: insertReceiver,
+              recipientEmail: validPushEmail,
+              message: text,
+              senderId: insertSender,
+              senderName: senderDisplayName,
+            }),
+          });
+          if (apiRes.ok) {
+            serverDispatched = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!serverDispatched && supabase) {
       try {
         await supabase.from('nexus_chats').insert([{
           sender_id: insertSender,
@@ -958,8 +983,7 @@ export const FloatingChatHead: React.FC = () => {
       } catch (err) {}
     }
 
-    if (insertReceiver && insertReceiver !== insertSender) {
-      const validPushEmail = recipientEmail && !recipientEmail.endsWith('@nexus.network') ? recipientEmail : undefined;
+    if (!serverDispatched && insertReceiver && insertReceiver !== insertSender) {
       pushManager.sendPushToServer({
         userId: insertReceiver,
         userEmail: validPushEmail,

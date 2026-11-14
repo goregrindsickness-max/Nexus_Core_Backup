@@ -19,9 +19,10 @@ export async function seedDatabaseCatalogs() {
   if (Array.isArray(INITIAL_COMMUNITY_BANDS) && INITIAL_COMMUNITY_BANDS.length > 0) {
     const batchSize = 50;
     for (let i = 0; i < INITIAL_COMMUNITY_BANDS.length; i += batchSize) {
-      const chunk = INITIAL_COMMUNITY_BANDS.slice(i, i + batchSize).map((b) => ({
+      const chunk = INITIAL_COMMUNITY_BANDS.slice(i, i + batchSize).map((b: any) => ({
         id: b.id,
         band_name: b.band_name || b.name,
+        custom_slug: b.custom_slug || String(b.band_name || b.name || '').toLowerCase().trim().replace(/[^a-z0-9_-]+/g, '-'),
         city: b.city || null,
         state_province: b.state_province || b.state || null,
         country: b.country || 'USA',
@@ -29,9 +30,14 @@ export async function seedDatabaseCatalogs() {
         cover_url: b.cover_url || b.banner_url || null,
         bio: b.bio || null,
         micro_genres: b.micro_genres || b.subgenres || [],
-        founded_year: b.founded_year || null,
+        founded_year: b.founded_year ? parseInt(String(b.founded_year), 10) || null : null,
         status: b.status || 'active',
         record_label: b.record_label || b.label || null,
+        lineup: Array.isArray(b.lineup) ? JSON.stringify(b.lineup) : (typeof b.lineup === 'string' ? b.lineup : '[]'),
+        spotify: b.spotify || b.spotify_url || null,
+        bandcamp: b.bandcamp || b.bandcamp_url || null,
+        metal_archives_url: b.metal_archives_url || null,
+        featured_youtube_url: b.featured_youtube_url || b.youtube_url || null,
       }));
       const { error } = await sb.from('bands').upsert(chunk, { onConflict: 'id', ignoreDuplicates: true });
       if (!error) seededBands += chunk.length;

@@ -954,24 +954,26 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     const parsedOwnLineup = isOwnBand ? parseBandLineup(localSavedBand?.lineup) : [];
     const parsedFetchedLineup = parseBandLineup(fetchedBandData?.lineup);
     const parsedDirectLineup = parseBandLineup(directMatch?.lineup);
-    let resolvedLineupList = parsedOwnLineup.length > 0
-      ? parsedOwnLineup
-      : (parsedFetchedLineup.length > 0 ? parsedFetchedLineup : parsedDirectLineup);
+    let resolvedLineupList = parsedFetchedLineup.length > 0
+      ? parsedFetchedLineup
+      : (parsedDirectLineup.length > 0 ? parsedDirectLineup : parsedOwnLineup);
     if (isGorg && isStaleGorgasmLineup(resolvedLineupList)) {
       resolvedLineupList = GORGASM_OFFICIAL_LINEUP;
     }
 
     return {
+      ...(isOwnBand ? (localSavedBand || {}) : {}),
       ...(directMatch || {}),
       ...(fetchedBandData || {}),
-      ...(isOwnBand ? (localSavedBand || {}) : {}),
       logo_url: rawLogo,
       avatar_url: rawAvatar,
       cover_url: rawCover,
       banner_url: rawCover,
-      bio: isOwnBand ? (localSavedBand?.bio || fetchedBandData?.bio || directMatch?.bio) : (fetchedBandData?.bio || directMatch?.bio || ''),
+      bio: fetchedBandData?.bio || (isOwnBand ? localSavedBand?.bio : null) || directMatch?.bio || '',
       lineup: resolvedLineupList,
-      discography: isOwnBand && localSavedBand?.discography?.length ? localSavedBand.discography : (fetchedBandData?.discography?.length ? fetchedBandData.discography : (directMatch?.discography || [])),
+      discography: fetchedBandData?.discography?.length
+        ? fetchedBandData.discography
+        : (directMatch?.discography?.length ? directMatch.discography : (isOwnBand && localSavedBand?.discography?.length ? localSavedBand.discography : [])),
     };
   }, [isExplicitPersonal, fetchedBandData, communityArchiveMatch, localSavedBand, selectedUserProfile?.id, selectedUserProfile?.name, targetProfile?.id, targetProfile?.name, userProfile?.id, baseTarget?.id, targetId]);
 
@@ -1245,59 +1247,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   const isBandProfile = !isExplicitPersonal && !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
 
   const parseLineup = (raw: any): any[] => {
-    let parsed: any[] = [];
-    if (!raw) {
-      parsed = [];
-    } else if (Array.isArray(raw)) {
-      parsed = raw;
-    } else if (typeof raw === 'string') {
-      const trimmed = raw.trim();
-      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch (_) {}
-      } else {
-        parsed = trimmed.split(',').map((part, idx) => {
-          const itemStr = part.trim();
-          if (!itemStr) return null;
-          
-          const match = itemStr.match(/^(.*?)\s*\((.*?)\)$/);
-          if (match) {
-            const name = match[1].trim();
-            const inner = match[2].trim();
-            let role = inner;
-            let level = 5;
-            
-            if (inner.includes('- Lvl')) {
-              const roleParts = inner.split('- Lvl');
-              role = roleParts[0].trim();
-              const levelVal = parseInt(roleParts[1].trim(), 10);
-              if (!isNaN(levelVal)) {
-                level = levelVal;
-              }
-            }
-            
-            return {
-              id: `db-mem-${idx}-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-              name,
-              role,
-              clearanceLevel: level,
-              status: 'active',
-              activeOnNexus: true
-            };
-          }
-          
-          return {
-            id: `db-mem-${idx}-${itemStr.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-            name: itemStr,
-            role: 'Member',
-            clearanceLevel: 5,
-            status: 'active',
-            activeOnNexus: true
-          };
-        }).filter(Boolean) as any[];
-      }
-    }
+    let parsed: any[] = parseBandLineup(raw).map((m: any, idx: number) => ({
+      ...m,
+      id: m.id || `db-mem-${idx}-${String(m.name || '').toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+      clearanceLevel: m.clearanceLevel || 5,
+      status: m.status || 'active',
+      activeOnNexus: m.activeOnNexus ?? true
+    }));
 
     const isVE = isBandTarget && (bData?.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || bData?.band_name?.toLowerCase() === 'virulent excision' || bData?.name?.toLowerCase() === 'virulent excision' || ((effTarget?.isYou || baseTarget?.isYou) && isMiguelNameOrProfile(userProfile)));
     if (isVE) {

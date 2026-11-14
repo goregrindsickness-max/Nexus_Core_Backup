@@ -69,7 +69,7 @@ import { BAND_PORTAL_BILLING } from '../../config/billingMatrix';
 import { PLATFORM_TRANSACTION_FEES } from '../../constants/fees';
 import { profileStore, socialFeedStore } from '../../utils/indexedDB';
 import { supabase } from '../../lib/supabaseClient';
-import { getSupabase, subscribeToTable, executeWithSchemaResilience, uploadBase64ToStorage, normalizeLoadedProfile, createShopMerchItem, fetchShopMerchItems, sanitizeMicroGenres, formatBandLocation, sanitizeShowForDb, ensureUUID } from '../../supabase';
+import { getSupabase, subscribeToTable, executeWithSchemaResilience, uploadBase64ToStorage, normalizeLoadedProfile, createShopMerchItem, fetchShopMerchItems, sanitizeMicroGenres, formatBandLocation, sanitizeShowForDb, ensureUUID, syncCommunityShowToCloud, reconcilePendingCommunityShows } from '../../supabase';
 import { uploadFeedMedia } from '../../lib/storage';
 import { communityBandManager, pickBestBandImage, isGorgasmBand, GORGASM_OFFICIAL_LOGO } from '../../lib/communityBands';
 import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME, getScopedFollowsMap, isEntityTargetObject } from '../../utils/followSyncService';
@@ -82,6 +82,7 @@ import { triggerPictureViewer } from '../../utils/avatarPopupEvents';
 import { formatTimeTo12Hour } from '../../lib/timeUtils';
 import { formatLocationDisplay } from '../../constants/location';
 import { PROFILE_REGISTRY, isMiguelNameOrProfile } from './utils/profileUtils';
+import { consumePendingShowDeepLink, consumePendingDmThread } from '../../lib/pushClient';
 
 const FeedSideDrawers = React.lazy(() =>
   import('./navigation/FeedSideDrawers').then((m) => ({ default: m.FeedSideDrawers }))
@@ -296,6 +297,13 @@ export function UniversalSocialFeed({
   const [activeFeedCategoryFilter, setActiveFeedCategoryFilter] = useState<string>('all');
 
   const handleCommunityShowSubmit = async (payload: any) => {
+    if (payload?._isBatch) {
+      setIsCommunityShowModalOpen(false);
+      setEditingCommunityShow(null);
+      fetchEventsAndSetlists();
+      return;
+    }
+
     let currentUserId = userProfile?.id;
     if (!currentUserId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentUserId)) {
       try {
@@ -318,7 +326,6 @@ export function UniversalSocialFeed({
     const headlinerVal = payload.headliner || payload.name || 'Live Show';
     const inputTitle = payload.show_name || payload.festival_name || payload.title || payload.name || payload.headliner;
     const finalShowName = inputTitle || `${headlinerVal} Live`;
-    const venueVal = payload.venue || payload.venue_name || payload.venue_address || payload.name || 'Underground Venue';
 
     const newShow: any = {
       id: showId,
@@ -403,7 +410,7 @@ export function UniversalSocialFeed({
         }
       });
 
-      localStorageShowsMap[showId] = { ...newShow };
+      localStorageShowsMap[showId] = { ...newShow, _pendingCloudSync: true };
       localStorage.setItem('nexus_core_shows_extended', JSON.stringify(localStorageShowsMap));
 
       // Record in user's created shows cache
@@ -424,76 +431,25 @@ export function UniversalSocialFeed({
       }
     } catch (_) {}
 
-    try {
-      const sb = getSupabase();
-      if (sb) {
-        const pruned = sanitizeShowForDb(newShow);
-        const { error } = await executeWithSchemaResilience(async (payload) => {
-          return await sb.from('shows').upsert([payload]);
-        }, pruned);
+    const syncResult = await syncCommunityShowToCloud(newShow, {
+      userProfileId: currentUserId,
+    });
 
-        if (error) {
-          console.error('Supabase community show upsert error:', error);
-          triggerNotification?.(`⚠️ Supabase error saving show: ${error.message || 'Check connection'}`);
-        } else {
-          console.log('Supabase community show synced successfully:', showId);
-          triggerNotification?.(editingCommunityShow ? `✏️ Community show "${newShow.name}" updated & synced to Supabase!` : `🌍 Community show "${newShow.name}" posted & synced to Supabase!`);
-          setIsCommunityShowModalOpen(false);
-          setEditingCommunityShow(null);
-          
-          try {
-            const formattedDoors = newShow.doors_time ? formatTimeTo12Hour(newShow.doors_time) : '';
-            const doorsDisplay = formattedDoors 
-              ? (String(formattedDoors).toLowerCase().includes('door') ? formattedDoors : `Doors ${formattedDoors}`)
-              : (newShow.set_time ? `Set ${formatTimeTo12Hour(newShow.set_time)}` : 'Doors 7:30 PM');
-
-            const newGig = {
-              ...newShow,
-              id: showId,
-              venue: newShow.venue || newShow.venue_name || 'Underground Venue',
-              venue_name: newShow.venue_name || newShow.venue || 'Underground Venue',
-              venue_address: newShow.venue_address || undefined,
-              capacity: newShow.capacity,
-              venue_capacity: newShow.capacity,
-              headliner: newShow.headliner || newShow.name || 'Live Show',
-              time: doorsDisplay,
-              date: newShow.date || 'Upcoming',
-              city: newShow.city,
-              state_province: newShow.state_province,
-              country: newShow.country,
-              distance: undefined,
-              price: newShow.price || (newShow.external_ticket_url ? 'External Tickets' : 'Free / Crowdsourced'),
-              isFollowed: false,
-              is_community_submitted: true,
-              external_ticket_url: newShow.external_ticket_url,
-              ticket_url: newShow.ticket_url,
-              ticketsAvailable: true,
-              ticketStatus: 'active'
-            };
-            setLiveEvents(prev => {
-              const normNewHeadliner = String(newGig.headliner || '').toLowerCase().trim();
-              const normNewDate = String(newGig.date || '').toLowerCase().trim();
-              const filtered = prev.filter(g => {
-                if (g.id === showId || g.id === payload.id) return false;
-                const gHeadliner = String(g.headliner || (g as any).name || '').toLowerCase().trim();
-                const gDate = String(g.date || '').toLowerCase().trim();
-                if (gHeadliner && normNewDate && gHeadliner === normNewHeadliner && gDate === normNewDate) return false;
-                return true;
-              });
-              return [newGig, ...filtered];
-            });
-          } catch (_) {}
-          return;
-        }
-      } else {
-        triggerNotification?.('⚠️ Supabase client not configured. Saved locally.');
-      }
-    } catch (e) {
-      console.warn('Community show db upsert exception:', e);
-      triggerNotification?.('⚠️ Supabase connection exception: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    if (syncResult.synced) {
+      console.log('Supabase community show synced successfully:', showId);
+      triggerNotification?.(
+        editingCommunityShow
+          ? `✏️ Community show "${newShow.name}" updated & synced to Supabase!`
+          : `🌍 Community show "${newShow.name}" posted & synced to Supabase!`
+      );
+    } else {
+      console.warn('Supabase community show queued for retry:', syncResult.error);
+      const reason = syncResult.error?.code === 'AUTH_REQUIRED'
+        ? 'Sign in to publish globally'
+        : (syncResult.error?.message || 'Saved locally & queued for cloud sync');
+      triggerNotification?.(`⚠️ "${newShow.name}" saved locally & queued for cloud sync (${reason}).`);
     }
 
-    triggerNotification?.(editingCommunityShow ? `✏️ Community show "${newShow.name}" updated locally.` : `🌍 Community show "${newShow.name}" posted locally (Supabase offline/unconfigured).`);
     setIsCommunityShowModalOpen(false);
     setEditingCommunityShow(null);
 
@@ -1097,11 +1053,12 @@ export function UniversalSocialFeed({
         try {
           const allRawShows: any[] = [];
 
-          // 1. Fetch from Supabase shows table
+          // 1. Fetch from Supabase shows table (beyond default 1000-row cap)
           const { data: showsData } = await supabaseClient
             .from('shows')
             .select('*')
-            .order('date', { ascending: true });
+            .order('date', { ascending: true })
+            .range(0, 4999);
 
           if (showsData && Array.isArray(showsData) && showsData.length > 0) {
             allRawShows.push(...showsData);
@@ -1111,6 +1068,14 @@ export function UniversalSocialFeed({
               allRawShows.push(...propShows);
             }
           }
+
+          // Reconcile any locally-created community shows (e.g. stranded on APK) up to Supabase
+          try {
+            const reconcileRes = await reconcilePendingCommunityShows(showsData || [], deletedShowIds);
+            if (reconcileRes.syncedShows.length > 0) {
+              allRawShows.push(...reconcileRes.syncedShows);
+            }
+          } catch (_) {}
 
           if (allRawShows.length > 0) {
             // Deduplicate raw shows by id or headliner + date
@@ -2505,6 +2470,96 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       setIsLiveTonightOpen(true);
     }
   }, [activeTab]);
+
+  // Deep-link listeners for push notification taps (DM -> INBOX, Show Reminder -> Event Companion)
+  useEffect(() => {
+    const openShowByPayload = async (payload: { showId?: string; targetId?: string; title?: string }) => {
+      const targetShowId = String(payload?.showId || payload?.targetId || '').trim();
+      const targetTitle = String(payload?.title || '').toLowerCase().trim();
+      setActiveTab('feed');
+
+      const candidates = [
+        ...(Array.isArray(liveEvents) ? liveEvents : []),
+        ...(Array.isArray(propShows) ? propShows : []),
+      ];
+
+      let matched = candidates.find(
+        (ev: any) =>
+          (targetShowId && String(ev?.id || '').trim() === targetShowId) ||
+          (targetTitle &&
+            (String(ev?.headliner || '').toLowerCase().trim() === targetTitle ||
+              String(ev?.name || '').toLowerCase().trim() === targetTitle ||
+              String(ev?.show_name || '').toLowerCase().trim() === targetTitle))
+      );
+
+      if (!matched && targetShowId) {
+        try {
+          const sb = getSupabase?.();
+          if (sb) {
+            const { data: showRow } = await sb
+              .from('shows')
+              .select('*')
+              .eq('id', targetShowId)
+              .maybeSingle();
+            if (showRow) {
+              matched = {
+                ...showRow,
+                headliner: showRow.headliner || showRow.name || showRow.show_name || 'Live Show',
+                venue: showRow.venue_name || showRow.venue || 'Venue',
+                date: showRow.show_date || showRow.date || 'Upcoming',
+                time: showRow.doors_time ? `Doors ${showRow.doors_time}` : 'Doors TBA',
+              };
+            }
+          }
+        } catch {
+          // fallback below
+        }
+      }
+
+      if (matched) {
+        setActiveEventData(matched);
+        setIsEventModeActive(true);
+        setShowMapModal(false);
+      } else {
+        setShowMapModal(true);
+      }
+    };
+
+    const handleOpenInboxThread = () => {
+      setActiveTab('messages');
+    };
+
+    const handleNavigateFeedTab = (e: any) => {
+      const nextTab = String(e?.detail || '').trim();
+      if (nextTab === 'feed' || nextTab === 'shop' || nextTab === 'forum' || nextTab === 'messages' || nextTab === 'gallery' || nextTab === 'reels') {
+        setActiveTab(nextTab);
+      } else if (nextTab === 'photopit') {
+        setActiveTab('gallery');
+      }
+    };
+
+    const handleOpenShowDetails = (e: any) => {
+      openShowByPayload(e?.detail || {});
+    };
+
+    window.addEventListener('nexus_open_inbox_thread', handleOpenInboxThread);
+    window.addEventListener('nexus_navigate_feed_tab', handleNavigateFeedTab);
+    window.addEventListener('nexus_open_show_details', handleOpenShowDetails);
+
+    // Consume any pending cold-launch deep-link if already buffered before mount
+    const pendingShow = consumePendingShowDeepLink();
+    if (pendingShow) {
+      openShowByPayload(pendingShow);
+    } else if (consumePendingDmThread()) {
+      setActiveTab('messages');
+    }
+
+    return () => {
+      window.removeEventListener('nexus_open_inbox_thread', handleOpenInboxThread);
+      window.removeEventListener('nexus_navigate_feed_tab', handleNavigateFeedTab);
+      window.removeEventListener('nexus_open_show_details', handleOpenShowDetails);
+    };
+  }, [liveEvents, propShows]);
 
   // Shop merchandise state & categories
   const [selectedShopItem, setSelectedShopItem] = useState<any | null>(null);
@@ -5916,6 +5971,11 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   setIsCartOpen={setIsCartOpen}
   chats={chats}
   setChats={setChats}
+  setUserProfile={setUserProfile}
+  liveEvents={liveEvents}
+  prefPushNotifications={prefPushNotifications}
+  setPrefPushNotifications={setPrefPushNotifications}
+  setShowMapModal={setShowMapModal}
 />
 
       )}

@@ -743,12 +743,13 @@ bandsRouter.post(
   async (req: express.Request, res: express.Response) => {
     const startTime = Date.now();
     try {
-      const { bandName, country, genre, source = 'auto' } = req.body;
-      if (!bandName || typeof bandName !== 'string') {
+      const rawBandName = req.body.bandName || req.body.query;
+      const { country, genre, source = 'auto' } = req.body;
+      if (!rawBandName || typeof rawBandName !== 'string') {
         return res.status(400).json({ error: 'Band name is required.' });
       }
 
-      const cleanBandName = bandName.trim();
+      const cleanBandName = rawBandName.trim();
       console.log(
         `[DISCOGRAPHY SCRAPER] Initiating fast lookup for "${cleanBandName}" (source: ${source})...`
       );
@@ -779,7 +780,7 @@ bandsRouter.post(
         }
       };
 
-      const fetchCoverArtWithTimeout = async (mbid: string, timeoutMs = 2200): Promise<string> => {
+      const fetchCoverArtWithTimeout = async (mbid: string, timeoutMs = 2500): Promise<string> => {
         try {
           const caaRes = await fetchWithTimeout(
             `https://coverartarchive.org/release-group/${mbid}`,
@@ -806,11 +807,11 @@ bandsRouter.post(
 
       const fetchReleaseTracklist = async (
         releaseGroupMbid: string,
-        timeoutMs = 3200
+        timeoutMs = 3500
       ): Promise<{ tracks: string[]; label: string }> => {
         try {
           const rgRes = await fetchWithTimeout(
-            `https://musicbrainz.org/ws/2/release?release-group=${releaseGroupMbid}&inc=recordings+labels&fmt=json&limit=5`,
+            `https://musicbrainz.org/ws/2/release?release-group=${releaseGroupMbid}&inc=recordings+labels+media&fmt=json&limit=5`,
             {
               headers: {
                 'User-Agent': 'NexusCoreMusicOS/2.0 ( https://thenexuscoreapp.com )',
@@ -856,14 +857,14 @@ bandsRouter.post(
       const fetchItunesLookup = async (
         artistQuery: string,
         albumQuery?: string,
-        timeoutMs = 2500
-      ): Promise<{ coverUrl: string; tracks: string[] }> => {
+        timeoutMs = 2800
+      ): Promise<{ coverUrl: string; tracks: string[]; label?: string }> => {
         try {
           const q = encodeURIComponent(
             albumQuery ? `${artistQuery} ${albumQuery}` : artistQuery
           );
           const itunesRes = await fetchWithTimeout(
-            `https://itunes.apple.com/search?term=${q}&entity=album&limit=5`,
+            `https://itunes.apple.com/search?term=${q}&entity=album&limit=10`,
             { headers: { Accept: 'application/json' } },
             timeoutMs
           );
@@ -872,26 +873,44 @@ bandsRouter.post(
           const results: any[] = itunesData?.results || [];
           if (results.length === 0) return { coverUrl: '', tracks: [] };
 
-          const normArtist = artistQuery.toLowerCase();
-          const normAlbum = (albumQuery || '').toLowerCase();
-          const matchedAlbum =
-            results.find(
+          const normArtist = artistQuery.toLowerCase().trim();
+          const normAlbum = (albumQuery || '').toLowerCase().trim();
+          const exactArtistCandidates = results
+            .filter(
+              (r) =>
+                r.artistName?.toLowerCase().trim() === normArtist &&
+                (!normAlbum ||
+                  r.collectionName?.toLowerCase().includes(normAlbum) ||
+                  normAlbum.includes(r.collectionName?.toLowerCase().replace(/\s*-\s*(single|ep).*$/i, '').trim()))
+            )
+            .sort((a, b) => (b.trackCount || 0) - (a.trackCount || 0));
+
+          const partialArtistCandidates = results
+            .filter(
               (r) =>
                 r.artistName?.toLowerCase().includes(normArtist) &&
                 (!normAlbum || r.collectionName?.toLowerCase().includes(normAlbum))
-            ) || results[0];
+            )
+            .sort((a, b) => (b.trackCount || 0) - (a.trackCount || 0));
+
+          const matchedAlbum = exactArtistCandidates[0] || partialArtistCandidates[0];
+
+          if (!matchedAlbum) return { coverUrl: '', tracks: [] };
 
           const hiResArtwork = matchedAlbum.artworkUrl100
             ? matchedAlbum.artworkUrl100.replace('100x100bb', '600x600bb')
+            : '';
+          const copyrightLabel = matchedAlbum.copyright
+            ? matchedAlbum.copyright.replace(/^℗\s*\d{4}\s*/, '').trim()
             : '';
 
           let tracks: string[] = [];
           if (matchedAlbum.collectionId) {
             try {
               const lookupRes = await fetchWithTimeout(
-                `https://itunes.apple.com/lookup?id=${matchedAlbum.collectionId}&entity=song`,
+                `https://itunes.apple.com/lookup?id=${matchedAlbum.collectionId}&entity=song&limit=200`,
                 { headers: { Accept: 'application/json' } },
-                2200
+                2500
               );
               if (lookupRes.ok) {
                 const lookupData = await lookupRes.json();
@@ -915,7 +934,7 @@ bandsRouter.post(
             } catch (_) {}
           }
 
-          return { coverUrl: hiResArtwork, tracks };
+          return { coverUrl: hiResArtwork, tracks, label: copyrightLabel };
         } catch (_) {
           return { coverUrl: '', tracks: [] };
         }
@@ -1000,7 +1019,7 @@ bandsRouter.post(
         }
       };
 
-      if (source === 'auto' || source === 'metal-archives') {
+      if (source === 'auto' || source === 'all' || source === 'metal-archives') {
         try {
           const searchUrl = `https://www.metal-archives.com/search/ajax-band-search/?field=name&query=${encodeURIComponent(cleanBandName)}&sEcho=1&iDisplayStart=0&iDisplayLength=10`;
           const searchRes = await fetchWithTimeout(
@@ -1125,12 +1144,15 @@ bandsRouter.post(
 
                     if (releases.length > 0) {
                       providerUsed = 'metal-archives';
-                      const topMaReleases = releases.slice(0, 8);
+                      const topMaReleases = releases.slice(0, 12);
                       await Promise.allSettled(
                         topMaReleases.map(async (rel) => {
-                          const itunesInfo = await fetchItunesLookup(cleanBandName, rel.title, 2200);
+                          const itunesInfo = await fetchItunesLookup(cleanBandName, rel.title, 2500);
                           if (itunesInfo.coverUrl) rel.cover_url = itunesInfo.coverUrl;
                           if (itunesInfo.tracks.length > 0) rel.tracks = itunesInfo.tracks;
+                          if (itunesInfo.label && rel.label === 'Encyclopaedia Metallum') {
+                            rel.label = itunesInfo.label;
+                          }
                         })
                       );
                     }
@@ -1156,7 +1178,7 @@ bandsRouter.post(
             Accept: 'application/json',
           };
 
-          const artistSearchUrl = `https://musicbrainz.org/ws/2/artist/?query=artist:${encodeURIComponent(`"${cleanBandName}"`)}&fmt=json&limit=10`;
+          const artistSearchUrl = `https://musicbrainz.org/ws/2/artist/?query=artist:${encodeURIComponent(`"${cleanBandName}"`)}&fmt=json&limit=25`;
           const mbSearchRes = await fetchWithTimeout(artistSearchUrl, { headers: mbHeaders }, 4500);
 
           if (mbSearchRes.ok) {
@@ -1165,7 +1187,23 @@ bandsRouter.post(
 
             if (artists.length > 0) {
               const normName = cleanBandName.toLowerCase();
+              const isHeavyArtist = (a: any) => {
+                const dis = (a.disambiguation || '').toLowerCase();
+                const tags = (a.tags || []).map((t: any) => (t.name || '').toLowerCase()).join(' ');
+                const combined = `${dis} ${tags}`;
+                return /metal|death|grind|black|thrash|doom|sludge|hardcore|gore|brutal|crust|punk|rock/.test(combined);
+              };
+
               const bestArtist =
+                artists.find((a) => {
+                  const exact = (a.name || '').toLowerCase() === normName;
+                  const countryMatch =
+                    country &&
+                    ((a.country || '').toLowerCase() === country.toLowerCase() ||
+                      (a.area?.name || '').toLowerCase().includes(country.toLowerCase()));
+                  return exact && countryMatch && isHeavyArtist(a);
+                }) ||
+                artists.find((a) => (a.name || '').toLowerCase() === normName && isHeavyArtist(a)) ||
                 artists.find((a) => {
                   const exact = (a.name || '').toLowerCase() === normName;
                   const countryMatch =
@@ -1209,10 +1247,11 @@ bandsRouter.post(
                   return yearA - yearB;
                 });
 
-                const topGroups = sortedGroups.slice(0, 25);
+                const topGroups = sortedGroups.slice(0, 20);
 
+                // First pass: parallel Cover Art Archive + iTunes lookup (neither has a 1-req/sec rate limit)
                 const enrichedReleases = await Promise.all(
-                  topGroups.map(async (rg, index) => {
+                  topGroups.map(async (rg) => {
                     const primaryType = rg['primary-type'] || 'Album';
                     const secondaryTypes: string[] = rg['secondary-types'] || [];
                     let mappedType = 'Album';
@@ -1227,24 +1266,10 @@ bandsRouter.post(
                       ? rg['first-release-date'].substring(0, 4)
                       : 'Unknown';
 
-                    const shouldEnrichDeeply = index < 10;
-                    const [coverUrl, detailInfo] = shouldEnrichDeeply
-                      ? await Promise.all([
-                          fetchCoverArtWithTimeout(rg.id, 2200),
-                          fetchReleaseTracklist(rg.id, 3000),
-                        ])
-                      : ['', { tracks: [], label: '' }];
-
-                    let finalCover = coverUrl;
-                    let finalTracks = detailInfo.tracks;
-
-                    if (shouldEnrichDeeply && (!finalCover || finalTracks.length === 0)) {
-                      const itunesFallback = await fetchItunesLookup(cleanBandName, rg.title, 2000);
-                      if (!finalCover && itunesFallback.coverUrl)
-                        finalCover = itunesFallback.coverUrl;
-                      if (finalTracks.length === 0 && itunesFallback.tracks.length > 0)
-                        finalTracks = itunesFallback.tracks;
-                    }
+                    const [caaCover, itunesInfo] = await Promise.all([
+                      fetchCoverArtWithTimeout(rg.id, 2500),
+                      fetchItunesLookup(cleanBandName, rg.title, 2800),
+                    ]);
 
                     return {
                       title: rg.title,
@@ -1253,12 +1278,25 @@ bandsRouter.post(
                       year: releaseYear,
                       albumUrl: `https://musicbrainz.org/release-group/${rg.id}`,
                       albumId: rg.id,
-                      label: detailInfo.label || 'MusicBrainz Verified',
-                      cover_url: finalCover,
-                      tracks: finalTracks,
+                      label: itunesInfo.label || 'MusicBrainz Verified',
+                      cover_url: itunesInfo.coverUrl || caaCover,
+                      tracks: itunesInfo.tracks,
                     };
                   })
                 );
+
+                // Second pass: for any release still missing tracks, query MusicBrainz sequentially (max 5) to respect rate limits
+                let mbTrackFetches = 0;
+                for (const rel of enrichedReleases) {
+                  if (rel.tracks.length === 0 && rel.albumId && mbTrackFetches < 5) {
+                    mbTrackFetches++;
+                    const mbDetail = await fetchReleaseTracklist(rel.albumId, 3200);
+                    if (mbDetail.tracks.length > 0) rel.tracks = mbDetail.tracks;
+                    if (mbDetail.label && rel.label === 'MusicBrainz Verified') {
+                      rel.label = mbDetail.label;
+                    }
+                  }
+                }
 
                 if (enrichedReleases.length > 0) {
                   releases = enrichedReleases;
@@ -1300,6 +1338,116 @@ bandsRouter.post(
         } catch (_) {}
       }
 
+      if (releases.length === 0 || source === 'itunes') {
+        try {
+          const normTarget = cleanBandName.toLowerCase();
+          const isHeavyGenre = (g: string) => /metal|rock|punk|alternative|hardcore|grind|indie/i.test(g || '');
+          const isNonHeavyGenre = (g: string) => /hip-hop|rap|afro|pop|r&b|soul|country|dance|house|trance|techno|jazz|classical|reggae|latin/i.test(g || '');
+
+          const artistRes = await fetchWithTimeout(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(cleanBandName)}&entity=musicArtist&limit=25`,
+            { headers: { Accept: 'application/json' } },
+            3200
+          );
+          if (artistRes.ok) {
+            const artistData = await artistRes.json();
+            const artistResults: any[] = artistData?.results || [];
+            const exactArtists = artistResults.filter(
+              (a) => (a.artistName || '').toLowerCase().trim() === normTarget
+            );
+            const bestItunesArtist =
+              exactArtists.find((a) => isHeavyGenre(a.primaryGenreName)) ||
+              exactArtists[0] ||
+              artistResults.find((a) => isHeavyGenre(a.primaryGenreName)) ||
+              artistResults[0];
+
+            if (bestItunesArtist?.artistId) {
+              const albumsRes = await fetchWithTimeout(
+                `https://itunes.apple.com/lookup?id=${bestItunesArtist.artistId}&entity=album&limit=50`,
+                { headers: { Accept: 'application/json' } },
+                3500
+              );
+              if (albumsRes.ok) {
+                const albumsData = await albumsRes.json();
+                let collections = (albumsData?.results || []).filter(
+                  (r: any) =>
+                    r.wrapperType === 'collection' &&
+                    (r.artistName || '').toLowerCase().trim() === (bestItunesArtist.artistName || '').toLowerCase().trim()
+                );
+                const heavyCollections = collections.filter((r: any) => !isNonHeavyGenre(r.primaryGenreName));
+                if (heavyCollections.length > 0) collections = heavyCollections;
+
+                if (collections.length > 0) {
+                  const colIds = collections.map((c: any) => c.collectionId).filter(Boolean);
+                  const tracksByCol = new Map<number, string[]>();
+                  for (let i = 0; i < colIds.length; i += 8) {
+                    const chunk = colIds.slice(i, i + 8);
+                    try {
+                      const sRes = await fetchWithTimeout(
+                        `https://itunes.apple.com/lookup?id=${chunk.join(',')}&entity=song&limit=300`,
+                        { headers: { Accept: 'application/json' } },
+                        3000
+                      );
+                      if (sRes.ok) {
+                        const sData = await sRes.json();
+                        const songItems = (sData?.results || []).filter((x: any) => x.wrapperType === 'track');
+                        songItems.sort((a: any, b: any) => (a.trackNumber || 0) - (b.trackNumber || 0));
+                        for (const s of songItems) {
+                          const list = tracksByCol.get(s.collectionId) || [];
+                          const durMs = s.trackTimeMillis;
+                          if (durMs && typeof durMs === 'number') {
+                            const totalSec = Math.floor(durMs / 1000);
+                            const mins = Math.floor(totalSec / 60);
+                            const secs = String(totalSec % 60).padStart(2, '0');
+                            list.push(`${s.trackName} (${mins}:${secs})`);
+                          } else if (s.trackName) {
+                            list.push(s.trackName);
+                          }
+                          tracksByCol.set(s.collectionId, list);
+                        }
+                      }
+                    } catch (_) {}
+                  }
+
+                  const itunesReleases = collections.map((c: any) => ({
+                    title: c.collectionName,
+                    type: /-\s*ep/i.test(c.collectionName || '')
+                      ? 'EP'
+                      : /-\s*single/i.test(c.collectionName || '') || c.trackCount === 1
+                      ? 'Single'
+                      : 'Album',
+                    originalType: 'Album',
+                    year: (c.releaseDate || '').substring(0, 4) || 'Unknown',
+                    label: c.copyright ? c.copyright.replace(/^℗\s*\d{4}\s*/, '').trim() : 'Apple Music Verified',
+                    cover_url: c.artworkUrl100 ? c.artworkUrl100.replace('100x100bb', '600x600bb') : '',
+                    tracks: tracksByCol.get(c.collectionId) || [],
+                  }));
+
+                  if (releases.length === 0) {
+                    releases = itunesReleases;
+                    providerUsed = 'itunes';
+                    matchedBand = {
+                      name: bestItunesArtist.artistName || cleanBandName,
+                      genre: bestItunesArtist.primaryGenreName || genre || 'Metal',
+                      country: country || 'Global',
+                    };
+                  } else {
+                    const existingSet = new Set(releases.map((r) => (r.title || '').toLowerCase().trim()));
+                    for (const ir of itunesReleases) {
+                      const norm = (ir.title || '').toLowerCase().trim();
+                      if (norm && !existingSet.has(norm)) {
+                        releases.push(ir);
+                        existingSet.add(norm);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       if (releases.length === 0) {
         const ai = await getGemini();
         if (ai) {
@@ -1308,7 +1456,7 @@ bandsRouter.post(
               `[DISCOGRAPHY SCRAPER] Falling back to Gemini Search Grounding for "${cleanBandName}"...`
             );
             const aiRes = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
+              model: 'gemini-4-hydrogen',
               contents: `Find the official discography (albums, EPs, demos, singles) for the musical artist or metal/rock/punk band "${cleanBandName}" ${country ? `from ${country}` : ''} ${genre ? `(${genre})` : ''}. Search Metal Archives, Bandcamp, Spotify, and Discogs. Return a JSON object with a "releases" array containing objects with "title", "year", "type" (Album, EP, Single, Demo, Split), "label", and "tracks" (array of track titles if known).`,
               config: {
                 tools: [{ googleSearch: {} }],
@@ -1349,8 +1497,8 @@ bandsRouter.post(
                   parsed.releases.map(async (r: any, idx: number) => {
                     let coverUrl = '';
                     let tracks: string[] = Array.isArray(r.tracks) ? r.tracks : [];
-                    if (idx < 6) {
-                      const itunesInfo = await fetchItunesLookup(cleanBandName, r.title, 2000);
+                    if (idx < 8) {
+                      const itunesInfo = await fetchItunesLookup(cleanBandName, r.title, 2200);
                       coverUrl = itunesInfo.coverUrl;
                       if (tracks.length === 0 && itunesInfo.tracks.length > 0) {
                         tracks = itunesInfo.tracks;
@@ -1393,6 +1541,9 @@ bandsRouter.post(
         found: releases.length > 0,
         provider: providerUsed,
         elapsedMs,
+        bandName: matchedBand?.name || cleanBandName,
+        genre: matchedBand?.genre || genre || 'Extreme Metal',
+        country: matchedBand?.country || country || 'Global',
         band: matchedBand || {
           name: cleanBandName,
           genre: genre || '',
@@ -1403,6 +1554,224 @@ bandsRouter.post(
     } catch (error: any) {
       console.error('[DISCOGRAPHY SCRAPER ERROR]:', error);
       res.status(500).json({ error: error.message || 'Failed to fetch discography.' });
+    }
+  }
+);
+
+// ============================================================
+// CONTENT-AWARE SCREENSHOT / IMAGE & SMART TRACKLIST PARSER
+// ============================================================
+bandsRouter.post(
+  '/api/scrape/parse-discography-image',
+  requireAuth,
+  scrapeLimiter,
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const {
+        images = [],
+        rawText = '',
+        bandName = '',
+        defaultAlbumTitle = '',
+        defaultYear = '',
+        defaultType = 'Full-length',
+        defaultLabel = '',
+      } = req.body || {};
+
+      const imageList: string[] = Array.isArray(images) ? images.filter(Boolean) : [];
+      if (imageList.length === 0 && (!rawText || !String(rawText).trim())) {
+        return res.status(400).json({
+          error: 'Please provide at least one screenshot image or pasted tracklist text.',
+        });
+      }
+
+      const ai = await getGemini();
+      if (!ai) {
+        return res.status(503).json({
+          error: 'Vision AI parser is currently unavailable on the server.',
+        });
+      }
+
+      const parts: any[] = [];
+      for (const imgStr of imageList.slice(0, 5)) {
+        const match = String(imgStr).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (match) {
+          parts.push({
+            inlineData: {
+              mimeType: match[1],
+              data: match[2],
+            },
+          });
+        } else if (String(imgStr).length > 100 && !String(imgStr).startsWith('http')) {
+          parts.push({
+            inlineData: {
+              mimeType: 'image/png',
+              data: String(imgStr),
+            },
+          });
+        }
+      }
+
+      const promptText = `You are an expert heavy metal archivist and OCR extractor for Encyclopaedia Metallum (Metal-Archives), Bandcamp, Discogs, Spotify, and CD back covers.
+Analyze the attached screenshot(s)${rawText ? ' and pasted text' : ''} and extract the complete release information and tracklist(s).
+
+Context hints (use if not explicitly visible in the screenshot):
+- Band Name: "${bandName || 'Unknown Artist'}"
+- Default Album Title (if screenshot only crops the tracklist rows): "${defaultAlbumTitle || ''}"
+- Default Release Year: "${defaultYear || ''}"
+- Default Release Type: "${defaultType || 'Full-length'}"
+- Default Record Label: "${defaultLabel || ''}"
+${rawText ? `\nAdditional Pasted Text:\n${rawText}\n` : ''}
+
+Extraction Rules:
+1. Ignore UI clutter such as "Show lyrics", "(loading lyrics...)", "Songs", "Total playing time", "Side A / Side B", "Disc 1 / Disc 2", "Reviews", "Additional notes", or browser tabs.
+2. For each release shown (whether a single album tracklist page or a multi-release discography table):
+   - Extract "title" (if only tracks are visible in the screenshot and no album title is shown, use the Default Album Title if provided, or infer the official album title from the band "${bandName}" and track names).
+   - Extract "year" (4-digit year, e.g., "2012").
+   - Extract "type" ("Full-length", "EP", "Demo", "Split", "Single", "Live", or "Compilation").
+   - Extract "label" (record label name, e.g. "Metal Blade Records", "Unique Leader Records", or "Independent").
+   - Extract "catalogId" (catalog number if visible, e.g. "3984-15150-2").
+   - Extract "tracks": ordered array of tracks with "number" (integer starting at 1), "title" (clean song title without track number or "Show lyrics"), and "duration" (formatted as "M:SS" or "MM:SS", e.g., "3:45" or "04:10" -> "4:10"; default to "3:30" if duration is not shown).`;
+
+      parts.push({ text: promptText });
+
+      const aiRes = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: { parts },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              bandName: { type: Type.STRING },
+              genre: { type: Type.STRING },
+              country: { type: Type.STRING },
+              releases: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    year: { type: Type.STRING },
+                    type: { type: Type.STRING },
+                    label: { type: Type.STRING },
+                    catalogId: { type: Type.STRING },
+                    tracks: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          number: { type: Type.INTEGER },
+                          title: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                        },
+                        required: ['number', 'title', 'duration'],
+                      },
+                    },
+                  },
+                  required: ['title', 'type', 'tracks'],
+                },
+              },
+            },
+            required: ['releases'],
+          },
+        },
+      });
+
+      const rawJson = (aiRes.text || '{}').trim();
+      const parsed = JSON.parse(rawJson);
+      const resolvedBandName = parsed.bandName || bandName || 'Artist';
+      const extractedReleases: any[] = Array.isArray(parsed.releases) ? parsed.releases : [];
+
+      // Enrich cover artwork (and missing tracks if a discography table screenshot had no tracks) via Apple Music / Cover Art Archive
+      const enriched = await Promise.all(
+        extractedReleases.map(async (rel: any) => {
+          const rTitle = (rel.title || defaultAlbumTitle || 'Untitled Release').trim();
+          const rYear = (rel.year || defaultYear || new Date().getFullYear().toString()).replace(/[^0-9]/g, '').slice(0, 4) || new Date().getFullYear().toString();
+          const rType = rel.type || defaultType || 'Full-length';
+          let rLabel = rel.label || defaultLabel || 'Metal Archives Verified';
+          let coverUrl = '';
+          let tracks = Array.isArray(rel.tracks)
+            ? rel.tracks.map((t: any, idx: number) => ({
+                num: String(t.number || idx + 1),
+                number: Number(t.number || idx + 1),
+                title: String(t.title || `Track ${idx + 1}`).replace(/\bShow lyrics\b/gi, '').trim(),
+                duration: String(t.duration || '3:30').replace(/^0(\d:)/, '$1').trim(),
+              }))
+            : [];
+
+          try {
+            const q = encodeURIComponent(`${resolvedBandName} ${rTitle}`);
+            const itRes = await fetch(`https://itunes.apple.com/search?term=${q}&entity=album&limit=10`);
+            if (itRes.ok) {
+              const itData = await itRes.json();
+              const results: any[] = itData?.results || [];
+              const normA = resolvedBandName.toLowerCase().trim();
+              const normT = rTitle.toLowerCase().trim();
+              const matched = results
+                .filter(
+                  (r) =>
+                    (r.artistName?.toLowerCase().includes(normA) || normA.includes(r.artistName?.toLowerCase())) &&
+                    (r.collectionName?.toLowerCase().includes(normT) || normT.includes(r.collectionName?.toLowerCase().replace(/\s*-\s*(single|ep).*$/i, '').trim()))
+                )
+                .sort((a, b) => (b.trackCount || 0) - (a.trackCount || 0))[0];
+
+              if (matched) {
+                if (matched.artworkUrl100) {
+                  coverUrl = matched.artworkUrl100.replace('100x100bb', '600x600bb');
+                }
+                if ((!rLabel || rLabel === 'Metal Archives Verified') && matched.copyright) {
+                  rLabel = matched.copyright.replace(/^℗\s*\d{4}\s*/, '').trim();
+                }
+                if (tracks.length === 0 && matched.collectionId) {
+                  const sRes = await fetch(`https://itunes.apple.com/lookup?id=${matched.collectionId}&entity=song&limit=200`);
+                  if (sRes.ok) {
+                    const sData = await sRes.json();
+                    const songs = (sData?.results || []).filter((x: any) => x.wrapperType === 'track');
+                    songs.sort((a: any, b: any) => (a.trackNumber || 0) - (b.trackNumber || 0));
+                    tracks = songs.map((s: any, idx: number) => {
+                      const durMs = s.trackTimeMillis;
+                      const dur = durMs
+                        ? `${Math.floor(durMs / 60000)}:${String(Math.floor((durMs % 60000) / 1000)).padStart(2, '0')}`
+                        : '3:30';
+                      return {
+                        num: String(idx + 1),
+                        number: idx + 1,
+                        title: s.trackName || `Track ${idx + 1}`,
+                        duration: dur,
+                        previewUrl: s.previewUrl || undefined,
+                      };
+                    });
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+
+          return {
+            title: rTitle,
+            year: rYear,
+            release_date: rYear,
+            type: rType,
+            label: rLabel,
+            catalog_id: rel.catalogId || '',
+            cover_url: coverUrl,
+            tracks,
+          };
+        })
+      );
+
+      return res.json({
+        success: enriched.length > 0,
+        bandName: resolvedBandName,
+        genre: parsed.genre || 'Extreme Metal',
+        country: parsed.country || 'Global',
+        releases: enriched,
+      });
+    } catch (err: any) {
+      console.error('[SCREENSHOT DISCOGRAPHY PARSER ERROR]:', err);
+      return res.status(500).json({
+        error: err?.message || 'Failed to parse screenshot discography.',
+      });
     }
   }
 );

@@ -56,39 +56,47 @@ self.addEventListener('notificationclick', function(event) {
   }
 
   const notifData = event.notification.data || {};
+  const nestedData = notifData.data && typeof notifData.data === 'object' ? notifData.data : {};
   const baseTargetUrl = notifData.url || '/';
-  const targetTab = notifData.targetTab;
-  const senderId = notifData.senderId || notifData.data?.senderId;
-  const senderName = notifData.senderName || notifData.data?.senderName || event.notification.title;
+  const pushType = notifData.type || nestedData.type || '';
+  const route = notifData.route || nestedData.route || '';
+  const targetTab = notifData.targetTab || nestedData.targetTab;
+  const targetId = notifData.targetId || nestedData.targetId || '';
+  const showId = notifData.showId || nestedData.showId || '';
+  const senderId = notifData.senderId || nestedData.senderId || (pushType === 'dm' ? targetId : '');
+  const senderName = notifData.senderName || nestedData.senderName || event.notification.title;
 
   let deepLinkUrl = baseTargetUrl;
   try {
     const parsedUrl = new URL(baseTargetUrl, self.location.origin);
     if (targetTab) parsedUrl.searchParams.set('openTab', String(targetTab));
     if (senderId) parsedUrl.searchParams.set('chatWith', String(senderId));
+    if (senderName && senderId) parsedUrl.searchParams.set('senderName', String(senderName));
+    if (showId) parsedUrl.searchParams.set('showId', String(showId));
+    if (targetId) parsedUrl.searchParams.set('targetId', String(targetId));
+    if (pushType) parsedUrl.searchParams.set('pushType', String(pushType));
+    if (route) parsedUrl.searchParams.set('route', String(route));
     deepLinkUrl = parsedUrl.pathname + parsedUrl.search;
   } catch (_) {}
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-      // If a client window is already open, focus it and post a navigation message
+      // If a client window is already open, focus it and post a structured navigation message
       for (let i = 0; i < clientList.length; i++) {
         const client = clientList[i];
         if ('focus' in client) {
-          if (senderId) {
-            client.postMessage({
-              type: 'NEXUS_OPEN_CHAT',
-              senderId: senderId,
-              name: senderName
-            });
-          }
-          if (targetTab) {
-            client.postMessage({
-              type: 'NEXUS_PUSH_NAVIGATE',
-              targetTab: targetTab,
-              data: notifData
-            });
-          }
+          client.postMessage({
+            type: senderId ? 'NEXUS_OPEN_CHAT' : 'NEXUS_PUSH_NAVIGATE',
+            pushType: pushType,
+            targetTab: targetTab || (senderId || showId ? 'social' : undefined),
+            senderId: senderId || undefined,
+            name: senderName,
+            senderName: senderName,
+            targetId: targetId || undefined,
+            showId: showId || undefined,
+            route: route || undefined,
+            data: notifData
+          });
           return client.focus();
         }
       }

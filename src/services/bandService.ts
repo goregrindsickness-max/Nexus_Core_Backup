@@ -406,10 +406,10 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
           clean.lineup = trimmed;
         }
       } else if (trimmed) {
-        // Parse comma-delimited strings e.g. "John (Guitar), Jane (Bass)" into LineupMember JSON
-        const parts = trimmed.split(',').map((s: string) => s.trim()).filter(Boolean);
+        // Parse comma-delimited strings e.g. "John (Guitar, Vocals), Jane (Bass)" into LineupMember JSON without splitting inside parentheses
+        const parts = trimmed.split(/,(?![^()]*\))/).map((s: string) => s.trim()).filter(Boolean);
         const parsedMembers = parts.map((part: string, idx: number) => {
-          const match = part.match(/^(.*?)\s*\((.*?)\)$/);
+          const match = part.match(/^(.*?)\s*\((.*)\)$/);
           if (match) {
             return {
               id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
@@ -554,7 +554,17 @@ export async function upsertBandToDatabase(
     parsedLineupArray = cleanBand.lineup;
   }
 
-  const hasExplicitLineupField = bandInput.lineup !== undefined && bandInput.lineup !== null;
+  const isExplicitlyClearedLineup =
+    Boolean(options?.allowEmptyLineup) &&
+    bandInput.lineup !== undefined &&
+    bandInput.lineup !== null &&
+    parsedLineupArray.length === 0;
+
+  if (parsedLineupArray.length === 0 && !isExplicitlyClearedLineup) {
+    delete cleanBand.lineup;
+  }
+
+  const hasExplicitLineupField = parsedLineupArray.length > 0 || isExplicitlyClearedLineup;
 
   // Sync to local storage immediately for zero-latency UI consistency
   try {
@@ -564,21 +574,29 @@ export async function upsertBandToDatabase(
         const serialized = JSON.stringify(parsedLineupArray);
         localStorage.setItem(`nexus_core_band_lineup_${bandId}`, serialized);
         localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, serialized);
+        localStorage.removeItem(`nexus_core_band_lineup_cleared_${bandId}`);
+        localStorage.removeItem(`nexus_core_band_lineup_cleared_${ensureUUID(bandId)}`);
         if (cleanBand.band_name) {
-          localStorage.setItem(`nexus_core_band_lineup_${String(cleanBand.band_name).toLowerCase().trim()}`, serialized);
+          const normName = String(cleanBand.band_name).toLowerCase().trim();
+          localStorage.setItem(`nexus_core_band_lineup_${normName}`, serialized);
+          localStorage.removeItem(`nexus_core_band_lineup_cleared_${normName}`);
         }
-      } else if (hasExplicitLineupField) {
+      } else if (isExplicitlyClearedLineup) {
         localStorage.setItem(`nexus_core_band_lineup_${bandId}`, '[]');
         localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, '[]');
+        localStorage.setItem(`nexus_core_band_lineup_cleared_${bandId}`, 'true');
+        localStorage.setItem(`nexus_core_band_lineup_cleared_${ensureUUID(bandId)}`, 'true');
         if (cleanBand.band_name) {
-          localStorage.setItem(`nexus_core_band_lineup_${String(cleanBand.band_name).toLowerCase().trim()}`, '[]');
+          const normName = String(cleanBand.band_name).toLowerCase().trim();
+          localStorage.setItem(`nexus_core_band_lineup_${normName}`, '[]');
+          localStorage.setItem(`nexus_core_band_lineup_cleared_${normName}`, 'true');
         }
       }
 
       const memoryBand: any = {
         ...cleanBand,
       };
-      if (hasExplicitLineupField || parsedLineupArray.length > 0) {
+      if (hasExplicitLineupField) {
         memoryBand.lineup = parsedLineupArray;
       } else {
         delete memoryBand.lineup;
@@ -753,6 +771,21 @@ export const mapBandData = (rows: any[] | null) => {
     const validCreatorId = b.creator_id || b.user_id || b.owner_id || null;
     const validFeaturedYoutube = b.featured_youtube_url || b.youtube_url || '';
     const validMetalArchives = b.metal_archives_url || b.metal_archives || '';
+    const rawLogoCandidates = [
+      b.avatar_url,
+      b.logo_url,
+      b.image_url,
+      b.logo,
+      b.profile?.avatar_url,
+      b.avatar,
+      b.image,
+    ];
+    const resolvedLogo =
+      rawLogoCandidates.find((u) => {
+        if (typeof u !== 'string') return false;
+        const clean = u.trim().toLowerCase();
+        return Boolean(clean) && clean !== 'null' && clean !== 'undefined' && !clean.includes('unsplash') && !clean.includes('placeholder');
+      })?.trim() || '';
 
     return {
       ...b,
@@ -763,6 +796,9 @@ export const mapBandData = (rows: any[] | null) => {
       creator_id: validCreatorId,
       user_id: validCreatorId,
       owner_id: validCreatorId,
+      // Unified logo / avatar URL
+      avatar_url: resolvedLogo,
+      logo_url: resolvedLogo,
       // Bio & Description
       bio: b.bio || b.description || '',
       description: b.description || b.bio || '',

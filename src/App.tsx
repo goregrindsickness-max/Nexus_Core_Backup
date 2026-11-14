@@ -20,7 +20,7 @@ import { tourPackageManager } from './lib/tourPackageManager';
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect, Suspense } from 'react';
 import { inventoryStore, posSalesStore, itinerariesStore, socialFeedStore, reviewsStore, showsStore, registrationStagingStore, venuesStore, offersStore, routingBeaconsStore, creativeNodesStore, expensesStore, profileStore } from './utils/indexedDB';
 import { safeSetLocalStorageItem } from './utils/safeStorage';
-import { registerNotificationsOnStartup } from './services/pushNotificationService';
+import { initPushClient, handleInitialDeepLinkFromUrl } from './lib/pushClient';
 import { pushManager } from './lib/pushNotifications';
 import { initializeSonicActivityListeners } from './services/sonicFootprintService';
 import { Capacitor } from '@capacitor/core';
@@ -403,35 +403,12 @@ export default function App() {
   });
 
   useEffect(() => {
-    registerNotificationsOnStartup();
+    initPushClient().catch(() => {});
     initializeSonicActivityListeners();
     pushManager.requestPermission().catch(() => {});
 
     // Handle deep-link URL params when opened from a closed-app push notification click
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const openTab = params.get('openTab');
-      const chatWith = params.get('chatWith');
-      if (openTab || chatWith) {
-        setTimeout(() => {
-          if (openTab) {
-            window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: openTab }));
-          }
-          if (chatWith) {
-            window.dispatchEvent(
-              new CustomEvent('nexus_open_chat', {
-                detail: { profile_id: chatWith, name: 'Direct Message', username: 'Direct Message' },
-              })
-            );
-          }
-        }, 600);
-        params.delete('openTab');
-        params.delete('chatWith');
-        const cleanedSearch = params.toString();
-        const cleanedUrl = window.location.pathname + (cleanedSearch ? `?${cleanedSearch}` : '') + window.location.hash;
-        window.history.replaceState(null, '', cleanedUrl);
-      }
-    } catch (_) {}
+    handleInitialDeepLinkFromUrl();
   }, []);
 
   // Keep Web Push / native token mapped to the active user's ID and email whenever they sign in or hydrate

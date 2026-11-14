@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon, Music } from 'lucide-react';
 
 // Reversible A/B test flag: set to false to immediately restore the inline composer card
 export const ENABLE_COMPACT_COMPOSER_STRIP_AB_TEST = true;
@@ -47,14 +47,15 @@ export const PostComposerTrigger: React.FC<PostComposerTriggerProps> = ({
           </span>
         </button>
 
-        {/* Center: Recessed dark rounded pill input affordance */}
+        {/* Center: Recessed dark rounded pill input affordance with matching teal/purple glow */}
         <button
           type="button"
           onClick={onOpenComposer}
-          className="flex-1 min-w-0 bg-zinc-900/90 border border-white/10 hover:border-teal-400/45 hover:bg-zinc-900 rounded-full px-3.5 sm:px-4 py-2.5 text-left transition-all cursor-pointer group focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+          className="flex-1 min-w-0 bg-zinc-900/90 border border-teal-400/50 hover:border-teal-300 hover:bg-zinc-900 rounded-full px-3.5 sm:px-4 py-2.5 text-left transition-all cursor-pointer group shadow-[0_0_14px_rgba(20,184,166,0.26),0_0_10px_rgba(168,85,247,0.22)] focus:outline-none focus:ring-2 focus:ring-teal-400/40"
         >
-          <span className="block text-[11.5px] sm:text-[13px] text-zinc-400 group-hover:text-zinc-200 transition-colors whitespace-nowrap">
-            Drop an update, flyer, or riff...
+          <span className="flex items-center gap-1.5 min-w-0 text-[11.5px] sm:text-[13px] text-zinc-300 group-hover:text-white transition-colors">
+            <span className="truncate">Drop an update, flyer or share</span>
+            <Music className="w-3.5 h-3.5 text-teal-300 shrink-0" aria-hidden="true" />
           </span>
         </button>
 

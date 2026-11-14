@@ -31,7 +31,8 @@ import {
   ShieldAlert,
   AlertCircle,
   Database,
-  RefreshCw
+  RefreshCw,
+  Camera
 } from 'lucide-react';
 import {
   communityBandManager,
@@ -50,6 +51,8 @@ import {
   isValidCoverUrl,
   isValidBandImageUrl,
   pickBestBandImage,
+  resolveCanonicalBandLogo,
+  resolveCanonicalBandCover,
   isGorgasmBand,
   isStaleGorgasmLineup,
   parseBandLineup,
@@ -57,6 +60,7 @@ import {
   GORGASM_OFFICIAL_LINEUP
 } from '../../../lib/communityBands';
 import { deleteReleaseFromDatabase } from '../../../services/releasesService';
+import { parseDiscographyFromImageOrText } from '../../../services/metalArchivesScraper';
 import { uploadBase64ToStorage, generateUUID, ensureUUID } from '../../../supabase';
 import { MASTER_GENRES } from '../../../constants/genres';
 import { MetalArchivesImportModal } from './MetalArchivesImportModal';
@@ -191,8 +195,77 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingAlbumImg, setIsUploadingAlbumImg] = useState(false);
+  const [isScanningTracklistImg, setIsScanningTracklistImg] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [failedLogoKeys, setFailedLogoKeys] = useState<Record<string, boolean>>({});
   const [syncStatusText, setSyncStatusText] = useState('');
+
+  const handleScanReleaseScreenshot = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (fileArr.length === 0) return;
+
+    setIsScanningTracklistImg(true);
+    try {
+      const dataUrls: string[] = [];
+      for (const f of fileArr.slice(0, 4)) {
+        const url = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = reject;
+          reader.readAsDataURL(f);
+        });
+        if (url) dataUrls.push(url);
+      }
+
+      const parsed = await parseDiscographyFromImageOrText({
+        images: dataUrls,
+        bandName: name.trim() || selectedBand?.name || 'Artist',
+        defaultAlbumTitle: releaseTitle.trim() || undefined,
+        defaultYear: releaseYear.trim() || undefined,
+        defaultType: releaseType,
+        defaultLabel: releaseLabel.trim() || undefined,
+      });
+
+      const firstRel = parsed.releases?.[0];
+      if (firstRel) {
+        if (!releaseTitle.trim() && firstRel.title && firstRel.title !== 'Untitled Release') {
+          setReleaseTitle(firstRel.title);
+        }
+        const extractedYr = firstRel.releaseDate || (firstRel as any).release_date || (firstRel as any).year;
+        if (!releaseYear.trim() && extractedYr) {
+          setReleaseYear(String(extractedYr).slice(0, 4));
+        }
+        if (!releaseLabel.trim() && firstRel.label && firstRel.label !== 'Metal Archives Verified') {
+          setReleaseLabel(firstRel.label);
+        }
+        if (!releaseCatalogId.trim() && firstRel.catalogId && !firstRel.catalogId.startsWith('CAT-')) {
+          setReleaseCatalogId(firstRel.catalogId);
+        }
+        const cUrl = firstRel.coverUrl || firstRel.coverImage || (firstRel as any).cover_url;
+        if (!releaseImageUrl.trim() && cUrl) {
+          setReleaseImageUrl(cUrl);
+        }
+        if (firstRel.tracks && firstRel.tracks.length > 0) {
+          const mappedTracks: DiscographyTrack[] = firstRel.tracks.map((t, idx) => ({
+            number: idx + 1,
+            title: t.title || `Track ${idx + 1}`,
+            duration: t.duration || '3:30',
+          }));
+          setReleaseTracks(mappedTracks);
+          triggerNotification?.(`📸 Extracted ${mappedTracks.length} tracks from screenshot!`);
+        } else {
+          triggerNotification?.('📸 Extracted album details from screenshot!');
+        }
+      } else {
+        triggerNotification?.('⚠️ Could not detect a tracklist in that screenshot.');
+      }
+    } catch (err: any) {
+      triggerNotification?.(`❌ Screenshot scan failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setIsScanningTracklistImg(false);
+    }
+  };
 
   const handleSyncAllToSupabase = async () => {
     if (isSyncingAll) return;
@@ -268,8 +341,9 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const loadBands = () => {
     const list = communityBandManager.getAll();
     setBandsList(list);
-    communityBandManager.fetchFromSupabase().then((remoteList) => {
+    communityBandManager.fetchFromSupabase({ authoritative: true }).then((remoteList) => {
       if (remoteList && remoteList.length > 0) {
+        setFailedLogoKeys({});
         setBandsList(remoteList);
       }
     }).catch(() => {});
@@ -446,16 +520,11 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     const validBio = (rawBio && !isUserBio && !rawBio.startsWith('Community-curated archive')) ? rawBio : 'Not written yet.';
     setBio(validBio);
     const bandNameOrId = band.id || band.name || (band as any).band_name || '';
-    const resolvedAvatar = pickBestBandImage(
-      band.avatar_url,
-      band.logo_url,
-      (band as any).avatar,
-      (band as any).image,
-      isGorgasmBand(bandNameOrId, (band as any).custom_slug) ? GORGASM_OFFICIAL_LOGO : ''
-    ) || band.avatar_url || band.logo_url || (band as any).avatar || (band as any).image || '';
+    const resolvedAvatar =
+      resolveCanonicalBandLogo(band) ||
+      (isGorgasmBand(bandNameOrId, (band as any).custom_slug) ? GORGASM_OFFICIAL_LOGO : '');
     setAvatarUrl(resolvedAvatar);
-    const resolvedCover = pickBestBandImage(band.cover_url, band.banner_url, (band as any).cover, (band as any).banner) ||
-      band.cover_url || band.banner_url || (band as any).cover || (band as any).banner || '';
+    const resolvedCover = resolveCanonicalBandCover(band);
     setCoverUrl(resolvedCover);
     setSpotifyUrl(band.spotify_url || publicDetails.spotify_url || '');
     setBandcampUrl(band.bandcamp_url || '');
@@ -549,7 +618,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     try {
       const client = getSupabase();
       const bandName = (band.name || (band as any).band_name || '').trim();
-      const validUUID = band.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(band.id) ? band.id : null;
+      const validUUID = band.id ? ensureUUID(band.id) : null;
       
       if (client && (validUUID || bandName)) {
         let bQuery = client.from('bands').select('*');
@@ -585,9 +654,9 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
             if (liveBand.micro_genres && Array.isArray(liveBand.micro_genres) && liveBand.micro_genres.length > 0) {
               setMicroGenres(liveBand.micro_genres);
             }
-            const liveLogo = pickBestBandImage(liveBand.logo_url, liveBand.avatar_url);
+            const liveLogo = resolveCanonicalBandLogo(liveBand);
             if (liveLogo) setAvatarUrl(liveLogo);
-            const liveCover = pickBestBandImage(liveBand.cover_url, liveBand.banner_url);
+            const liveCover = resolveCanonicalBandCover(liveBand);
             if (liveCover) setCoverUrl(liveCover);
             if (liveBand.spotify) setSpotifyUrl(liveBand.spotify);
             if (liveBand.bandcamp) setBandcampUrl(liveBand.bandcamp);
@@ -598,14 +667,14 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
             if (!lineupDirtyRef.current) {
               if (isGorgasm && isStaleGorgasmLineup(parsedLiveLineup)) {
                 setLineup(GORGASM_OFFICIAL_LINEUP);
+              } else if (parsedLiveLineup.length > 0) {
+                setLineup(parsedLiveLineup);
               } else if (isBirdflesh) {
                 setLineup([
                   { id: 'bf-1', name: 'Adde Mitroulis', role: 'Drums, Vocals', status: 'active', years: '1997–present' },
                   { id: 'bf-2', name: 'Joakim Svensson', role: 'Bass, Vocals', status: 'active', years: '2007–present' },
                   { id: 'bf-3', name: 'Elis Edin Markskog', role: 'Guitars, Vocals', status: 'active', years: '2011–present' }
                 ]);
-              } else if (parsedLiveLineup.length > 0) {
-                setLineup(parsedLiveLineup);
               }
             }
           }
@@ -638,11 +707,17 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
           if (liveBand) {
             const effectiveLineup = parsedLiveLineup.length > 0 ? parsedLiveLineup : cleanLineup;
+            const liveLogo = resolveCanonicalBandLogo(liveBand) || resolveCanonicalBandLogo(band);
+            const liveCover = resolveCanonicalBandCover(liveBand) || resolveCanonicalBandCover(band);
             const refreshedBand: CommunityBandRecord = {
               ...band,
               ...liveBand,
               name: liveBand.band_name || liveBand.name || band.name,
               band_name: liveBand.band_name || liveBand.name || band.name,
+              avatar_url: liveLogo,
+              logo_url: liveLogo,
+              cover_url: liveCover,
+              banner_url: liveCover,
               status: liveBand.status || ((liveBand as any).is_split_up ? 'split-up' : band.status),
               lineup: (isGorgasm && isStaleGorgasmLineup(effectiveLineup)) ? GORGASM_OFFICIAL_LINEUP : effectiveLineup,
               discography: (liveReleases && liveReleases.length > 0) ? deduplicateDiscography([...initialAlbums, ...liveReleases], bandName) : band.discography
@@ -706,8 +781,8 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     setCountry('USA');
     setRecordLabel('');
     setBio('Not written yet.');
-    setAvatarUrl('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400');
-    setCoverUrl('https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200');
+    setAvatarUrl('');
+    setCoverUrl('');
     setSpotifyUrl('');
     setBandcampUrl('');
     setMetalArchivesUrl('');
@@ -955,7 +1030,11 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         ? generateUUID()
         : (selectedBand?.id ? ensureUUID(selectedBand.id) : generateUUID());
 
-      const finalLineupToSave = deduplicateLineup(finalLineup);
+      const rawLineupToSave = (finalLineup.length === 0 && !lineupDirtyRef.current && selectedBand?.lineup)
+        ? parseBandLineup(selectedBand.lineup)
+        : finalLineup;
+      const finalLineupToSave = deduplicateLineup(rawLineupToSave);
+      const isExplicitLineupClear = Boolean(lineupDirtyRef.current && finalLineupToSave.length === 0);
       const finalAlbumsToSave = finalAlbums;
 
       const bandPayload: Partial<CommunityBandRecord> & { band_name: string } = {
@@ -997,7 +1076,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
       const savedRecord = communityBandManager.upsertCommunityBand(bandPayload, {
         isNew: isCreatingNew,
         skipRemoteSync: true,
-        allowEmptyLineup: true
+        allowEmptyLineup: isExplicitLineupClear
       });
 
       // Cache or clear lineup in localStorage for immediate cross-portal availability
@@ -1016,8 +1095,8 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         if (finalLineupToSave.length > 0) {
           const serializedLineup = JSON.stringify(finalLineupToSave);
           lineupKeys.forEach(k => localStorage.setItem(k, serializedLineup));
-        } else {
-          lineupKeys.forEach(k => localStorage.removeItem(k));
+        } else if (isExplicitLineupClear) {
+          lineupKeys.forEach(k => localStorage.setItem(k, '[]'));
         }
         window.dispatchEvent(new CustomEvent('nexus_band_lineup_updated', {
           detail: { bandId: savedRecord?.id || bandId, lineup: finalLineupToSave }
@@ -1044,7 +1123,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         };
         const syncRes = await communityBandManager.syncToSupabaseTables(syncPayload, {
           isNew: isCreatingNew,
-          allowEmptyLineup: true
+          allowEmptyLineup: isExplicitLineupClear
         });
         if (!syncRes.success && syncRes.error) {
           console.error('[CommunityBandCuratorModal] Remote Supabase sync error:', syncRes.error);
@@ -1206,28 +1285,34 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
                 <button
                   type="button"
+                  disabled={isSyncingCloud}
                   onClick={async () => {
-                    triggerNotification?.('🔄 Fetching latest community bands from Supabase cloud...');
+                    if (isSyncingCloud) return;
+                    setIsSyncingCloud(true);
+                    setFailedLogoKeys({});
+                    triggerNotification?.('🔄 Syncing all community bands from Supabase cloud...');
                     try {
-                      const remote = await communityBandManager.fetchFromSupabase();
-                      const freshList = communityBandManager.getAll();
-                      setBandsList(freshList);
+                      const remote = await communityBandManager.fetchFromSupabase({ authoritative: true });
+                      const nextList = remote && remote.length > 0 ? remote : communityBandManager.getAll();
+                      setBandsList(nextList);
                       if (remote && remote.length > 0) {
                         triggerNotification?.(`✅ Synced ${remote.length} community bands from Supabase cloud!`);
                       } else {
-                        triggerNotification?.(`✅ Loaded ${freshList.length} community bands from local archives.`);
+                        triggerNotification?.(`✅ Loaded ${nextList.length} community bands from local archives.`);
                       }
                     } catch (err: any) {
                       const fallbackList = communityBandManager.getAll();
                       setBandsList(fallbackList);
                       triggerNotification?.(`✅ Loaded ${fallbackList.length} community bands.`);
+                    } finally {
+                      setIsSyncingCloud(false);
                     }
                   }}
-                  className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-sky-400 hover:text-sky-300 border border-sky-500/30 font-mono font-bold text-xs uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow active:scale-95"
+                  className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-sky-400 hover:text-sky-300 border border-sky-500/30 font-mono font-bold text-xs uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow active:scale-95 disabled:opacity-50"
                   title="Fetch latest updates from Supabase cloud"
                 >
-                  <RefreshCw className="w-4 h-4 text-sky-400" />
-                  <span>Sync Cloud</span>
+                  <RefreshCw className={`w-4 h-4 text-sky-400 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingCloud ? 'Syncing...' : 'Sync Cloud'}</span>
                 </button>
 
                 <button
@@ -1262,16 +1347,38 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                   className="w-full text-left p-3.5 sm:p-4 rounded-xl border bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/50 hover:bg-zinc-900 transition-all flex items-center gap-3.5 cursor-pointer shadow-sm group"
                 >
                   {(() => {
+                    const cardKey = String(band.id || band.name || bIdx);
                     const isGorg = isGorgasmBand(band.id || band.name || (band as any).band_name, (band as any).custom_slug);
-                    const bestAvatar = pickBestBandImage(
-                      band.avatar_url,
-                      band.logo_url,
-                      (band as any).avatar,
-                      (band as any).image,
-                      isGorg ? GORGASM_OFFICIAL_LOGO : ''
-                    ) ||
-                      band.avatar_url || band.logo_url || (band as any).avatar || (band as any).image ||
-                      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=120';
+                    const bestAvatar = resolveCanonicalBandLogo(band) || (isGorg ? GORGASM_OFFICIAL_LOGO : '');
+                    const showMonogram = !bestAvatar || Boolean(failedLogoKeys[cardKey]);
+                    const initials = (band.name || (band as any).band_name || 'BD')
+                      .trim()
+                      .split(/\s+/)
+                      .slice(0, 2)
+                      .map((w: string) => w[0] || '')
+                      .join('')
+                      .toUpperCase() || 'BD';
+
+                    if (showMonogram) {
+                      return (
+                        <div
+                          aria-label={`${band.name} monogram placeholder`}
+                          className="w-14 h-14 rounded-xl bg-zinc-950 border border-zinc-700/80 shrink-0 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform"
+                        >
+                          <svg
+                            viewBox="0 0 56 56"
+                            className="absolute inset-0 w-full h-full pointer-events-none opacity-45"
+                            aria-hidden="true"
+                          >
+                            <circle cx="28" cy="28" r="22" fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="4 3" />
+                          </svg>
+                          <span className="relative z-10 font-mono font-black text-sm tracking-wider text-zinc-200">
+                            {initials}
+                          </span>
+                        </div>
+                      );
+                    }
+
                     return (
                       <img
                         src={bestAvatar}
@@ -1281,8 +1388,8 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           const imgEl = e.currentTarget as HTMLImageElement;
                           if (isGorg && imgEl.src !== GORGASM_OFFICIAL_LOGO) {
                             imgEl.src = GORGASM_OFFICIAL_LOGO;
-                          } else if (!imgEl.src.includes('unsplash')) {
-                            imgEl.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=120';
+                          } else {
+                            setFailedLogoKeys(prev => (prev[cardKey] ? prev : { ...prev, [cardKey]: true }));
                           }
                         }}
                       />
@@ -2144,10 +2251,62 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                     </div>
 
                     {/* Tracklist Builder */}
-                    <div className="pt-2 border-t border-zinc-850 space-y-2">
-                      <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase flex items-center justify-between">
-                        <span>Tracklist ({releaseTracks.length} tracks)</span>
-                      </label>
+                    <div
+                      onPaste={(e) => {
+                        const items = e.clipboardData?.items;
+                        if (!items) return;
+                        const files: File[] = [];
+                        for (let i = 0; i < items.length; i++) {
+                          if (items[i].type.startsWith('image/')) {
+                            const f = items[i].getAsFile();
+                            if (f) files.push(f);
+                          }
+                        }
+                        if (files.length > 0) {
+                          e.preventDefault();
+                          handleScanReleaseScreenshot(files);
+                        }
+                      }}
+                      className="pt-2 border-t border-zinc-850 space-y-2"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase flex items-center gap-1.5">
+                          <span>Tracklist ({releaseTracks.length} tracks)</span>
+                        </label>
+                        <label
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-mono font-bold uppercase cursor-pointer transition-colors ${
+                            isScanningTracklistImg
+                              ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                              : 'bg-red-600/15 hover:bg-red-600/25 border-red-500/30 text-red-300'
+                          }`}
+                          title="Upload or paste (Ctrl+V) a screenshot of a Metal-Archives tracklist to auto-fill all songs and album info"
+                        >
+                          {isScanningTracklistImg ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              <span>Scanning Screenshot...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Camera className="w-3 h-3" />
+                              <span>Scan Screenshot to Fill Tracklist</span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={isScanningTracklistImg}
+                            className="sr-only"
+                            onChange={(e) => {
+                              if (e.target.files?.length) {
+                                handleScanReleaseScreenshot(e.target.files);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
 
                       {/* Song Title Input Full Width */}
                       <div className="space-y-2 bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-850">
@@ -2530,10 +2689,36 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         <MetalArchivesImportModal
           isOpen={showImporterModal}
           onClose={() => setShowImporterModal(false)}
-          bandId={selectedBand?.id || 'band-1'}
+          bandId={selectedBand?.id ? ensureUUID(selectedBand.id) : (name.trim() ? ensureUUID(name.trim().toLowerCase()) : 'band-1')}
           bandName={name}
-          onImportSuccess={(count) => {
+          onImportSuccess={(count, importedReleases) => {
             setShowImporterModal(false);
+            if (importedReleases && importedReleases.length > 0) {
+              setAlbums((prev) => {
+                const merged = [...prev];
+                for (const nr of importedReleases) {
+                  const normTitle = (nr.title || '').toLowerCase().trim();
+                  const existingIdx = merged.findIndex(
+                    (d) => (d.title || '').toLowerCase().trim() === normTitle || (d.id && d.id === nr.id)
+                  );
+                  if (existingIdx >= 0) {
+                    merged[existingIdx] = {
+                      ...merged[existingIdx],
+                      ...nr,
+                      tracks:
+                        nr.tracks && nr.tracks.length > 0 && nr.tracks.length >= (merged[existingIdx].tracks?.length || 0)
+                          ? nr.tracks
+                          : merged[existingIdx].tracks
+                    };
+                  } else {
+                    merged.push(nr);
+                  }
+                }
+                return deduplicateDiscography(merged, name || selectedBand?.id).sort(
+                  (a, b) => parseInt(b.year || '0', 10) - parseInt(a.year || '0', 10)
+                );
+              });
+            }
             triggerNotification?.(`⚡ Successfully imported ${count} releases into catalog!`);
           }}
         />

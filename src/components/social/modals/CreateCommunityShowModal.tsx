@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { compressImageInSocialFeed } from '../../../utils/socialFeedUtils';
 import { showsStore, venuesStore } from '../../../utils/indexedDB';
-import { getSupabase, sanitizeShowForDb, generateUUID, ensureUUID, uploadBase64ToStorage } from '../../../supabase';
+import { generateUUID, ensureUUID, uploadBase64ToStorage, syncCommunityShowToCloud } from '../../../supabase';
 
 export interface CreateCommunityShowModalProps {
   isOpen: boolean;
@@ -316,7 +316,10 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       try {
         const raw = reader.result as string;
         const compressed = await compressImageInSocialFeed(raw, 1080, 1080, 0.8);
-        const uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
+        let uploadedUrl = await uploadBase64ToStorage(compressed, 'feed_media', 'community_show', 'flyer');
+        if (!uploadedUrl || uploadedUrl.startsWith('data:')) {
+          uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
+        }
         if (uploadedUrl && !uploadedUrl.startsWith('data:')) {
           onSuccess(uploadedUrl);
         } else {
@@ -477,17 +480,6 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       created_at: editingShow?.created_at || new Date().toISOString()
     };
 
-    // Also sync to Supabase directly
-    try {
-      const supabase = getSupabase();
-      if (supabase) {
-        const sanitized = sanitizeShowForDb(showPayload);
-        await supabase.from('shows').upsert([sanitized]);
-      }
-    } catch (err) {
-      console.warn('Direct show sync notice:', err);
-    }
-
     onSubmit(showPayload);
   };
 
@@ -560,7 +552,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
         const showPayload: any = {
           ...(existingShow || {}),
           id: showId,
-          creator_id: existingShow?.creator_id || 'community_curator',
+          creator_id: existingShow?.creator_id,
           name: finalName,
           show_name: finalName,
           headliner: headlinerVal,
@@ -593,19 +585,24 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
           updated_at: new Date().toISOString()
         };
 
-        // 1. Save / Update in local IndexedDB store
+        // 1. Save / Update in local IndexedDB & localStorage extended cache
         await showsStore.setItem(showId, showPayload);
-
-        // 2. Sync to Supabase if connected
         try {
-          const supabase = getSupabase();
-          if (supabase) {
-            const dbSanitized = sanitizeShowForDb(showPayload);
-            await supabase.from('shows').upsert([dbSanitized]);
+          const rawExt = localStorage.getItem('nexus_core_shows_extended');
+          const extMap = rawExt ? JSON.parse(rawExt) : {};
+          extMap[showId] = { ...showPayload, _pendingCloudSync: true };
+          localStorage.setItem('nexus_core_shows_extended', JSON.stringify(extMap));
+
+          const rawCreated = localStorage.getItem('nexus_created_show_ids');
+          const createdList: string[] = rawCreated ? JSON.parse(rawCreated) : [];
+          if (!createdList.includes(showId)) {
+            createdList.push(showId);
+            localStorage.setItem('nexus_created_show_ids', JSON.stringify(createdList));
           }
-        } catch (sbErr) {
-          console.warn('Supabase tour show sync notice:', sbErr);
-        }
+        } catch (_) {}
+
+        // 2. Authoritative session-safe & RLS-compliant Supabase sync (queues offline if unreachable)
+        await syncCommunityShowToCloud(showPayload);
 
         createdCount++;
       }
@@ -614,7 +611,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       window.dispatchEvent(new CustomEvent('COMMUNITY_SHOWS_UPDATED'));
       triggerNotification?.(`🎉 Successfully created ${createdCount} tour show events! Each stop now has its own event page you can edit anytime.`);
       
-      // Also invoke parent onSubmit with first show payload so state refreshes smoothly
+      // Also invoke parent onSubmit with batch marker so state refreshes cleanly
       if (tourStops.length > 0) {
         onSubmit({
           id: 'sh_batch_completed',

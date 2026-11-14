@@ -20,6 +20,11 @@ import {
   resolveEffectiveCover,
 } from '../../utils/bandProfileUtils';
 import { isMiguelNameOrProfile } from './utils/profileUtils';
+import {
+  hasScenePioneerBadge,
+  SCENE_PIONEER_BADGE_LABEL,
+  ONBOARDING_STATE_CHANGED_EVENT,
+} from '../OnboardingChecklist';
 
 interface ProfileHubCardProps {
   activeTab: string;
@@ -60,6 +65,10 @@ export const ProfileHubCard: React.FC<ProfileHubCardProps> = ({
   const [liveCover, setLiveCover] = React.useState<string | null>(null);
   const [avatarError, setAvatarError] = React.useState(false);
 
+  const [pioneerUnlocked, setPioneerUnlocked] = React.useState<boolean>(() =>
+    hasScenePioneerBadge(userProfile)
+  );
+
   React.useEffect(() => {
     const handleAvatarUpdated = (e: any) => {
       const newUrl = e.detail?.avatarUrl || e.detail?.avatar_url || e.detail?.avatar;
@@ -74,15 +83,21 @@ export const ProfileHubCard: React.FC<ProfileHubCardProps> = ({
         setLiveCover(newUrl);
       }
     };
+    const handleChecklistUpdated = () => {
+      setPioneerUnlocked(hasScenePioneerBadge(userProfile));
+    };
 
+    handleChecklistUpdated();
     window.addEventListener('nexus_avatar_updated', handleAvatarUpdated);
     window.addEventListener('nexus_cover_updated', handleCoverUpdated);
+    window.addEventListener(ONBOARDING_STATE_CHANGED_EVENT, handleChecklistUpdated);
 
     return () => {
       window.removeEventListener('nexus_avatar_updated', handleAvatarUpdated);
       window.removeEventListener('nexus_cover_updated', handleCoverUpdated);
+      window.removeEventListener(ONBOARDING_STATE_CHANGED_EVENT, handleChecklistUpdated);
     };
-  }, []);
+  }, [userProfile]);
 
   const baseAvatar = resolveEffectiveAvatar(portalRole, activeBand, userProfile, profileAvatarUrl);
   const baseCover = resolveEffectiveCover(portalRole, activeBand, userProfile, profileCoverUrl);
@@ -402,8 +417,20 @@ export const ProfileHubCard: React.FC<ProfileHubCardProps> = ({
           isPersonal: true,
           isBandProfile: false,
           isYou: true,
-          badges: userProfile?.badges || (userProfile?.account_type === 'fan_only' ? ['🤘 Fan'] : ['💼 Industry Pro']),
-          customBadges: userProfile?.customBadges || userProfile?.badges || [],
+          badges: (() => {
+            const base = userProfile?.badges || (userProfile?.account_type === 'fan_only' ? ['🤘 Fan'] : ['💼 Industry Pro']);
+            if (pioneerUnlocked && !base.some((b: string) => String(b).toLowerCase().includes('scene pioneer'))) {
+              return [...base, `🏆 ${SCENE_PIONEER_BADGE_LABEL}`];
+            }
+            return base;
+          })(),
+          customBadges: (() => {
+            const base = userProfile?.customBadges || userProfile?.badges || [];
+            if (pioneerUnlocked && !base.some((b: string) => String(b).toLowerCase().includes('scene pioneer'))) {
+              return [...base, `🏆 ${SCENE_PIONEER_BADGE_LABEL}`];
+            }
+            return base;
+          })(),
           bio: profileBlurb || userProfile?.bio || userProfile?.blurb || 'User profile on the Nexus network.',
         },
       })
@@ -501,8 +528,16 @@ export const ProfileHubCard: React.FC<ProfileHubCardProps> = ({
                   } animate-pulse`}
                 />
               </HeaderMarqueeText>
-              <p className="text-[10px] sm:text-[11px] text-zinc-300/90 font-mono tracking-wider uppercase truncate leading-tight mt-0.5">
-                {secondaryText}
+              <p className="text-[10px] sm:text-[11px] text-zinc-300/90 font-mono tracking-wider uppercase truncate leading-tight mt-0.5 flex items-center gap-1.5">
+                <span className="truncate">{secondaryText}</span>
+                {pioneerUnlocked && (
+                  <span
+                    data-testid="scene-pioneer-badge"
+                    className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/40 shrink-0"
+                  >
+                    🏆 {SCENE_PIONEER_BADGE_LABEL}
+                  </span>
+                )}
               </p>
             </div>
           </div>

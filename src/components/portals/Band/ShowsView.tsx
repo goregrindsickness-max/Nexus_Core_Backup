@@ -58,7 +58,7 @@ export { getShowWeatherAndWarnings };
 import { Show, Sale } from '../../../types';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { getSupabase, sanitizeShowForDb, ensureValidSupabaseAuthSession } from '../../../supabase';
+import { getSupabase, sanitizeShowForDb, ensureValidSupabaseAuthSession, executeWithSchemaResilience, enqueueOfflineAction, generateUUID, ensureUUID } from '../../../supabase';
 import { requestLocationPermission } from '../../../services/locationService';
 import ShowFormModal from './ShowFormModal';
 import ShowExpandedView from './ShowExpandedView';
@@ -69,6 +69,7 @@ import PostShowReview from './PostShowReview';
 import { tourPackageManager, TourPackageRecord, TourPackageStop, isCommunityTourPackage } from '../../../lib/tourPackageManager';
 import { saveVenueToBlackBook, isVenueInBlackBook } from '../../../services/venueSearchService';
 import { resolveLocationCoordinates, getProceduralLatLng } from '../../../lib/geoResolution';
+import { authFetch, getSupabaseAccessToken } from '../../../utils/apiConfig';
 
 const concertBg = "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/High%20energy%20concert%202.png";
 const darkMapAsset = "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Dark%20World%20Map.png";
@@ -1411,25 +1412,45 @@ export default function ShowsView({
     const supabase = getSupabase();
     if (supabase) {
       const session = await ensureValidSupabaseAuthSession(supabase);
+      const showForDb: any = {
+        ...newShow,
+        id: ensureUUID(newShow.id),
+        creator_id: session?.user?.id || ensureUUID(newShow.band_id || activeBandId || '00000000-0000-4000-a000-000000000000'),
+      };
+      const prunedDbShow = sanitizeShowForDb(showForDb);
+
       if (!session) {
-        addLog(`Database session invalid. Saved show cached locally.`);
+        enqueueOfflineAction({
+          id: generateUUID(),
+          table: 'shows',
+          action: payload.id ? 'update' : 'upsert',
+          payload: prunedDbShow,
+          eqFilters: payload.id ? [{ column: 'id', value: showForDb.id }] : [],
+          timestamp: new Date().toISOString(),
+        });
+        addLog(`Database session invalid. Show cached locally & queued for cloud sync.`);
         setIsFormModalOpen(false);
         setEditingFormShow(null);
         return;
       }
-      const prunedDbShow = sanitizeShowForDb(newShow);
 
-      let dbErr;
-      if (payload.id) {
-        const { error } = await supabase.from('shows').update(prunedDbShow).eq('id', payload.id);
-        dbErr = error;
-      } else {
-        const { error } = await supabase.from('shows').insert([prunedDbShow]);
-        dbErr = error;
-      }
+      const { error: dbErr } = await executeWithSchemaResilience(async (dbPayload) => {
+        if (payload.id) {
+          return await supabase.from('shows').update(dbPayload).eq('id', dbPayload.id || showForDb.id);
+        }
+        return await supabase.from('shows').upsert([dbPayload]);
+      }, prunedDbShow);
 
       if (dbErr) {
-        addLog(`Database sync issue: ${dbErr.message}`);
+        enqueueOfflineAction({
+          id: generateUUID(),
+          table: 'shows',
+          action: payload.id ? 'update' : 'upsert',
+          payload: prunedDbShow,
+          eqFilters: payload.id ? [{ column: 'id', value: showForDb.id }] : [],
+          timestamp: new Date().toISOString(),
+        });
+        addLog(`Database sync issue (queued for retry): ${dbErr.message}`);
       } else {
         addLog(`Show coordinates successfully synchronized to live cloud.`);
       }
@@ -4450,7 +4471,27 @@ const SettlementTerminal: React.FC<SettlementTerminalProps> = ({
     };
 
     try {
-      if (supabase) {
+      let settledViaServer = false;
+      try {
+        const accessToken = await getSupabaseAccessToken();
+        if (accessToken) {
+          const res = await authFetch('/api/shows/settlements', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...settlementPayload,
+              show_title: show.name || show.headliner || 'Live Show',
+              band_id: show.band_id,
+              finalize: true,
+            }),
+          });
+          if (res.ok) {
+            settledViaServer = true;
+          }
+        }
+      } catch (_) {}
+
+      if (!settledViaServer && supabase) {
         const { error: sError } = await supabase.from('show_settlements_v1').insert([settlementPayload]);
         if (sError) {
           console.warn('[Postgres inserts skipped/not found]', sError.message);
@@ -4461,7 +4502,7 @@ const SettlementTerminal: React.FC<SettlementTerminalProps> = ({
       const updatedShow = { ...show, status: 'Closed' as const, revenue: bandNetPayout };
       setShows(prev => prev.map(s => s.id === show.id ? updatedShow : s));
       
-      if (supabase) {
+      if (!settledViaServer && supabase) {
         await supabase
           .from('shows')
           .update({ status: 'Closed', revenue: bandNetPayout })

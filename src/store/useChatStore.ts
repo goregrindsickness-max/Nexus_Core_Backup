@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { getSupabase } from '../supabase';
 import { markChatAsRead, handleMarkAllAsRead } from '../lib/chat';
 import { pushManager } from '../lib/pushNotifications';
+import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
 
 
 /**
@@ -100,7 +101,53 @@ export const sendDirectMessage = async (
 
   const trimmed = text.trim();
 
-  // Raw, direct insert to Supabase
+  let senderName = options?.senderName || '';
+  if (!senderName && typeof localStorage !== 'undefined') {
+    try {
+      const savedProf = localStorage.getItem('nexus_core_user_profile') || localStorage.getItem('nexus_user');
+      if (savedProf) {
+        const parsed = JSON.parse(savedProf);
+        senderName = parsed?.full_name || parsed?.name || parsed?.console_handle || '';
+      }
+    } catch (_) {}
+  }
+
+  const recipientEmail = options?.recipientEmail || (recipientId.includes('@') ? recipientId : undefined);
+
+  // Prefer server-side DM endpoint when authenticated so FCM + Web Push fires reliably
+  // regardless of recipient socket/app state or client RBAC restrictions.
+  try {
+    const accessToken = await getSupabaseAccessToken();
+    if (accessToken && senderId !== recipientId) {
+      const apiRes = await authFetch('/api/social/dm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId,
+          recipientEmail,
+          message: trimmed,
+          senderId,
+          senderName: senderName || undefined,
+        }),
+      });
+      if (apiRes.ok) {
+        const apiJson = await apiRes.json().catch(() => null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
+        }
+        return {
+          success: true,
+          data: apiJson?.message || null,
+          error: null,
+          serverDispatched: true,
+        };
+      }
+    }
+  } catch (apiErr) {
+    console.warn('[Direct Chat] Server DM route fallback to direct Supabase:', apiErr);
+  }
+
+  // Raw, direct insert to Supabase fallback (offline/guest mode)
   const { data: chatData, error: chatError } = await supabase
     .from('nexus_chats')
     .insert([{
@@ -141,7 +188,6 @@ export const sendDirectMessage = async (
   }
 
   if (!options?.skipPush && senderId !== recipientId) {
-    let senderName = options?.senderName || '';
     let senderEmail = '';
     if (typeof localStorage !== 'undefined') {
       try {
@@ -154,7 +200,6 @@ export const sendDirectMessage = async (
       } catch (_) {}
     }
     const displaySender = senderName || 'Nexus Contact';
-    const recipientEmail = options?.recipientEmail || (recipientId.includes('@') ? recipientId : undefined);
     pushManager.sendPushToServer({
       userId: recipientId,
       userEmail: recipientEmail,
@@ -177,7 +222,7 @@ export const sendDirectMessage = async (
     window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
   }
 
-  return { success: !chatError, data: chatData, error: chatError };
+  return { success: !chatError, data: chatData, error: chatError, serverDispatched: false };
 };
 
 /**

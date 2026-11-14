@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { createMonogramPlaceholderSvg } from '../utils/imageFallbacks';
+import { resolveCanonicalBandLogo } from '../lib/communityBands';
 
-export const BAND_CARD_SELECT_COLUMNS =
-  'id, name, band_name, category, avatar_url, logo_url, city, state, state_province, country, micro_genres, custom_slug, verification_status, is_verified, followers_count, status, is_split_up';
+export const BAND_CARD_SELECT_COLUMNS = '*';
 
 export interface BandCardRecord {
   id: string;
@@ -30,9 +30,8 @@ export interface UseBandsOptions {
 
 export function mapBandRowToCard(row: any): BandCardRecord {
   const name = String(row?.band_name || row?.name || 'Unnamed Band').trim();
-  const rawAvatar = row?.avatar_url ?? row?.logo_url ?? null;
-  const avatarUrl =
-    typeof rawAvatar === 'string' && rawAvatar.trim().length > 0 ? rawAvatar.trim() : null;
+  const canonicalLogo = resolveCanonicalBandLogo(row);
+  const avatarUrl = canonicalLogo.length > 0 ? canonicalLogo : null;
   const city = String(row?.city || '').trim();
   const state = String(row?.state || row?.state_province || '').trim();
   const genre = Array.isArray(row?.micro_genres)
@@ -61,20 +60,20 @@ export async function queryPaginatedBands(params: {
   page?: number;
   pageSize?: number;
 }): Promise<{ bands: BandCardRecord[]; hasMore: boolean }> {
-  const { search = '', page = 0, pageSize = 20 } = params;
+  const { search = '', page = 0, pageSize = 50 } = params;
   const from = Math.max(0, page * pageSize);
   const to = from + pageSize - 1;
-  const cleanSearch = search.trim().replace(/[%_]/g, '');
+  const cleanSearch = search.trim().replace(/[,()%_]/g, '');
 
   let query = supabase
     .from('bands')
     .select(BAND_CARD_SELECT_COLUMNS)
-    .order('created_at', { ascending: false })
+    .order('band_name', { ascending: true })
     .range(from, to);
 
   if (cleanSearch.length > 0) {
     query = query.or(
-      `band_name.ilike.%${cleanSearch}%,name.ilike.%${cleanSearch}%,city.ilike.%${cleanSearch}%,state_province.ilike.%${cleanSearch}%`
+      `band_name.ilike.%${cleanSearch}%,city.ilike.%${cleanSearch}%,state_province.ilike.%${cleanSearch}%`
     );
   }
 

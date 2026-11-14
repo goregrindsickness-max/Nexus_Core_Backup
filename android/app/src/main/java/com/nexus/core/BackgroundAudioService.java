@@ -10,6 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
@@ -19,11 +21,19 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.util.Base64;
 import android.util.Log;
 import androidx.core.content.ContextCompat;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class BackgroundAudioService extends Service {
     private static final String TAG = "NexusBackgroundAudio";
@@ -32,6 +42,7 @@ public class BackgroundAudioService extends Service {
 
     public static final String ACTION_START = "com.nexus.core.action.START_AUDIO";
     public static final String ACTION_UPDATE = "com.nexus.core.action.UPDATE_META";
+    public static final String ACTION_UPDATE_POSITION = "com.nexus.core.action.UPDATE_POSITION";
     public static final String ACTION_PAUSE = "com.nexus.core.action.PAUSE_AUDIO";
     public static final String ACTION_STOP = "com.nexus.core.action.STOP_AUDIO";
     public static final String ACTION_NEXT = "com.nexus.core.action.NEXT_TRACK";
@@ -40,6 +51,9 @@ public class BackgroundAudioService extends Service {
     public static final String EXTRA_TRACK_TITLE = "extra_track_title";
     public static final String EXTRA_ARTIST = "extra_artist";
     public static final String EXTRA_GENRE = "extra_genre";
+    public static final String EXTRA_ARTWORK_URL = "extra_artwork_url";
+    public static final String EXTRA_POSITION_MS = "extra_position_ms";
+    public static final String EXTRA_DURATION_MS = "extra_duration_ms";
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
@@ -49,7 +63,15 @@ public class BackgroundAudioService extends Service {
     private String currentTitle = "Scene Radio";
     private String currentArtist = "Nexus Underground Radio";
     private String currentGenre = "Scene Radio";
+    private String currentArtworkUrl = "";
+    private Bitmap currentArtworkBitmap = null;
+    private long currentPositionMs = PlaybackState.PLAYBACK_POSITION_UNKNOWN;
+    private long currentDurationMs = -1L;
     private boolean isCurrentlyPlaying = false;
+
+    private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile String pendingArtworkUrl = "";
 
     private final BroadcastReceiver becomingNoisyReceiver = new BroadcastReceiver() {
         @Override
@@ -148,6 +170,17 @@ public class BackgroundAudioService extends Service {
                 }
 
                 @Override
+                public void onSeekTo(long pos) {
+                    super.onSeekTo(pos);
+                    currentPositionMs = Math.max(0L, pos);
+                    updateMediaSession(currentTitle, currentArtist, currentGenre, isCurrentlyPlaying);
+                    Intent seekIntent = new Intent("com.nexus.core.AUDIO_CONTROL_SEEK");
+                    seekIntent.putExtra("position_ms", pos);
+                    seekIntent.setPackage(getPackageName());
+                    sendBroadcast(seekIntent);
+                }
+
+                @Override
                 public void onStop() {
                     super.onStop();
                     isCurrentlyPlaying = false;
@@ -167,6 +200,106 @@ public class BackgroundAudioService extends Service {
         }
     }
 
+    private void loadArtworkAsync(final String artworkUrl) {
+        if (artworkUrl == null || artworkUrl.trim().isEmpty()) {
+            return;
+        }
+        final String cleanUrl = artworkUrl.trim();
+        if (cleanUrl.equals(currentArtworkUrl) && currentArtworkBitmap != null) {
+            return;
+        }
+        if (cleanUrl.equals(pendingArtworkUrl)) {
+            return;
+        }
+
+        currentArtworkUrl = cleanUrl;
+        pendingArtworkUrl = cleanUrl;
+        currentArtworkBitmap = null;
+
+        artworkExecutor.execute(() -> {
+            Bitmap loaded = null;
+            try {
+                if (cleanUrl.startsWith("data:image/")) {
+                    int commaIdx = cleanUrl.indexOf(',');
+                    if (commaIdx > 0) {
+                        byte[] decoded = Base64.decode(cleanUrl.substring(commaIdx + 1), Base64.DEFAULT);
+                        loaded = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
+                    }
+                } else if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
+                    // For YouTube thumbnails, prefer crisp 16:9 maxresdefault or mqdefault/hqdefault so One UI shows edge-to-edge art
+                    if (cleanUrl.contains("/hqdefault.jpg")) {
+                        loaded = fetchAndScaleBitmap(cleanUrl.replace("/hqdefault.jpg", "/maxresdefault.jpg"));
+                        if (loaded == null) {
+                            loaded = fetchAndScaleBitmap(cleanUrl.replace("/hqdefault.jpg", "/mqdefault.jpg"));
+                        }
+                    }
+                    if (loaded == null) {
+                        loaded = fetchAndScaleBitmap(cleanUrl);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Artwork download error: " + e.getMessage());
+            }
+
+            final Bitmap finalBitmap = loaded;
+            mainHandler.post(() -> {
+                if (!cleanUrl.equals(currentArtworkUrl)) {
+                    return;
+                }
+                pendingArtworkUrl = "";
+                if (finalBitmap != null) {
+                    currentArtworkBitmap = finalBitmap;
+                    updateMediaSession(currentTitle, currentArtist, currentGenre, isCurrentlyPlaying);
+                    startForegroundWithNotification(currentTitle, currentArtist, isCurrentlyPlaying);
+                }
+            });
+        });
+    }
+
+    private Bitmap fetchAndScaleBitmap(String targetUrl) {
+        HttpURLConnection conn = null;
+        InputStream stream = null;
+        try {
+            URL url = new URL(targetUrl);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(6000);
+            conn.setInstanceFollowRedirects(true);
+            conn.connect();
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                return null;
+            }
+            stream = conn.getInputStream();
+            Bitmap raw = BitmapFactory.decodeStream(stream);
+            if (raw == null) return null;
+
+            // Keep bitmap bounded cleanly (<= 640px max side) to stay lightweight for MediaMetadata Binder IPC
+            int width = raw.getWidth();
+            int height = raw.getHeight();
+            int maxDim = Math.max(width, height);
+            if (maxDim > 640) {
+                float scale = 640f / (float) maxDim;
+                int targetW = Math.max(1, Math.round(width * scale));
+                int targetH = Math.max(1, Math.round(height * scale));
+                Bitmap scaled = Bitmap.createScaledBitmap(raw, targetW, targetH, true);
+                if (scaled != raw) {
+                    raw.recycle();
+                }
+                return scaled;
+            }
+            return raw;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (stream != null) {
+                try { stream.close(); } catch (Exception ignored) {}
+            }
+            if (conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
     private void updateMediaSession(String title, String artist, String genre, boolean isPlaying) {
         if (mediaSession == null) return;
         try {
@@ -174,6 +307,19 @@ public class BackgroundAudioService extends Service {
                     .putString(MediaMetadata.METADATA_KEY_TITLE, title != null ? title : "Scene Radio")
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, artist != null ? artist : "Nexus Scene Radio")
                     .putString(MediaMetadata.METADATA_KEY_ALBUM, genre != null && !genre.isEmpty() ? "Scene Radio • " + genre : "Scene Radio");
+
+            if (currentArtworkUrl != null && !currentArtworkUrl.isEmpty()) {
+                metaBuilder.putString(MediaMetadata.METADATA_KEY_ART_URI, currentArtworkUrl);
+                metaBuilder.putString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI, currentArtworkUrl);
+            }
+            if (currentArtworkBitmap != null && !currentArtworkBitmap.isRecycled()) {
+                metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, currentArtworkBitmap);
+                metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, currentArtworkBitmap);
+                metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, currentArtworkBitmap);
+            }
+            if (currentDurationMs > 0) {
+                metaBuilder.putLong(MediaMetadata.METADATA_KEY_DURATION, currentDurationMs);
+            }
             mediaSession.setMetadata(metaBuilder.build());
 
             long actions = PlaybackState.ACTION_PLAY
@@ -182,11 +328,15 @@ public class BackgroundAudioService extends Service {
                     | PlaybackState.ACTION_SKIP_TO_NEXT
                     | PlaybackState.ACTION_SKIP_TO_PREVIOUS
                     | PlaybackState.ACTION_STOP;
+            if (currentDurationMs > 0) {
+                actions |= PlaybackState.ACTION_SEEK_TO;
+            }
 
+            long pos = currentPositionMs >= 0 ? currentPositionMs : PlaybackState.PLAYBACK_POSITION_UNKNOWN;
             int state = isPlaying ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED;
             PlaybackState playbackState = new PlaybackState.Builder()
                     .setActions(actions)
-                    .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, isPlaying ? 1.0f : 0.0f, SystemClock.elapsedRealtime())
+                    .setState(state, pos, isPlaying ? 1.0f : 0.0f, SystemClock.elapsedRealtime())
                     .build();
 
             mediaSession.setPlaybackState(playbackState);
@@ -269,9 +419,25 @@ public class BackgroundAudioService extends Service {
                 String title = intent.getStringExtra(EXTRA_TRACK_TITLE);
                 String artist = intent.getStringExtra(EXTRA_ARTIST);
                 String genre = intent.getStringExtra(EXTRA_GENRE);
+                String artworkUrl = intent.getStringExtra(EXTRA_ARTWORK_URL);
+
+                boolean trackChanged = title != null && !title.isEmpty() && !title.equals(currentTitle);
                 if (title != null && !title.isEmpty()) currentTitle = title;
                 if (artist != null && !artist.isEmpty()) currentArtist = artist;
                 if (genre != null && !genre.isEmpty()) currentGenre = genre;
+                if (trackChanged) {
+                    currentPositionMs = 0L;
+                    currentDurationMs = -1L;
+                }
+                if (intent.hasExtra(EXTRA_POSITION_MS)) {
+                    currentPositionMs = intent.getLongExtra(EXTRA_POSITION_MS, currentPositionMs);
+                }
+                if (intent.hasExtra(EXTRA_DURATION_MS)) {
+                    currentDurationMs = intent.getLongExtra(EXTRA_DURATION_MS, currentDurationMs);
+                }
+                if (artworkUrl != null && !artworkUrl.trim().isEmpty()) {
+                    loadArtworkAsync(artworkUrl);
+                }
                 isCurrentlyPlaying = true;
 
                 acquireWakeLock();
@@ -284,6 +450,14 @@ public class BackgroundAudioService extends Service {
                     resumeIntent.setPackage(getPackageName());
                     sendBroadcast(resumeIntent);
                 }
+            } else if (ACTION_UPDATE_POSITION.equals(action)) {
+                if (intent.hasExtra(EXTRA_POSITION_MS)) {
+                    currentPositionMs = intent.getLongExtra(EXTRA_POSITION_MS, currentPositionMs);
+                }
+                if (intent.hasExtra(EXTRA_DURATION_MS)) {
+                    currentDurationMs = intent.getLongExtra(EXTRA_DURATION_MS, currentDurationMs);
+                }
+                updateMediaSession(currentTitle, currentArtist, currentGenre, isCurrentlyPlaying);
             } else if (ACTION_PAUSE.equals(action)) {
                 isCurrentlyPlaying = false;
                 stopSilentNativeAudioTrack();
@@ -415,6 +589,10 @@ public class BackgroundAudioService extends Service {
                 .setAutoCancel(false)
                 .setVisibility(Notification.VISIBILITY_PUBLIC);
 
+        if (currentArtworkBitmap != null && !currentArtworkBitmap.isRecycled()) {
+            builder.setLargeIcon(currentArtworkBitmap);
+        }
+
         // Action 1: Previous Track
         Intent prevIntent = new Intent(this, BackgroundAudioService.class);
         prevIntent.setAction(ACTION_PREVIOUS);
@@ -528,6 +706,10 @@ public class BackgroundAudioService extends Service {
                 isRegisteredNoisyReceiver = false;
             } catch (Exception ignored) {}
         }
+        try {
+            artworkExecutor.shutdownNow();
+        } catch (Exception ignored) {}
+        currentArtworkBitmap = null;
         super.onDestroy();
     }
 

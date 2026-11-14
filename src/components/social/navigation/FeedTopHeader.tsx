@@ -588,7 +588,7 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
   };
 
   return (
-    <div className="relative z-30 bg-[#030303]/95 backdrop-blur-md border-b border-zinc-900/85 flex flex-col shadow-md">
+    <div className={`relative z-30 bg-[#030303]/95 backdrop-blur-md border-b border-zinc-900/85 flex flex-col shadow-md ${isEmbedded ? '' : 'pt-[env(safe-area-inset-top)]'}`}>
       {/* Top Navbar */}
       <div className={`px-4 py-1.5 min-h-[66px] items-center justify-between relative z-40 ${isEmbedded ? 'hidden' : 'flex'}`}>
         <div className="flex items-center gap-3">
@@ -701,7 +701,7 @@ export const FeedTopHeader: React.FC<FeedTopHeaderProps> = ({
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="fixed top-16 right-4 sm:right-6 w-[310px] max-h-[85vh] overflow-y-auto bg-[#0d0d0f] border border-zinc-800/90 rounded-2xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.95)] p-3 z-[99999] text-left"
+                    className="fixed top-[calc(4rem+env(safe-area-inset-top))] right-4 sm:right-6 w-[310px] max-h-[82dvh] overflow-y-auto bg-[#0d0d0f] border border-zinc-800/90 rounded-2xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.95)] p-3 z-[99999] text-left"
                   >
                     {/* Header */}
                     {(() => {

@@ -5,7 +5,14 @@ import { getSupabase } from '../services/clientService';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { triggerNativeNotification, initAndroidNotificationChannel } from '../services/pushNotificationService';
+import {
+  triggerNativeNotification,
+  initAndroidNotificationChannel,
+  handlePushDeepLink,
+  resolveVapidPublicKey,
+  urlBase64ToUint8Array as sharedUrlBase64ToUint8Array,
+  syncPushRegistrationForUser,
+} from './pushClient';
 import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
 
 export type WorkspaceType = 'industry_pro' | 'fan_only' | 'band' | 'promoter' | 'label' | 'creative' | 'fan';
@@ -278,16 +285,7 @@ export function playPushChime(type: 'critical' | 'normal' | 'fan' = 'normal') {
   }
 }
 
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
+const urlBase64ToUint8Array = sharedUrlBase64ToUint8Array;
 
 export function isIframeEnvironment(): boolean {
   if (typeof window === 'undefined') return false;
@@ -310,7 +308,6 @@ class DevicePushManager {
       this.loadPreferences();
       this.initNativeEnvironment();
       this.initServiceWorker();
-      this.setupWindowListener();
     }
   }
 
@@ -439,28 +436,6 @@ class DevicePushManager {
     }
   }
 
-  private setupWindowListener() {
-    if (typeof window === 'undefined') return;
-    navigator.serviceWorker?.addEventListener('message', (event) => {
-      if (event.data?.type === 'NEXUS_PUSH_NAVIGATE') {
-        const targetTab = event.data.targetTab;
-        if (targetTab) {
-          window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: targetTab }));
-        }
-      }
-      if (event.data?.type === 'NEXUS_OPEN_CHAT') {
-        window.dispatchEvent(
-          new CustomEvent('nexus_open_chat', {
-            detail: {
-              profile_id: event.data.senderId,
-              name: event.data.name,
-              username: event.data.name,
-            },
-          })
-        );
-      }
-    });
-  }
 
   public async subscribeToPushServer(userInfo?: { id?: string; email?: string; sendWelcome?: boolean }): Promise<PushSubscription | null> {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -493,17 +468,8 @@ class DevicePushManager {
         this.registration = reg;
       }
 
-      // 1. Obtain VAPID Public Key from backend API or fallback
-      let publicKey = 'BFtYUwYxD4nggBN6jldwPmQ-rM209n3Cqom0TYLxoksAambfhk5PzDZ-0-FppflHkjW4P6tlvTsOnnl1kVlitiQ';
-      try {
-        const res = await authFetch('/api/push/vapid-public-key');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.publicKey) publicKey = data.publicKey;
-        }
-      } catch (err) {
-        console.warn('[PushManager] VAPID fetch error, using default:', err);
-      }
+      // 1. Obtain VAPID Public Key from VITE_VAPID_PUBLIC_KEY or backend API
+      const publicKey = await resolveVapidPublicKey();
 
       // 2. Subscribe browser to Push Service (and refresh if server VAPID key changed)
       const convertedKey = urlBase64ToUint8Array(publicKey);
@@ -530,8 +496,11 @@ class DevicePushManager {
       }
 
       // 3. Register subscription with Nexus server
+      const subJson = sub.toJSON ? sub.toJSON() : sub;
       const payload = {
-        subscription: sub.toJSON ? sub.toJSON() : sub,
+        platform: 'web' as const,
+        subscription: subJson,
+        web_push_subscription: subJson,
         userId: resolvedId,
         userEmail: resolvedEmail ? resolvedEmail.toLowerCase().trim() : undefined,
         sendWelcome: Boolean(userInfo?.sendWelcome),
@@ -542,7 +511,7 @@ class DevicePushManager {
         return sub;
       }
 
-      await authFetch('/api/push/subscribe', {
+      await authFetch('/api/push/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -558,39 +527,7 @@ class DevicePushManager {
   }
 
   public async ensureUserPushSubscription(userInfo: { id?: string; email?: string }): Promise<void> {
-    if (typeof window === 'undefined') return;
-    try {
-      if (userInfo?.id) localStorage.setItem('nexus_auth_user_id', String(userInfo.id));
-      if (userInfo?.email) localStorage.setItem('nexus_auth_user_email', String(userInfo.email).toLowerCase().trim());
-    } catch (_) {}
-
-    // Native Capacitor FCM token re-sync with authenticated user info
-    const nativeToken = typeof localStorage !== 'undefined' ? localStorage.getItem('nexus_native_push_token') : null;
-    if (nativeToken && (userInfo?.id || userInfo?.email)) {
-      const accessToken = await getSupabaseAccessToken();
-      if (accessToken) {
-        authFetch('/api/push/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            token: nativeToken,
-            platform: 'android',
-            userId: userInfo.id,
-            userEmail: userInfo.email ? userInfo.email.toLowerCase().trim() : undefined,
-            sendWelcome: false,
-          }),
-        }).catch(() => {});
-      }
-    }
-
-    // Web Push silent sync whenever permission has already been granted
-    if ('Notification' in window && Notification.permission === 'granted') {
-      await this.subscribeToPushServer({
-        id: userInfo?.id,
-        email: userInfo?.email,
-        sendWelcome: false,
-      });
-    }
+    await syncPushRegistrationForUser(userInfo);
   }
 
   public async sendPushToServer(options: {
@@ -822,19 +759,16 @@ class DevicePushManager {
           });
           notif.onclick = () => {
             window.focus();
-            if (payload.data?.senderId) {
-              window.dispatchEvent(
-                new CustomEvent('nexus_open_chat', {
-                  detail: {
-                    profile_id: payload.data.senderId,
-                    name: payload.title,
-                  },
-                })
-              );
-            }
-            if (payload.targetTab) {
-              window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: payload.targetTab }));
-            }
+            handlePushDeepLink({
+              targetTab: payload.targetTab,
+              type: payload.category,
+              senderId: payload.data?.senderId,
+              senderName: payload.title,
+              showId: payload.data?.showId,
+              targetId: payload.data?.targetId,
+              route: payload.data?.route,
+              ...payload.data,
+            });
             notif.close();
           };
           return true;
@@ -1077,6 +1011,9 @@ export async function syncShowRsvpWithServer(rsvpData: {
       console.warn('[PushManager] Push subscription notice during RSVP:', e);
     }
 
+    const nativeToken = typeof localStorage !== 'undefined' ? localStorage.getItem('nexus_native_push_token') : null;
+    const nativePlatform = nativeToken ? (Capacitor.getPlatform() === 'ios' ? 'ios' : 'android') : 'web';
+
     const res = await authFetch('/api/shows/rsvp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1088,7 +1025,8 @@ export async function syncShowRsvpWithServer(rsvpData: {
         city: rsvpData.city,
         user_id: userId,
         user_email: userEmail,
-        pushSubscription: pushSub
+        pushSubscription: pushSub,
+        ...(nativeToken ? { fcmToken: nativeToken, platform: nativePlatform } : {}),
       })
     });
 

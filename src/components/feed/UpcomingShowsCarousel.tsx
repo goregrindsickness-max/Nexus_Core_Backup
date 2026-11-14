@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, MapPin, Ticket, Building2, Star, Clock, Plus } from 'lucide-react';
-import { formatTimeTo12h, hasGigTickets, isPastShowDate } from '../../utils/socialFeedUtils';
+import { formatTimeTo12h, hasGigTickets, isPastShowDate, formatShowDate } from '../../utils/socialFeedUtils';
 
 export interface LiveTonightGig {
   id: string;
@@ -394,7 +394,7 @@ export const UpcomingShowsCarousel: React.FC<UpcomingShowsCarouselProps> = ({
                                 ? 'bg-amber-950/60 border-amber-500/50 text-amber-300'
                                 : 'bg-zinc-900 border-zinc-800 text-zinc-300'
                             }`}>
-                              {gig.date}
+                              {formatShowDate(gig.date)}
                             </span>
                           )}
                         </div>

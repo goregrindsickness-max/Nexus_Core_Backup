@@ -55,6 +55,12 @@ public class MainActivity extends BridgeActivity {
                             "window.dispatchEvent(new CustomEvent('nexus_native_audio_interruption', { detail: { action: 'previous' } }));",
                             null
                         );
+                    } else if ("com.nexus.core.AUDIO_CONTROL_SEEK".equals(action)) {
+                        long posMs = intent.getLongExtra("position_ms", 0L);
+                        bridge.getWebView().evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('nexus_native_audio_interruption', { detail: { action: 'seek', positionMs: " + posMs + " } }));",
+                            null
+                        );
                     } else if ("com.nexus.core.AUDIO_CONTROL_STOP".equals(action)) {
                         isAudioActive = false;
                         bridge.getWebView().evaluateJavascript(
@@ -75,6 +81,11 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public void startForegroundAudio(String title, String artist, String genre) {
+            startForegroundAudioWithArtwork(title, artist, genre, null);
+        }
+
+        @JavascriptInterface
+        public void startForegroundAudioWithArtwork(String title, String artist, String genre, String artworkUrl) {
             try {
                 isAudioActive = true;
                 Intent serviceIntent = new Intent(MainActivity.this, BackgroundAudioService.class);
@@ -82,6 +93,9 @@ public class MainActivity extends BridgeActivity {
                 serviceIntent.putExtra(BackgroundAudioService.EXTRA_TRACK_TITLE, title);
                 serviceIntent.putExtra(BackgroundAudioService.EXTRA_ARTIST, artist);
                 serviceIntent.putExtra(BackgroundAudioService.EXTRA_GENRE, genre);
+                if (artworkUrl != null && !artworkUrl.trim().isEmpty()) {
+                    serviceIntent.putExtra(BackgroundAudioService.EXTRA_ARTWORK_URL, artworkUrl.trim());
+                }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try {
@@ -99,11 +113,22 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public void updateMetadata(String title, String artist) {
+            updateMetadataWithArtwork(title, artist, null, null);
+        }
+
+        @JavascriptInterface
+        public void updateMetadataWithArtwork(String title, String artist, String genre, String artworkUrl) {
             try {
                 Intent serviceIntent = new Intent(MainActivity.this, BackgroundAudioService.class);
                 serviceIntent.setAction(BackgroundAudioService.ACTION_UPDATE);
                 serviceIntent.putExtra(BackgroundAudioService.EXTRA_TRACK_TITLE, title);
                 serviceIntent.putExtra(BackgroundAudioService.EXTRA_ARTIST, artist);
+                if (genre != null && !genre.trim().isEmpty()) {
+                    serviceIntent.putExtra(BackgroundAudioService.EXTRA_GENRE, genre.trim());
+                }
+                if (artworkUrl != null && !artworkUrl.trim().isEmpty()) {
+                    serviceIntent.putExtra(BackgroundAudioService.EXTRA_ARTWORK_URL, artworkUrl.trim());
+                }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try {
@@ -117,6 +142,17 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 e.printStackTrace();
             }
+        }
+
+        @JavascriptInterface
+        public void updatePlaybackPosition(long positionMs, long durationMs) {
+            try {
+                Intent serviceIntent = new Intent(MainActivity.this, BackgroundAudioService.class);
+                serviceIntent.setAction(BackgroundAudioService.ACTION_UPDATE_POSITION);
+                serviceIntent.putExtra(BackgroundAudioService.EXTRA_POSITION_MS, Math.max(0L, positionMs));
+                serviceIntent.putExtra(BackgroundAudioService.EXTRA_DURATION_MS, durationMs);
+                startService(serviceIntent);
+            } catch (Exception ignored) {}
         }
 
         @JavascriptInterface
@@ -248,6 +284,7 @@ public class MainActivity extends BridgeActivity {
         filter.addAction("com.nexus.core.AUDIO_INTERRUPTION_RESUME");
         filter.addAction("com.nexus.core.AUDIO_CONTROL_NEXT");
         filter.addAction("com.nexus.core.AUDIO_CONTROL_PREVIOUS");
+        filter.addAction("com.nexus.core.AUDIO_CONTROL_SEEK");
         filter.addAction("com.nexus.core.AUDIO_CONTROL_STOP");
         ContextCompat.registerReceiver(this, audioInterruptionReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
         isAudioInterruptionReceiverRegistered = true;

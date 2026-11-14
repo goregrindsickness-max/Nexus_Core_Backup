@@ -214,7 +214,14 @@ export async function getGemini(): Promise<GoogleGenAI | null> {
     return null;
   }
   if (!geminiClient || geminiLastKeyUsed !== key) {
-    geminiClient = new GoogleGenAI({ apiKey: key });
+    geminiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
     geminiLastKeyUsed = key;
   }
   return geminiClient;
@@ -241,7 +248,7 @@ Return strict JSON with:
 - talent_buyer: name or company of talent buyer/promoter`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -539,7 +546,7 @@ export async function checkAndSend24hShowReminders() {
   const todayStr = now.toISOString().split('T')[0];
 
   let sentCount = 0;
-  const allSubs = await loadPushSubscriptionsAsync();
+  const { dispatchPushToUsers } = await import('./pushDispatcher');
 
   for (const rsvp of rsvps) {
     if (rsvp.reminder_sent_24h) continue;
@@ -561,59 +568,36 @@ export async function checkAndSend24hShowReminders() {
     }
 
     if (!is24hWindow) continue;
+    if (!rsvp.user_id && !rsvp.user_email) continue;
 
-    let targetSubs = allSubs.filter((s) => {
-      if (rsvp.user_id && (s.userId === rsvp.user_id || s.userEmail === rsvp.user_id)) return true;
-      if (rsvp.user_email && s.userEmail?.toLowerCase() === rsvp.user_email.toLowerCase()) return true;
-      return false;
-    });
-
-    if (targetSubs.length === 0 && allSubs.length > 0) {
-      targetSubs = allSubs;
-    }
-
-    if (targetSubs.length === 0) {
-      console.log(`[SHOW REMINDERS SERVICE] No active push subscriptions found for RSVP ${rsvp.id} ("${rsvp.show_title}")`);
-      continue;
-    }
-
-    const payload = JSON.stringify({
+    const dispatchResult = await dispatchPushToUsers({
+      userIds: rsvp.user_id ? [String(rsvp.user_id)] : [],
+      userEmails: rsvp.user_email ? [String(rsvp.user_email)] : [],
       title: `🔥 Concert Tomorrow: ${rsvp.show_title}`,
       body: `Reminder: You have an RSVP for ${rsvp.show_title}${rsvp.venue_name ? ` at ${rsvp.venue_name}` : ''}${rsvp.city ? ` (${rsvp.city})` : ''} tomorrow! Your digital pass is ready in your pit list.`,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
       tag: `nexus-rsvp-24h-${rsvp.show_id}`,
-      targetTab: 'social',
-      category: 'vip_guestlist_access',
-      workspace: 'fan_only',
       data: {
-        showId: rsvp.show_id,
+        type: 'show_reminder',
+        targetId: String(rsvp.show_id),
+        route: '/shows',
+        targetTab: 'social',
+        category: 'vip_guestlist_access',
+        priority: 'P1',
+        workspace: 'fan_only',
+        showId: String(rsvp.show_id),
         showTitle: rsvp.show_title,
-        venueName: rsvp.venue_name,
-        city: rsvp.city,
-        type: '24h_show_reminder',
+        venueName: rsvp.venue_name || '',
+        city: rsvp.city || '',
       },
-      timestamp: Date.now(),
     });
 
-    let pushDelivered = false;
-    for (const subEntry of targetSubs) {
-      try {
-        if (subEntry.subscription?.endpoint?.startsWith('native://')) {
-          pushDelivered = true;
-          continue;
-        }
-        await webpush.sendNotification(subEntry.subscription, payload);
-        pushDelivered = true;
-      } catch (pushErr: any) {
-        console.warn(`[SHOW REMINDERS SERVICE] Push delivery exception for ${subEntry.id}:`, pushErr?.message || pushErr);
-      }
-    }
-
-    if (pushDelivered || targetSubs.length > 0) {
+    const targetedDevices = dispatchResult.delivered + dispatchResult.fcmSkipped;
+    if (targetedDevices > 0) {
       rsvp.reminder_sent_24h = true;
       sentCount++;
-      console.log(`[SHOW REMINDERS SERVICE SUCCESS] Sent 24h VAPID push notification to ${targetSubs.length} device(s) for "${rsvp.show_title}" (ID: ${rsvp.show_id})`);
+      console.log(
+        `[SHOW REMINDERS SERVICE SUCCESS] Sent 24h push reminder (delivered=${dispatchResult.delivered}, fcmSkipped=${dispatchResult.fcmSkipped}) for "${rsvp.show_title}" (ID: ${rsvp.show_id})`
+      );
 
       recordEmailLog(
         '/api/push/show-reminders-24h',
@@ -621,7 +605,12 @@ export async function checkAndSend24hShowReminders() {
         'push-gateway@nexuscore.app',
         `24h Show Push Reminder: ${rsvp.show_title}`,
         'SUCCESS',
-        { showId: rsvp.show_id, venue: rsvp.venue_name, devicesNotified: targetSubs.length }
+        {
+          showId: rsvp.show_id,
+          venue: rsvp.venue_name,
+          devicesNotified: dispatchResult.delivered,
+          fcmSkipped: dispatchResult.fcmSkipped,
+        }
       );
 
       if (supabase) {

@@ -19,8 +19,7 @@ export interface BandProfileOption {
   displayText: string;
 }
 
-export const BAND_SEARCH_SELECT_COLUMNS =
-  'id, name, band_name, category, avatar_url, logo_url, cover_url, banner_url, city, state, state_province, country, micro_genres, custom_slug, verification_status, is_verified, followers_count, bio';
+export const BAND_SEARCH_SELECT_COLUMNS = '*';
 
 const PROFILE_BAND_SELECT_COLUMNS =
   'id, full_name, band_name, account_type, avatar_url, band_logo, city, state, country, bio';
@@ -88,10 +87,12 @@ export async function getAllRealBandProfiles(
       b.discography?.[0]?.image_url;
 
     let avatar = pickBestBandImage(
-      b.logo_url,
       b.avatar_url,
-      b.avatar,
+      b.logo_url,
+      b.image_url,
       b.logo,
+      b.profile?.avatar_url,
+      b.avatar,
       b.profile_image,
       b.image,
       discCover
@@ -148,12 +149,12 @@ export async function getAllRealBandProfiles(
       let qb = client
         .from('bands')
         .select(BAND_SEARCH_SELECT_COLUMNS)
-        .order('created_at', { ascending: false })
+        .order('band_name', { ascending: true })
         .range(from, to);
 
       if (cleanQuery.length > 0) {
         qb = qb.or(
-          `band_name.ilike.%${cleanQuery}%,name.ilike.%${cleanQuery}%,city.ilike.%${cleanQuery}%,state_province.ilike.%${cleanQuery}%`
+          `band_name.ilike.%${cleanQuery}%,city.ilike.%${cleanQuery}%,state_province.ilike.%${cleanQuery}%`
         );
       }
 

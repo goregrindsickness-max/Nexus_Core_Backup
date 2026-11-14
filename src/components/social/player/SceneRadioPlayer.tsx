@@ -1146,6 +1146,16 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     };
   }, [currentVideoIndex, playlistVideos, selectedRadioGenre, radioVolume]);
 
+  const resolveTrackArtworkUrl = (track: any): string => {
+    if (track?.thumbnailUrl && typeof track.thumbnailUrl === 'string' && track.thumbnailUrl.trim().length > 5) {
+      return track.thumbnailUrl.trim();
+    }
+    if (track?.videoId) {
+      return `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+    }
+    return '/icon-512.png';
+  };
+
   // Wire up native MediaSession API (Lock screen metadata, notification tray controls)
   useEffect(() => {
     const curTrack = playlistVideos[currentVideoIndex];
@@ -1155,18 +1165,26 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       try {
         const title = curTrack?.title || `${genreName} Stream`;
         const artist = curTrack?.author || `Nexus ${genreName} Radio`;
-        const artwork = curTrack?.thumbnailUrl || '/icon-512.png';
+        const artwork = resolveTrackArtworkUrl(curTrack);
+        const lower = artwork.toLowerCase();
+        const mimeType = lower.includes('.png') || lower.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+
+        const artworkList: MediaImage[] = artwork.includes('/hqdefault.jpg')
+          ? [
+              { src: artwork.replace('/hqdefault.jpg', '/mqdefault.jpg'), sizes: '320x180', type: 'image/jpeg' },
+              { src: artwork, sizes: '480x360', type: 'image/jpeg' },
+              { src: artwork.replace('/hqdefault.jpg', '/maxresdefault.jpg'), sizes: '1280x720', type: 'image/jpeg' },
+            ]
+          : [
+              { src: artwork, sizes: '256x256', type: mimeType },
+              { src: artwork, sizes: '512x512', type: mimeType },
+            ];
 
         navigator.mediaSession.metadata = new MediaMetadata({
           title,
           artist,
           album: 'Scene Radio',
-          artwork: [
-            { src: artwork, sizes: '96x96', type: 'image/png' },
-            { src: artwork, sizes: '128x128', type: 'image/png' },
-            { src: artwork, sizes: '256x256', type: 'image/png' },
-            { src: artwork, sizes: '512x512', type: 'image/png' },
-          ]
+          artwork: artworkList,
         });
 
         navigator.mediaSession.setActionHandler('play', () => {
@@ -1180,6 +1198,16 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         });
         navigator.mediaSession.setActionHandler('previoustrack', () => {
           handlePrevSong();
+        });
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (details.seekTime !== undefined && details.seekTime !== null) {
+            setCurrentTime(details.seekTime);
+            if (persistentAudioService.isPlayingNativeFallback()) {
+              persistentAudioService.seek(details.seekTime);
+            } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+              ytPlayerRef.current.seekTo(details.seekTime, true);
+            }
+          }
         });
         navigator.mediaSession.setActionHandler('stop', () => {
           if (sceneRadioPlayingRef.current) togglePlayPause();
@@ -1199,7 +1227,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     const genreName = RADIO_PLAYLISTS[selectedRadioGenre]?.name || 'Scene Radio';
     const title = curTrack?.title || `${genreName} Radio Track`;
     const artist = curTrack?.author || `Nexus Radio (${genreName})`;
-    const artwork = curTrack?.thumbnailUrl || '/icon-512.png';
+    const artwork = resolveTrackArtworkUrl(curTrack);
     const nativeBridge = typeof window !== 'undefined' ? (window as any).NexusNativeAudio : null;
 
     if (sceneRadioPlaying) {
@@ -1209,8 +1237,14 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
           if (typeof nativeBridge.setAudioActive === 'function') {
             nativeBridge.setAudioActive(true);
           }
-          if (isStartingOrStationChange && typeof nativeBridge.startForegroundAudio === 'function') {
-            nativeBridge.startForegroundAudio(title, artist, genreName);
+          if (isStartingOrStationChange) {
+            if (typeof nativeBridge.startForegroundAudioWithArtwork === 'function') {
+              nativeBridge.startForegroundAudioWithArtwork(title, artist, genreName, artwork);
+            } else if (typeof nativeBridge.startForegroundAudio === 'function') {
+              nativeBridge.startForegroundAudio(title, artist, genreName);
+            }
+          } else if (typeof nativeBridge.updateMetadataWithArtwork === 'function') {
+            nativeBridge.updateMetadataWithArtwork(title, artist, genreName, artwork);
           } else if (typeof nativeBridge.updateMetadata === 'function') {
             nativeBridge.updateMetadata(title, artist);
           } else if (typeof nativeBridge.startForegroundAudio === 'function') {
@@ -1301,6 +1335,16 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         handleNextSong();
       } else if (action === 'previous') {
         handlePrevSong();
+      } else if (action === 'seek') {
+        const seekSec = Math.max(0, (Number(e.detail?.positionMs) || 0) / 1000);
+        setCurrentTime(seekSec);
+        if (persistentAudioService.isPlayingNativeFallback()) {
+          persistentAudioService.seek(seekSec);
+        } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+          try {
+            ytPlayerRef.current.seekTo(seekSec, true);
+          } catch (_) {}
+        }
       } else if (action === 'stop') {
         userInitiatedPauseRef.current = true;
         sceneRadioPlayingRef.current = false;

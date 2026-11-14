@@ -18,6 +18,7 @@ export interface ReleaseTrack {
   duration?: string;
   lyrics?: string;
   audioUrl?: string;
+  previewUrl?: string;
   url?: string;
   isrc?: string;
   fileSize?: string;
@@ -89,14 +90,14 @@ export function sanitizeReleaseForDb(release: any): any {
   if (clean.band_name && !clean.band) clean.band = clean.band_name;
   if (clean.artist && !clean.band) clean.band = clean.artist;
   if (clean.artist_name && !clean.band) clean.band = clean.artist_name;
-  if (clean.band && !clean.band_name) clean.band_name = clean.band;
-  if (clean.band && !clean.artist) clean.artist = clean.band;
 
   // Strip client-side-only metadata properties and obsolete/unsupported schema columns
+  delete clean.band_name;
+  delete clean.artist;
+  delete clean.artist_name;
   delete clean.catalogId;
   delete clean.releaseDate;
   delete clean.coverColor;
-  delete clean.cover_color;
   delete clean.coverImage;
   delete clean.isEditing;
   delete clean.isNew;
@@ -109,9 +110,6 @@ export function sanitizeReleaseForDb(release: any): any {
     'id',
     'band_id',
     'band',
-    'band_name',
-    'artist',
-    'artist_name',
     'label_id',
     'title',
     'catalog_id',
@@ -121,11 +119,13 @@ export function sanitizeReleaseForDb(release: any): any {
     'genre',
     'cover_image',
     'cover_url',
+    'cover_color',
     'tracks',
     'formats',
     'digital',
     'audio_vault_path',
     'status',
+    'created_by',
     'created_at',
     'updated_at'
   ]);

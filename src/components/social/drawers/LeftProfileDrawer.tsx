@@ -44,6 +44,14 @@ import { handleImageErrorWithCache } from "../../../services/profileImageCacheSe
 import { AffiliatedEntitiesSection } from '../cards/AffiliatedEntitiesSection';
 import { hasRegisteredWorkspace } from '../../../types';
 import {
+  getChecklistPersistedState,
+  setShowSetupChecklist,
+  resolveUserChecklistKey,
+  hasScenePioneerBadge,
+  ONBOARDING_STATE_CHANGED_EVENT,
+  SCENE_PIONEER_BADGE_LABEL,
+} from '../../OnboardingChecklist';
+import {
   X, Check, User, Shield, ShieldAlert, Key, Sparkles, MapPin, Calendar, Building, Building2,
   Camera, Globe, Instagram, Music2, Mail, Lock, Settings, LogOut, ChevronRight,
   ChevronDown, Edit3, Save, Flame, Zap, Award, Terminal, Sliders, Eye, EyeOff, Layers, Radio,
@@ -345,6 +353,25 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
   const [activeOAuthProvider, setActiveOAuthProvider] = React.useState<'google' | 'apple' | 'paypal' | null>(null);
   const [walletsState, setWalletsState] = React.useState<UserWalletsState>(() => getStoredWallets(props.userProfile));
 
+  const checklistUserKey = React.useMemo(() => resolveUserChecklistKey(userProfile), [userProfile]);
+  const [showSetupChecklistState, setShowSetupChecklistState] = React.useState<boolean>(() => {
+    return !getChecklistPersistedState(resolveUserChecklistKey(userProfile)).dismissed;
+  });
+  const [pioneerUnlocked, setPioneerUnlocked] = React.useState<boolean>(() =>
+    hasScenePioneerBadge(userProfile)
+  );
+
+  React.useEffect(() => {
+    const syncChecklist = () => {
+      const state = getChecklistPersistedState(checklistUserKey);
+      setShowSetupChecklistState(!state.dismissed);
+      setPioneerUnlocked(hasScenePioneerBadge(userProfile));
+    };
+    syncChecklist();
+    window.addEventListener(ONBOARDING_STATE_CHANGED_EVENT, syncChecklist);
+    return () => window.removeEventListener(ONBOARDING_STATE_CHANGED_EVENT, syncChecklist);
+  }, [checklistUserKey, userProfile]);
+
   // Owner check for Autonomous Bug Diagnostics (Shake & Instabug Monitor)
   const isOwner = React.useMemo(() => {
     if (typeof isMiguelNameOrProfile === 'function' && isMiguelNameOrProfile(userProfile)) return true;
@@ -437,12 +464,12 @@ if (!leftDrawerOpen) return null;
   return (
         <div className={`fixed inset-0 ${isCommunityCuratorOpen ? 'z-[1000020]' : 'z-[250]'} flex`}>
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity" onClick={() => setLeftDrawerOpen(false)} />
-          <div className="relative w-[85%] sm:w-80 max-w-sm bg-[#030303] border-r border-zinc-900 h-full flex flex-col animate-in slide-in-from-left duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] overflow-hidden bg-[linear-gradient(to_right,rgba(239,68,68,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(239,68,68,0.06)_1px,transparent_1px)] [background-size:20px_20px]">
+          <div className="relative w-[85%] sm:w-80 max-w-sm bg-[#030303] border-r border-zinc-900 h-[100dvh] max-h-[100dvh] flex flex-col animate-in slide-in-from-left duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] overflow-hidden bg-[linear-gradient(to_right,rgba(239,68,68,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(239,68,68,0.06)_1px,transparent_1px)] [background-size:20px_20px]">
             {/* Ambient Aura Glows for Left Drawer */}
             <div className="absolute top-0 left-0 w-64 h-64 bg-rose-950/5 rounded-full blur-[90px] pointer-events-none z-0" />
             <div className="absolute bottom-20 right-0 w-52 h-52 bg-purple-950/5 rounded-full blur-[80px] pointer-events-none z-0" />
 
-            <div className="p-6 border-b border-zinc-900 flex flex-col gap-4 bg-zinc-950/40 backdrop-blur-md shrink-0 z-10 relative overflow-hidden">
+            <div className="p-6 pt-[max(1.5rem,env(safe-area-inset-top))] border-b border-zinc-900 flex flex-col gap-4 bg-zinc-950/40 backdrop-blur-md shrink-0 z-10 relative overflow-hidden">
               <button onClick={() => setLeftDrawerOpen(false)} className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center bg-black/40 hover:bg-rose-900/40 border border-zinc-800 hover:border-rose-500/50 text-zinc-400 hover:text-rose-400 rounded-full transition-all z-50 cursor-pointer"><X className="w-4 h-4" /></button>
               {/* Optional Cover Image backdrop */}
               <div className="absolute inset-0 w-full h-full pointer-events-none z-0">
@@ -552,6 +579,11 @@ if (!leftDrawerOpen) return null;
                           <span className="text-[8px] font-black uppercase tracking-wider bg-rose-950/40 border border-rose-900/40 text-rose-400 px-2 py-0.5 rounded-md font-mono">
                             {portalRole === 'fan_only' ? 'Fan Only' : 'Industry Pro'}
                           </span>
+                          {pioneerUnlocked && (
+                            <span className="text-[8px] font-black uppercase tracking-wider bg-amber-500/20 border border-amber-400/40 text-amber-300 px-2 py-0.5 rounded-md font-mono">
+                              🏆 {SCENE_PIONEER_BADGE_LABEL}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -832,7 +864,7 @@ if (!leftDrawerOpen) return null;
                         </div>
                       )}
                     </div>
-                  <div className="p-4 border-t border-zinc-900 bg-zinc-950/50 mt-auto shrink-0">
+                  <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-zinc-900 bg-zinc-950/50 mt-auto shrink-0">
                     <button onClick={() => { setLeftDrawerOpen(false); onLogout?.(); }} className="w-full py-3.5 bg-zinc-900 text-rose-500 text-xs font-black uppercase tracking-wider rounded-lg hover:bg-zinc-800 transition-colors">
                       Log Out
                     </button>
@@ -1866,6 +1898,31 @@ if (!leftDrawerOpen) return null;
                                   className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 ${prefLocationServices ? 'bg-rose-600' : 'bg-zinc-800'}`}
                                 >
                                   <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${prefLocationServices ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </button>
+                              </label>
+
+                              {/* Show Setup Checklist */}
+                              <label className="flex items-center justify-between cursor-pointer">
+                                <div>
+                                  <div className="text-xs font-bold text-zinc-300">Show Setup Checklist</div>
+                                  <div className="text-[9px] text-zinc-500 leading-none mt-0.5 font-medium">Display the 6-step Profile Activation Checklist on your feed</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  data-testid="toggle-show-setup-checklist"
+                                  onClick={() => {
+                                    const nextShow = !showSetupChecklistState;
+                                    setShowSetupChecklist(checklistUserKey, nextShow);
+                                    setShowSetupChecklistState(nextShow);
+                                    triggerNotification?.(
+                                      nextShow
+                                        ? 'Setup checklist restored to your feed.'
+                                        : 'Setup checklist hidden from your feed.'
+                                    );
+                                  }}
+                                  className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 ${showSetupChecklistState ? 'bg-rose-600' : 'bg-zinc-800'}`}
+                                >
+                                  <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${showSetupChecklistState ? 'translate-x-4' : 'translate-x-0'}`} />
                                 </button>
                               </label>
                             </div>

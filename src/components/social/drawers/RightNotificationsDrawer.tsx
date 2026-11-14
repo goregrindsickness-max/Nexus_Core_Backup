@@ -171,13 +171,13 @@ export const RightNotificationsDrawer: React.FC<RightNotificationsDrawerProps> =
         onClick={() => setRightDrawerOpen(false)}
       />
 
-      <div className="relative w-[85%] sm:w-96 max-w-sm bg-[#050608] border-l border-zinc-900 h-full flex flex-col animate-in slide-in-from-right duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] bg-[radial-gradient(#1c1d24_1px,transparent_1px)] [background-size:16px_16px]">
+      <div className="relative w-[85%] sm:w-96 max-w-sm bg-[#050608] border-l border-zinc-900 h-[100dvh] max-h-[100dvh] pb-[env(safe-area-inset-bottom)] flex flex-col animate-in slide-in-from-right duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] bg-[radial-gradient(#1c1d24_1px,transparent_1px)] [background-size:16px_16px]">
         {/* Top Right Aura Glow */}
         <div className="absolute top-0 right-0 w-72 h-72 bg-rose-950/20 rounded-full blur-[90px] pointer-events-none z-0" />
         <div className="absolute bottom-10 left-0 w-60 h-60 bg-purple-950/15 rounded-full blur-[80px] pointer-events-none z-0" />
 
         {/* Drawer Header */}
-        <div className="relative p-4 border-b border-zinc-900/80 flex justify-between items-center bg-[#08090d]/90 backdrop-blur z-10">
+        <div className="relative p-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-zinc-900/80 flex justify-between items-center bg-[#08090d]/90 backdrop-blur z-10">
           <div className="flex flex-col">
             <h2 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
               <Bell className="w-4 h-4 text-rose-500 animate-pulse" /> Alerts & Notices

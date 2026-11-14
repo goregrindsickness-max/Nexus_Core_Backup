@@ -7,6 +7,7 @@ import {
   initVapidKeys,
   checkAndSend24hShowReminders,
 } from './lib/clients';
+import { initFirebaseAdmin } from './lib/pushDispatcher';
 import { authRouter } from './routes/auth';
 import { bandsRouter } from './routes/bands';
 import { showsRouter } from './routes/shows';
@@ -25,8 +26,9 @@ export {
 };
 
 export async function configureServerApp(app: express.Express): Promise<void> {
-  // Initialize VAPID Web Push keys & gateway
+  // Initialize VAPID Web Push keys & Firebase Admin SDK (Application Default Credentials)
   await initVapidKeys();
+  initFirebaseAdmin();
 
   // Global CORS & optional JWT attachment
   app.use(createCorsMiddleware());

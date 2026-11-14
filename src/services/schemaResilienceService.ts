@@ -485,18 +485,25 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
     }
     payload = deduped.map((item: any) => {
       if (!item || typeof item !== 'object') return item;
-      const isBand = 'band_name' in item || 'micro_genres' in item || 'subgenres' in item || 'tour_vehicle' in item || 'metal_archives_url' in item || ('logo_url' in item && ('genre' in item || 'city' in item || 'bio' in item));
-      if (isBand) {
-        return sanitizersRegistry.sanitizeBandPayload ? sanitizersRegistry.sanitizeBandPayload(item) : item;
-      }
-      const isRelease = 'tracks' in item || 'catalog_id' in item || 'audio_vault_path' in item || ('title' in item && ('release_date' in item || 'band_id' in item || 'formats' in item));
+      const isRelease = 'tracks' in item || 'catalog_id' in item || 'audio_vault_path' in item || ('title' in item && ('release_date' in item || 'band_id' in item || 'formats' in item || 'digital' in item));
       if (isRelease) {
         return sanitizersRegistry.sanitizeReleaseForDb ? sanitizersRegistry.sanitizeReleaseForDb(item) : item;
+      }
+      const isBand = !isRelease && ('band_name' in item || 'micro_genres' in item || 'subgenres' in item || 'tour_vehicle' in item || 'metal_archives_url' in item || ('logo_url' in item && ('genre' in item || 'city' in item || 'bio' in item)));
+      if (isBand) {
+        return sanitizersRegistry.sanitizeBandPayload ? sanitizersRegistry.sanitizeBandPayload(item) : item;
       }
       return item;
     });
   } else {
+    const isReleasePayload =
+      payload &&
+      typeof payload === 'object' &&
+      !Array.isArray(payload) &&
+      ('tracks' in payload || 'catalog_id' in payload || 'audio_vault_path' in payload || ('title' in payload && ('release_date' in payload || 'formats' in payload || 'digital' in payload || 'band_id' in payload)));
+
     const isBandPayload =
+      !isReleasePayload &&
       payload &&
       typeof payload === 'object' &&
       !Array.isArray(payload) &&
@@ -520,6 +527,7 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
     }
 
     const isCreativePayload =
+      !isReleasePayload &&
       !isBandPayload &&
       payload &&
       typeof payload === 'object' &&
@@ -550,6 +558,7 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
     }
 
     const isProfilePayload =
+      !isReleasePayload &&
       !isBandPayload &&
       !isCreativePayload &&
       payload &&
@@ -575,15 +584,6 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
     if (isProfilePayload) {
       payload = sanitizersRegistry.sanitizeProfilePayload ? sanitizersRegistry.sanitizeProfilePayload(payload) : payload;
     }
-
-    const isReleasePayload =
-      !isBandPayload &&
-      !isCreativePayload &&
-      !isProfilePayload &&
-      payload &&
-      typeof payload === 'object' &&
-      !Array.isArray(payload) &&
-      ('tracks' in payload || 'catalog_id' in payload || 'audio_vault_path' in payload || ('title' in payload && ('release_date' in payload || 'formats' in payload || 'digital' in payload || 'band_id' in payload)));
 
     if (isReleasePayload) {
       payload = sanitizersRegistry.sanitizeReleaseForDb ? sanitizersRegistry.sanitizeReleaseForDb(payload) : payload;

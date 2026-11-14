@@ -476,8 +476,14 @@ export function useNexusMessaging({ userProfile, setAllProfiles, setAllFollows }
 
         if (senderId && receiverId && senderId !== receiverId) {
           const msgContent = newMessage.text || 'Sent an attachment';
+          const senderDisplayName = userProfile?.name || userProfile?.full_name || userProfile?.console_handle || 'Nexus Contact';
 
-          const { data: chatData, error: insertErr } = await sendDirectMessage(senderId, receiverId, msgContent, { skipPush: true });
+          const dmResult: any = await sendDirectMessage(senderId, receiverId, msgContent, {
+            skipPush: true,
+            senderName: senderDisplayName,
+            recipientEmail: resolvedEmail,
+          });
+          const { data: chatData, error: insertErr, serverDispatched } = dmResult || {};
 
           if (insertErr) {
             console.error('[Chat Engine] Failed to write message to Supabase:', insertErr);
@@ -485,43 +491,44 @@ export function useNexusMessaging({ userProfile, setAllProfiles, setAllFollows }
             console.log('[Chat Engine] Real database message successfully persisted:', chatData);
           }
 
-          // Insert notification using valid UUID
-          const receiverUUID = (profileData?.id && extractUUID(profileData.id)) || extractUUID(receiverId);
-          if (receiverUUID) {
-            const newNotifId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '00000000-0000-0000-0000-000000000000';
-            await supabaseClient
-              .from('nexus_notifications')
-              .insert([{
-                id: newNotifId,
-                user_id: receiverUUID,
-                actor_id: extractUUID(senderId) || null,
-                title: '💬 NEW MESSAGE',
-                message: `New message from ${userProfile.name || userProfile.full_name || 'Nexus Contact'}: "${(newMessage.text || 'Sent an attachment').substring(0, 60)}"`,
-                category: 'CHAT',
-                type: 'chat_message',
-                is_read: false,
-                created_at: new Date().toISOString()
-              }]);
-          }
-
-          // Trigger real-time device push notification to the recipient
-          const senderDisplayName = userProfile?.name || userProfile?.full_name || userProfile?.console_handle || 'Nexus Contact';
-          pushManager.sendPushToServer({
-            userId: receiverUUID || receiverId,
-            userEmail: resolvedEmail,
-            excludeUserId: senderId,
-            excludeUserEmail: userProfile?.email,
-            title: `💬 Direct Message from ${senderDisplayName}`,
-            body: (newMessage.text || 'Sent an attachment').substring(0, 120),
-            category: 'direct_messages',
-            targetTab: 'messages',
-            priority: 'P1',
-            tag: `nexus-dm-${senderId}`,
-            data: {
-              senderId: senderId,
-              senderName: senderDisplayName
+          if (!serverDispatched) {
+            // Insert notification using valid UUID
+            const receiverUUID = (profileData?.id && extractUUID(profileData.id)) || extractUUID(receiverId);
+            if (receiverUUID) {
+              const newNotifId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '00000000-0000-0000-0000-000000000000';
+              await supabaseClient
+                .from('nexus_notifications')
+                .insert([{
+                  id: newNotifId,
+                  user_id: receiverUUID,
+                  actor_id: extractUUID(senderId) || null,
+                  title: '💬 NEW MESSAGE',
+                  message: `New message from ${senderDisplayName}: "${(newMessage.text || 'Sent an attachment').substring(0, 60)}"`,
+                  category: 'CHAT',
+                  type: 'chat_message',
+                  is_read: false,
+                  created_at: new Date().toISOString()
+                }]);
             }
-          }).catch(pErr => console.warn('[Messaging] Push send notice:', pErr));
+
+            // Trigger fallback push notification to the recipient
+            pushManager.sendPushToServer({
+              userId: receiverUUID || receiverId,
+              userEmail: resolvedEmail,
+              excludeUserId: senderId,
+              excludeUserEmail: userProfile?.email,
+              title: `💬 Direct Message from ${senderDisplayName}`,
+              body: (newMessage.text || 'Sent an attachment').substring(0, 120),
+              category: 'direct_messages',
+              targetTab: 'messages',
+              priority: 'P1',
+              tag: `nexus-dm-${senderId}`,
+              data: {
+                senderId: senderId,
+                senderName: senderDisplayName
+              }
+            }).catch(pErr => console.warn('[Messaging] Push send notice:', pErr));
+          }
         }
       } catch (err) {
         console.warn("Failed to sync message to recipient relationally:", err);

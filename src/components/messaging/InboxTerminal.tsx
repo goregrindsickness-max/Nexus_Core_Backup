@@ -40,6 +40,8 @@ import {
 import { InboxPreferences } from './InboxPreferences';
 import { useUserPresence, presenceManager, formatPresenceStatus } from '../../lib/presence';
 import { pushManager } from '../../lib/pushNotifications';
+import { setActiveDmThreadId, consumePendingDmThread } from '../../lib/pushClient';
+import { authFetch, getSupabaseAccessToken } from '../../utils/apiConfig';
 
 export interface InboxConversation {
   contactId: string;
@@ -1256,41 +1258,66 @@ export const InboxTerminal: React.FC<InboxTerminalProps> = ({
     fetchThreadMessages(chat.contactId);
   };
 
-  // Listen for global custom events to open specific chat thread
+  // Sync active DM thread ID so foreground pushes for this open conversation don't spam banners/chimes
+  useEffect(() => {
+    setActiveDmThreadId(selectedContact?.contactId || null);
+    return () => {
+      setActiveDmThreadId(null);
+    };
+  }, [selectedContact?.contactId]);
+
+  // Helper to resolve or synthesize a thread from a deep-link / event detail
+  const openThreadByDetail = useCallback((detail: any) => {
+    if (!detail?.profile_id) return;
+    const contactId = String(detail.profile_id);
+    const profileName = detail.name || detail.username || 'Operator';
+    const avatarUrl = detail.avatar_url || detail.avatar;
+
+    const matched = conversations.find(
+      (c) => String(c.contactId).toLowerCase() === contactId.toLowerCase()
+    );
+    if (matched) {
+      handleSelectContact(matched);
+    } else {
+      const newContact: InboxConversation = {
+        contactId,
+        profileName,
+        avatarUrl,
+        lastMessage: 'Established new session',
+        timestamp: new Date().toISOString(),
+        isRead: true,
+        roleBadge: (detail.role || detail.role_badge || 'USER').toUpperCase()
+      };
+      setConversations((prev) => {
+        if (prev.some((c) => String(c.contactId).toLowerCase() === contactId.toLowerCase())) {
+          return prev;
+        }
+        return [newContact, ...prev];
+      });
+      handleSelectContact(newContact);
+    }
+  }, [conversations]);
+
+  // Listen for global custom events & consume buffered cold-launch push DM deep-links
   useEffect(() => {
     const handleOpenEvent = (e: any) => {
-      const detail = e.detail;
-      if (detail?.profile_id) {
-        const contactId = detail.profile_id;
-        const profileName = detail.name || detail.username || 'Operator';
-        const avatarUrl = detail.avatar_url || detail.avatar;
-
-        const matched = conversations.find(c => c.contactId === contactId);
-        if (matched) {
-          handleSelectContact(matched);
-        } else {
-          const newContact: InboxConversation = {
-            contactId,
-            profileName,
-            avatarUrl,
-            lastMessage: 'Established new session',
-            timestamp: new Date().toISOString(),
-            isRead: true,
-            roleBadge: (detail.role || detail.role_badge || 'USER').toUpperCase()
-          };
-          setConversations(prev => [newContact, ...prev]);
-          handleSelectContact(newContact);
-        }
-      }
+      openThreadByDetail(e?.detail);
     };
+
+    const pending = consumePendingDmThread();
+    if (pending?.profile_id) {
+      openThreadByDetail(pending);
+    }
 
     window.addEventListener('nexus_open_chat', handleOpenEvent);
     window.addEventListener('nexus_open_chat_thread', handleOpenEvent);
+    window.addEventListener('nexus_open_inbox_thread', handleOpenEvent);
     return () => {
       window.removeEventListener('nexus_open_chat', handleOpenEvent);
       window.removeEventListener('nexus_open_chat_thread', handleOpenEvent);
+      window.removeEventListener('nexus_open_inbox_thread', handleOpenEvent);
     };
-  }, [conversations]);
+  }, [openThreadByDetail]);
 
   // Handle sending a message in active thread
   const handleSendMessage = async () => {
@@ -1344,77 +1371,111 @@ export const InboxTerminal: React.FC<InboxTerminalProps> = ({
     }));
 
     try {
-      const payload: any = {
-        sender_id: myUid,
-        receiver_id: selectedContact.contactId,
-        recipient_id: selectedContact.contactId,
-        message: trimmed || 'Media attachment',
-        content: trimmed || 'Media attachment',
-        is_read: false,
-      };
+      const senderDisplayName =
+        userProfile?.full_name ||
+        userProfile?.name ||
+        userProfile?.console_handle ||
+        'Nexus Contact';
+      const recipientEmail =
+        selectedContact.email ||
+        (selectedContact.contactId.includes('@') ? selectedContact.contactId : undefined);
 
-      if (sentMediaUrl) {
-        payload.media_url = sentMediaUrl;
-        payload.attachment_url = sentMediaUrl;
-      }
-
-      const { data, error } = await supabase
-        .from('nexus_chats')
-        .insert([payload])
-        .select()
-        .single();
-
-      if (error) {
-        console.error('[InboxTerminal] Error writing message to Supabase:', error.message);
-      } else if (data) {
-        setThreadMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m));
-      }
-
-      // Trigger real-time background Web Push & notification entry to recipient
+      let serverDispatched = false;
       if (selectedContact.contactId && selectedContact.contactId !== myUid) {
-        const senderDisplayName =
-          userProfile?.full_name ||
-          userProfile?.name ||
-          userProfile?.console_handle ||
-          'Nexus Contact';
-        const previewBody = (trimmed || 'Sent an attachment').substring(0, 120);
+        try {
+          const accessToken = await getSupabaseAccessToken();
+          if (accessToken) {
+            const apiRes = await authFetch('/api/social/dm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                recipientId: selectedContact.contactId,
+                recipientEmail,
+                message: trimmed || 'Media attachment',
+                mediaUrl: sentMediaUrl || undefined,
+                senderId: myUid,
+                senderName: senderDisplayName,
+              }),
+            });
+            if (apiRes.ok) {
+              const apiJson = await apiRes.json().catch(() => null);
+              if (apiJson?.message) {
+                setThreadMessages(prev => prev.map(m => m.id === optimisticMsg.id ? apiJson.message : m));
+              }
+              serverDispatched = true;
+            }
+          }
+        } catch (_) {}
+      }
 
-        if (isValidUUID(selectedContact.contactId)) {
-          try {
-            const newNotifId =
-              typeof crypto !== 'undefined' && crypto.randomUUID
-                ? crypto.randomUUID()
-                : `notif_${Date.now()}`;
-            await supabase.from('nexus_notifications').insert([{
-              id: newNotifId,
-              user_id: selectedContact.contactId,
-              actor_id: isValidUUID(myUid) ? myUid : null,
-              title: '💬 NEW MESSAGE',
-              message: `New message from ${senderDisplayName}: "${previewBody.substring(0, 60)}"`,
-              category: 'CHAT',
-              type: 'chat_message',
-              is_read: false,
-              created_at: new Date().toISOString(),
-            }]);
-          } catch (_) {}
+      if (!serverDispatched) {
+        const payload: any = {
+          sender_id: myUid,
+          receiver_id: selectedContact.contactId,
+          recipient_id: selectedContact.contactId,
+          message: trimmed || 'Media attachment',
+          content: trimmed || 'Media attachment',
+          is_read: false,
+        };
+
+        if (sentMediaUrl) {
+          payload.media_url = sentMediaUrl;
+          payload.attachment_url = sentMediaUrl;
         }
 
-        pushManager.sendPushToServer({
-          userId: selectedContact.contactId,
-          userEmail: selectedContact.email || (selectedContact.contactId.includes('@') ? selectedContact.contactId : undefined),
-          excludeUserId: myUid,
-          excludeUserEmail: userProfile?.email,
-          title: `💬 Direct Message from ${senderDisplayName}`,
-          body: previewBody,
-          category: 'direct_messages',
-          targetTab: 'messages',
-          priority: 'P1',
-          tag: `nexus-dm-${myUid}`,
-          data: {
-            senderId: myUid,
-            senderName: senderDisplayName,
-          },
-        }).catch(pErr => console.warn('[InboxTerminal] Push send notice:', pErr));
+        const { data, error } = await supabase
+          .from('nexus_chats')
+          .insert([payload])
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[InboxTerminal] Error writing message to Supabase:', error.message);
+        } else if (data) {
+          setThreadMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m));
+        }
+
+        // Trigger fallback notification entry & legacy push endpoint
+        if (selectedContact.contactId && selectedContact.contactId !== myUid) {
+          const previewBody = (trimmed || 'Sent an attachment').substring(0, 120);
+
+          if (isValidUUID(selectedContact.contactId)) {
+            try {
+              const newNotifId =
+                typeof crypto !== 'undefined' && crypto.randomUUID
+                  ? crypto.randomUUID()
+                  : `notif_${Date.now()}`;
+              await supabase.from('nexus_notifications').insert([{
+                id: newNotifId,
+                user_id: selectedContact.contactId,
+                actor_id: isValidUUID(myUid) ? myUid : null,
+                title: '💬 NEW MESSAGE',
+                message: `New message from ${senderDisplayName}: "${previewBody.substring(0, 60)}"`,
+                category: 'CHAT',
+                type: 'chat_message',
+                is_read: false,
+                created_at: new Date().toISOString(),
+              }]);
+            } catch (_) {}
+          }
+
+          pushManager.sendPushToServer({
+            userId: selectedContact.contactId,
+            userEmail: recipientEmail,
+            excludeUserId: myUid,
+            excludeUserEmail: userProfile?.email,
+            title: `💬 Direct Message from ${senderDisplayName}`,
+            body: previewBody,
+            category: 'direct_messages',
+            targetTab: 'messages',
+            priority: 'P1',
+            tag: `nexus-dm-${myUid}`,
+            data: {
+              senderId: myUid,
+              senderName: senderDisplayName,
+            },
+          }).catch(pErr => console.warn('[InboxTerminal] Push send notice:', pErr));
+        }
       }
 
       window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
@@ -2133,7 +2194,7 @@ export const InboxTerminal: React.FC<InboxTerminalProps> = ({
             )}
 
             {/* PINNED DIRECT MESSAGE INPUT BAR */}
-            <div className="p-2.5 sm:p-3 border-t border-rose-900/40 bg-black flex items-center gap-2 shrink-0 z-10 shadow-lg">
+            <div className="p-2.5 sm:p-3 pb-[max(0.625rem,env(safe-area-inset-bottom))] border-t border-rose-900/40 bg-black flex items-center gap-2 shrink-0 z-10 shadow-lg">
               <input
                 type="file"
                 ref={fileInputRef}
@@ -2377,7 +2438,7 @@ export const InboxTerminal: React.FC<InboxTerminalProps> = ({
           onClick={() => setShowSettings(false)}
         >
           <div 
-            className="w-full max-w-2xl max-h-[85vh] bg-[#08050c] border border-rose-900/50 rounded-2xl p-6 shadow-2xl flex flex-col overflow-hidden"
+            className="w-full max-w-2xl max-h-[85dvh] bg-[#08050c] border border-rose-900/50 rounded-2xl p-6 shadow-2xl flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -2629,7 +2690,7 @@ export const InboxTerminal: React.FC<InboxTerminalProps> = ({
       {/* NEW MESSAGE / COMPOSE MODAL */}
       {isNewMessageModalOpen && (
         <div className="fixed inset-0 z-[300] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0e1015] border border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-[#0e1015] border border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[85dvh] animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}
             <div className="p-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-950/60">
               <div className="flex items-center gap-2">

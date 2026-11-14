@@ -6,6 +6,7 @@ import {
   Share2, Clock, Eye, MessageSquare, Shield, Lock, MinusCircle,
   Slash, AlertTriangle, Trash2, Send, X, Users, Check
 } from 'lucide-react';
+import { setActiveDmThreadId } from '../../../lib/pushClient';
 
 export interface DirectMessageDrawerProps {
   isOpen: boolean;
@@ -50,6 +51,17 @@ export const DirectMessageDrawer: React.FC<DirectMessageDrawerProps> = ({
   }, [chats, activeTab, selectedChatId]);
 
   const activeChat = selectedChatId ? chats.find(c => c.id === selectedChatId || c.id?.toLowerCase() === selectedChatId.toLowerCase()) : null;
+
+  useEffect(() => {
+    if (isOpen && activeChat) {
+      setActiveDmThreadId(String(activeChat.contactId || activeChat.id || selectedChatId || ''));
+    } else {
+      setActiveDmThreadId(null);
+    }
+    return () => {
+      setActiveDmThreadId(null);
+    };
+  }, [isOpen, activeChat, selectedChatId]);
 
   const handleSend = (e: React.FormEvent) => {
     if (!activeChat) return;
@@ -103,10 +115,10 @@ export const DirectMessageDrawer: React.FC<DirectMessageDrawerProps> = ({
         animate={{ x: 0 }}
         exit={{ x: '100%' }}
         transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-        className="fixed inset-y-0 right-0 w-full sm:w-[420px] max-w-full bg-black z-[100] flex flex-col shadow-2xl border-l border-zinc-900"
+        className="fixed inset-y-0 right-0 h-[100dvh] max-h-[100dvh] w-full sm:w-[420px] max-w-full bg-black z-[100] flex flex-col shadow-2xl border-l border-zinc-900"
       >
         {/* Header */}
-        <div className="sticky top-0 z-20 flex items-center justify-between p-4 bg-black/90 backdrop-blur-md border-b border-zinc-900">
+        <div className="sticky top-0 z-20 flex items-center justify-between p-4 pt-[max(1rem,env(safe-area-inset-top))] bg-black/90 backdrop-blur-md border-b border-zinc-900 shrink-0">
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
@@ -204,7 +216,7 @@ export const DirectMessageDrawer: React.FC<DirectMessageDrawerProps> = ({
             </div>
 
             {/* Sticky Bottom Input Form */}
-            <form onSubmit={handleSend} className="p-3 bg-black border-t border-zinc-900 flex items-center gap-2 shrink-0">
+            <form onSubmit={handleSend} className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-black border-t border-zinc-900 flex items-center gap-2 shrink-0">
               <input
                 type="text"
                 value={inputText}

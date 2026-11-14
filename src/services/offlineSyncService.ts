@@ -1,5 +1,5 @@
 import localforage from 'localforage';
-import { getRawSupabase, setQueryBuilderWrapper } from './clientService';
+import { getRawSupabase, setQueryBuilderWrapper, ensureValidSupabaseAuthSession } from './clientService';
 import { generateUUID, ensureUUID, sanitizeShowForDb, sanitizeInventoryItemForDb } from './schemaResilienceService';
 import { sanitizeBandPayload } from './bandService';
 import { sanitizeReleaseForDb } from './releasesService';
@@ -49,10 +49,10 @@ export const resolveBandName = (item: any, bandIdFallback?: string): any => {
 };
 
 export function isNetworkOrConnectivityError(err: any): boolean {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+  if (!err) return false;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return true;
   }
-  if (!err) return false;
 
   const message = (err.message || '').toLowerCase();
   const code = (err.code || '').toLowerCase();
@@ -187,6 +187,8 @@ export async function processOfflineQueue(): Promise<void> {
   const rawSupabase = getRawSupabase();
   if (!rawSupabase) return;
 
+  await ensureValidSupabaseAuthSession(rawSupabase).catch(() => {});
+
   isSyncing = true;
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -197,6 +199,22 @@ export async function processOfflineQueue(): Promise<void> {
 
   const pendingActions = [...queue];
   const activeQueue: OfflineAction[] = [];
+
+  const isAuthOrRlsRetryableError = (err: any) => {
+    if (!err) return false;
+    const msg = String(err.message || '').toLowerCase();
+    const code = String(err.code || '').toLowerCase();
+    const status = Number(err.status || err.statusCode);
+    return (
+      code === '42501' ||
+      status === 401 ||
+      status === 403 ||
+      msg.includes('row-level security') ||
+      msg.includes('jwt') ||
+      msg.includes('not authorized') ||
+      msg.includes('auth session')
+    );
+  };
 
   for (const action of pendingActions) {
     try {
@@ -309,9 +327,9 @@ export async function processOfflineQueue(): Promise<void> {
       const { error } = await resPromise;
 
       if (error) {
-        if (isNetworkOrConnectivityError(error)) {
+        if (isNetworkOrConnectivityError(error) || isAuthOrRlsRetryableError(error)) {
           console.warn(
-            `[Offline Sync Queue] Network / connectivity error encountered while processing. Pausing queue.`,
+            `[Offline Sync Queue] Retryable network/auth error encountered while processing. Retaining in queue.`,
             error
           );
           activeQueue.push(...pendingActions.slice(pendingActions.indexOf(action)));

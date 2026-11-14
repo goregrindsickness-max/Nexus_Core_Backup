@@ -109,6 +109,8 @@ class PersistentAudioService {
   private isCarrierAudio: boolean = false;
   private isBackgroundFallbackActive: boolean = false;
   private lastStartedGenre: string = '';
+  private lastNativePosSyncAt: number = 0;
+  private lastNativeDurationMs: number = -1;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -292,12 +294,15 @@ class PersistentAudioService {
       const title = trackOverride?.title || this.currentTrack?.title || 'Scene Radio';
       const artist = trackOverride?.artist || this.currentTrack?.artist || 'Nexus Scene Radio';
       const genre = trackOverride?.genre || this.currentTrack?.genre || this.currentTrack?.album || 'Scene Radio';
+      const artwork = trackOverride?.artworkUrl || this.currentTrack?.artworkUrl || '';
 
       if (action === 'start') {
         if (typeof nativeBridge.setAudioActive === 'function') {
           nativeBridge.setAudioActive(true);
         }
-        if (typeof nativeBridge.startForegroundAudio === 'function') {
+        if (typeof nativeBridge.startForegroundAudioWithArtwork === 'function') {
+          nativeBridge.startForegroundAudioWithArtwork(title, artist, genre, artwork);
+        } else if (typeof nativeBridge.startForegroundAudio === 'function') {
           nativeBridge.startForegroundAudio(title, artist, genre);
         }
         this.lastStartedGenre = genre;
@@ -305,9 +310,15 @@ class PersistentAudioService {
         if (typeof nativeBridge.setAudioActive === 'function') {
           nativeBridge.setAudioActive(true);
         }
-        if (this.lastStartedGenre !== genre && typeof nativeBridge.startForegroundAudio === 'function') {
-          nativeBridge.startForegroundAudio(title, artist, genre);
+        if (this.lastStartedGenre !== genre) {
+          if (typeof nativeBridge.startForegroundAudioWithArtwork === 'function') {
+            nativeBridge.startForegroundAudioWithArtwork(title, artist, genre, artwork);
+          } else if (typeof nativeBridge.startForegroundAudio === 'function') {
+            nativeBridge.startForegroundAudio(title, artist, genre);
+          }
           this.lastStartedGenre = genre;
+        } else if (typeof nativeBridge.updateMetadataWithArtwork === 'function') {
+          nativeBridge.updateMetadataWithArtwork(title, artist, genre, artwork);
         } else if (typeof nativeBridge.updateMetadata === 'function') {
           nativeBridge.updateMetadata(title, artist);
         } else if (typeof nativeBridge.startForegroundAudio === 'function') {
@@ -369,17 +380,29 @@ class PersistentAudioService {
       const artist = track.artist || 'Underground Heavy Metal';
       const album = track.album || 'Scene Radio';
       const artwork = track.artworkUrl || '/icon-512.png';
+      const lower = artwork.toLowerCase();
+      const mimeType = lower.includes('.webp')
+        ? 'image/webp'
+        : lower.includes('.png') || lower.startsWith('data:image/png')
+        ? 'image/png'
+        : 'image/jpeg';
+
+      const artworkEntries: MediaImage[] = artwork.includes('/hqdefault.jpg')
+        ? [
+            { src: artwork.replace('/hqdefault.jpg', '/mqdefault.jpg'), sizes: '320x180', type: 'image/jpeg' },
+            { src: artwork, sizes: '480x360', type: 'image/jpeg' },
+            { src: artwork.replace('/hqdefault.jpg', '/maxresdefault.jpg'), sizes: '1280x720', type: 'image/jpeg' },
+          ]
+        : [
+            { src: artwork, sizes: '256x256', type: mimeType },
+            { src: artwork, sizes: '512x512', type: mimeType },
+          ];
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title,
         artist,
         album,
-        artwork: [
-          { src: artwork, sizes: '96x96', type: 'image/png' },
-          { src: artwork, sizes: '128x128', type: 'image/png' },
-          { src: artwork, sizes: '256x256', type: 'image/png' },
-          { src: artwork, sizes: '512x512', type: 'image/png' },
-        ]
+        artwork: artworkEntries,
       });
 
       this.setupMediaSessionActionHandlers();
@@ -450,19 +473,33 @@ class PersistentAudioService {
   }
 
   public updateMediaSessionPosition(currentTime: number, duration: number): void {
-    if (typeof window === 'undefined' || !('mediaSession' in navigator)) return;
+    if (typeof window === 'undefined') return;
+    const validPos = Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0;
+    const validDur = Number.isFinite(duration) && duration > 0 ? duration : 0;
+
+    if ('mediaSession' in navigator) {
+      try {
+        if ('setPositionState' in navigator.mediaSession && validDur > 0) {
+          navigator.mediaSession.setPositionState({
+            duration: validDur,
+            playbackRate: 1.0,
+            position: Math.min(validPos, validDur),
+          });
+        }
+      } catch (_) {}
+    }
+
     try {
-      if (
-        'setPositionState' in navigator.mediaSession &&
-        duration > 0 &&
-        Number.isFinite(duration) &&
-        Number.isFinite(currentTime)
-      ) {
-        navigator.mediaSession.setPositionState({
-          duration: Math.max(0, duration),
-          playbackRate: 1.0,
-          position: Math.min(Math.max(0, currentTime), duration)
-        });
+      const nativeBridge = (window as any).NexusNativeAudio;
+      if (nativeBridge && typeof nativeBridge.updatePlaybackPosition === 'function' && validDur > 0) {
+        const now = Date.now();
+        const durMs = Math.round(validDur * 1000);
+        const posMs = Math.round(Math.min(validPos, validDur) * 1000);
+        if (durMs !== this.lastNativeDurationMs || now - this.lastNativePosSyncAt >= 2000) {
+          this.lastNativeDurationMs = durMs;
+          this.lastNativePosSyncAt = now;
+          nativeBridge.updatePlaybackPosition(posMs, durMs);
+        }
       }
     } catch (_) {}
   }

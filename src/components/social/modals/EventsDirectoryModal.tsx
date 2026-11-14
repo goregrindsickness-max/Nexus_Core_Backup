@@ -41,7 +41,7 @@ import {
 import { getSupabase } from '../../../supabase';
 import { showsStore } from '../../../utils/indexedDB';
 import { resolveLocationCoordinates } from '../../../lib/geoResolution';
-import { isPastShowDate } from '../../../utils/socialFeedUtils';
+import { isPastShowDate, formatShowDate } from '../../../utils/socialFeedUtils';
 import { authFetch } from '../../../utils/apiConfig';
 
 export interface EventsDirectoryModalProps {
@@ -643,7 +643,8 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
           const { data: dbShows, error: dbErr } = await client
             .from('shows')
             .select('*')
-            .order('date', { ascending: true });
+            .order('date', { ascending: true })
+            .range(0, 4999);
 
           if (!dbErr && dbShows && Array.isArray(dbShows) && dbShows.length > 0) {
             allExtractedShows.push(...dbShows);
@@ -2654,7 +2655,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                                     #{sIdx + 1}
                                                   </span>
                                                   <span className="text-amber-300 font-bold text-xs shrink-0">
-                                                    {stop.date}
+                                                    {formatShowDate(stop.date)}
                                                   </span>
                                                   <span className="text-white text-xs truncate">
                                                     {stop.city}

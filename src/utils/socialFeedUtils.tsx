@@ -862,4 +862,27 @@ export const isPastShowDate = (dateVal?: string): boolean => {
   return false;
 };
 
+export const formatShowDate = (dateStr?: string): string => {
+  if (!dateStr) return '';
+  const trimmed = String(dateStr).trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'tonight' || lower === 'tomorrow') {
+    return trimmed;
+  }
+  try {
+    if (trimmed.includes(',') && /[A-Za-z]{3},\s+[A-Za-z]{3}\s+\d+/.test(trimmed)) {
+      return trimmed;
+    }
+    const d = new Date(trimmed.includes('T') ? trimmed : `${trimmed}T00:00:00`);
+    if (isNaN(d.getTime())) return trimmed;
+    return d.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric'
+    });
+  } catch {
+    return trimmed;
+  }
+};
+
 

@@ -98,23 +98,23 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
   const [expandedTourDates, setExpandedTourDates] = useState<Record<string, boolean>>({});
   const [viewingReactionsPost, setViewingReactionsPost] = useState<any | null>(null);
 
-  // Curated Forum Highlights in Feed (prioritizing user's real forum posts)
+  // Curated Forum Highlights in Feed (user's post + max 2 Brutal Death Metal highlights)
   const [forumHighlights, setForumHighlights] = useState<ForumHighlightThread[]>(() =>
-    getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId)
+    getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId)
   );
   const [dismissedHighlightIds, setDismissedHighlightIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     // Initial sync with user context
-    setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+    setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
 
     // Also run asynchronous Supabase sync if connected
     syncForumHighlightsFromSupabase().then(() => {
-      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+      setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
     });
 
     const handleForumCacheUpdated = () => {
-      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+      setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
     };
     window.addEventListener('nexus_forum_cache_updated' as any, handleForumCacheUpdated);
     return () => {
@@ -435,16 +435,16 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
           );
         }
 
-        const activeHighlights = forumHighlights.filter(
-          (h) => !dismissedHighlightIds.has(h.id)
-        );
+        const activeHighlights = forumHighlights
+          .filter((h) => !dismissedHighlightIds.has(h.id))
+          .slice(0, 3);
 
         return (
           <React.Fragment>
             {processedPosts.map((post, index) => {
               const showSuggestionsAfterThis = (index === 3) || (processedPosts.length < 4 && index === processedPosts.length - 1);
 
-              // Curated Forum Highlight interleaving (spaced evenly, never flooding)
+              // Curated Forum Highlight interleaving (user post + max 2 brutal death metal others, never repeating)
               let highlightToRender: ForumHighlightThread | null = null;
               if (activeHighlights.length > 0) {
                 const hasUserPost = isUserForumThread(activeHighlights[0], userProfile, currentUserName, currentUserId);
@@ -455,7 +455,9 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                   highlightToRender = activeHighlights[0];
                 } else if (index > firstSlotIndex && (index - firstSlotIndex) % 8 === 0) {
                   const slot = Math.floor((index - firstSlotIndex) / 8);
-                  highlightToRender = activeHighlights[slot % activeHighlights.length];
+                  if (slot > 0 && slot < activeHighlights.length) {
+                    highlightToRender = activeHighlights[slot];
+                  }
                 }
               }
 

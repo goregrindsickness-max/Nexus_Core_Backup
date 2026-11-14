@@ -22,7 +22,7 @@ export const SocialThemeShell: React.FC<SocialThemeShellProps> = ({
         ref={containerRef}
         data-theme={dataTheme}
         className={`w-full bg-[#030303] text-zinc-200 font-sans overflow-x-clip pl-0 ${
-          isMessagesTab ? 'h-screen max-h-screen flex flex-col overflow-hidden pb-14 sm:pb-16' : 'min-h-screen pb-6 sm:pb-8'
+          isMessagesTab ? 'h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden pb-0' : 'min-h-[100dvh] pb-[max(1.5rem,env(safe-area-inset-bottom))]'
         }`}
         style={gridStyle}
       >

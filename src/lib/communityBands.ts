@@ -25,6 +25,7 @@ export interface DiscographyTrack {
   title: string;
   duration?: string;
   stream_url?: string;
+  previewUrl?: string;
   lyrics?: string;
 }
 
@@ -70,10 +71,17 @@ export interface CommunityBandRecord {
   description?: string;
   avatar_url?: string;
   logo_url?: string;
+  image_url?: string;
+  logo?: string;
   cover_url?: string;
   banner_url?: string;
   avatar?: string;
   image?: string;
+  profile?: {
+    avatar_url?: string;
+    banner_url?: string;
+    cover_url?: string;
+  };
   spotify?: string;
   spotify_url?: string;
   bandcamp?: string;
@@ -462,6 +470,31 @@ export function pickBestBandImage(...urls: (string | undefined | null)[]): strin
   return '';
 }
 
+export function resolveCanonicalBandLogo(band: any): string {
+  if (!band || typeof band !== 'object') return '';
+  return pickBestBandImage(
+    band.avatar_url,
+    band.logo_url,
+    band.image_url,
+    band.logo,
+    band.profile?.avatar_url,
+    band.avatar,
+    band.image
+  );
+}
+
+export function resolveCanonicalBandCover(band: any): string {
+  if (!band || typeof band !== 'object') return '';
+  return pickBestBandImage(
+    band.cover_url,
+    band.banner_url,
+    band.cover,
+    band.banner,
+    band.profile?.banner_url,
+    band.profile?.cover_url
+  );
+}
+
 export function isGorgasmBand(bandIdOrName?: string | null, customSlug?: string | null): boolean {
   const idOrName = String(bandIdOrName || '').toLowerCase().trim();
   const slug = String(customSlug || '').toLowerCase().trim();
@@ -753,9 +786,9 @@ export function parseBandLineup(raw: any): LineupMember[] {
       }
     }
     if (members.length === 0 && !trimmed.startsWith('[')) {
-      const parts = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+      const parts = trimmed.split(/,(?![^()]*\))/).map((s) => s.trim()).filter(Boolean);
       members = parts.map((part, idx) => {
-        const match = part.match(/^(.*?)\s*\((.*?)\)$/);
+        const match = part.match(/^(.*?)\s*\((.*)\)$/);
         if (match) {
           return {
             id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
@@ -775,18 +808,79 @@ export function parseBandLineup(raw: any): LineupMember[] {
       });
     }
   }
-  const normalized = members
+
+  // Heal previously comma-corrupted entries where a member's role was split across elements e.g.
+  // [{ name: "John Gallagher (Lead Guitars", role: "Musician" }, { name: "Vocals)", role: "Musician" }]
+  const healedMembers: any[] = [];
+  for (let i = 0; i < members.length; i++) {
+    const cur = members[i];
+    if (!cur) continue;
+    if (typeof cur === 'object' && typeof cur.name === 'string') {
+      const rawName = cur.name.trim();
+      if (rawName.endsWith(')') && !rawName.includes('(')) {
+        // Role fragment from a split parenthesis; append to previous member's role if possible
+        const extraRole = rawName.replace(/\)+$/, '').trim();
+        if (healedMembers.length > 0 && extraRole) {
+          const prev = healedMembers[healedMembers.length - 1];
+          if (prev && typeof prev.role === 'string') {
+            prev.role = prev.role === 'Musician' ? extraRole : `${prev.role}, ${extraRole}`;
+          }
+        }
+        continue;
+      }
+      if (rawName.includes('(') && !rawName.includes(')')) {
+        const [cleanName, openRole] = rawName.split('(');
+        let combinedRole = (openRole || '').trim();
+        // Check if next item is the closing paren fragment
+        const next = members[i + 1];
+        if (next && typeof next === 'object' && typeof next.name === 'string' && next.name.trim().endsWith(')') && !next.name.includes('(')) {
+          const nextRole = next.name.trim().replace(/\)+$/, '').trim();
+          if (nextRole) combinedRole = combinedRole ? `${combinedRole}, ${nextRole}` : nextRole;
+          i++; // skip fragment
+        } else if (cur.role && cur.role !== 'Musician' && !combinedRole.toLowerCase().includes(String(cur.role).toLowerCase())) {
+          combinedRole = combinedRole ? `${combinedRole}, ${cur.role}` : String(cur.role);
+        }
+        healedMembers.push({
+          ...cur,
+          name: cleanName.trim(),
+          role: combinedRole || cur.role || 'Musician'
+        });
+        continue;
+      }
+    }
+    healedMembers.push(cur);
+  }
+
+  const normalized = healedMembers
     .filter(Boolean)
     .map((m, idx) => {
       if (typeof m === 'string') {
-        const name = m.trim();
-        return name ? ({ id: `mem-${idx}`, name, role: 'Musician', status: 'active', years: 'Present' } as LineupMember) : null;
+        const trimmedStr = m.trim();
+        if (!trimmedStr) return null;
+        const match = trimmedStr.match(/^(.*?)\s*\((.*)\)$/);
+        if (match) {
+          return {
+            id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+            name: match[1].trim(),
+            role: match[2].trim() || 'Musician',
+            status: 'active',
+            years: 'Present'
+          } as LineupMember;
+        }
+        return { id: `mem-${idx}`, name: trimmedStr, role: 'Musician', status: 'active', years: 'Present' } as LineupMember;
       }
       if (typeof m === 'object' && typeof m.name === 'string' && m.name.trim()) {
+        let cleanName = m.name.trim();
+        let cleanRole = (typeof m.role === 'string' && m.role.trim()) ? m.role.trim() : 'Musician';
+        const inlineMatch = cleanName.match(/^(.*?)\s*\((.*)\)$/);
+        if (inlineMatch && (cleanRole === 'Musician' || !cleanRole)) {
+          cleanName = inlineMatch[1].trim();
+          cleanRole = inlineMatch[2].trim() || 'Musician';
+        }
         return {
           ...m,
-          name: m.name.trim(),
-          role: (typeof m.role === 'string' && m.role.trim()) ? m.role.trim() : 'Musician',
+          name: cleanName,
+          role: cleanRole,
           status: m.status || 'active',
           years: (typeof m.years === 'string' && m.years.trim()) ? m.years.trim() : 'Present'
         } as LineupMember;
@@ -803,11 +897,24 @@ export function deduplicateLineup(members: LineupMember[]): LineupMember[] {
   const seen = new Map<string, LineupMember>();
   for (const m of members) {
     if (!m || !m.name) continue;
-    const normName = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const trimmedName = m.name.trim();
+    if (trimmedName.endsWith(')') && !trimmedName.includes('(')) continue;
+    const normName = trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!normName) continue;
 
-    // Blacklist legacy/fake mock members for Birdflesh
-    if (normName === 'smogen' || normName === 'smgen' || normName === 'barra' || (normName === 'elis' && !m.name.toLowerCase().includes('edin'))) {
+    // Blacklist generic role-only placeholders or legacy mock members
+    if (
+      normName === 'smogen' ||
+      normName === 'smgen' ||
+      normName === 'barra' ||
+      (normName === 'elis' && !trimmedName.toLowerCase().includes('edin')) ||
+      normName === 'lead' ||
+      normName === 'member' ||
+      normName === 'vocals' ||
+      normName === 'guitars' ||
+      normName === 'drums' ||
+      normName === 'bass'
+    ) {
       continue;
     }
 
@@ -817,10 +924,20 @@ export function deduplicateLineup(members: LineupMember[]): LineupMember[] {
       const existing = seen.get(normName)!;
       if (existing.status === 'past' && m.status === 'active') {
         seen.set(normName, m);
+      } else if (existing.role === 'Musician' && m.role && m.role !== 'Musician') {
+        seen.set(normName, m);
       }
     }
   }
   return Array.from(seen.values());
+}
+
+function isLineupIntentionallyCleared(bandId?: string, bandUUID?: string, cleanBandName?: string): boolean {
+  return Boolean(
+    (bandId && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${bandId}`) === 'true') ||
+    (bandUUID && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${bandUUID}`) === 'true') ||
+    (cleanBandName && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${cleanBandName}`) === 'true')
+  );
 }
 
 const safeLocalStorage = {
@@ -1157,6 +1274,11 @@ export class CommunityBandManager {
   private syncLocks = new Map<string, Promise<{ success: boolean; error?: string }>>();
   private realtimeFetchTimer: ReturnType<typeof setTimeout> | null = null;
   private memoryBands: CommunityBandRecord[] = [];
+  private hasAuthoritativeCloudSync = false;
+
+  public resetAuthoritativeSync(): void {
+    this.hasAuthoritativeCloudSync = false;
+  }
 
   private constructor() {
     this.initStorage();
@@ -1358,7 +1480,7 @@ export class CommunityBandManager {
                     banner_url: CC_REAL_BANNER
                   };
                 }
-                if (bName === 'aeon' || bId === '0f365267-3742-4ddb-a853-ad458a233c62' || bName === 'benediction' || bId === 'benediction-official-uuid' || bName === 'hypocrisy' || bId === 'hypocrisy-official-uuid' || bName.includes('extermination dismemberment') || bId === 'extermination-dismemberment-official-uuid' || bId === '2e4753ed-3af6-454d-912a-0512c544fb12') {
+                if (bName === 'benediction' || bId === 'benediction-official-uuid' || bName === 'hypocrisy' || bId === 'hypocrisy-official-uuid' || bName.includes('extermination dismemberment') || bId === 'extermination-dismemberment-official-uuid' || bId === '2e4753ed-3af6-454d-912a-0512c544fb12') {
                   delete b.discography;
                 }
                 return b;
@@ -1519,15 +1641,17 @@ export class CommunityBandManager {
         const itemDisco = Array.isArray(processedItem.discography) ? processedItem.discography : [];
         const freshDisco = fresh && Array.isArray(fresh.discography) ? fresh.discography : [];
 
-        const hasExplicitItemLineup = item.lineup !== undefined && item.lineup !== null && String(item.lineup).trim() !== '';
         const parsedItemLineup = parseBandLineup(item.lineup);
+        const isCleared = isLineupIntentionallyCleared(item.id, itemUUID, cleanNorm);
         // If it's a pre-seeded band, fill in missing baseline fields from fresh ONLY when DB/user field is null/undefined
         if (fresh) {
-          const safeLineup = hasExplicitItemLineup
+          const safeLineup = parsedItemLineup.length > 0
             ? parsedItemLineup
-            : (restoredLineupFromCache !== null ? restoredLineupFromCache : (fresh.lineup || []));
-          const safeAvatar = pickBestBandImage(item.logo_url, item.avatar_url, (item as any).avatar, (item as any).image) || fresh.logo_url || fresh.avatar_url;
-          const safeCover = pickBestBandImage(item.cover_url, item.banner_url) || fresh.cover_url || fresh.banner_url;
+            : isCleared
+            ? []
+            : (restoredLineupFromCache && restoredLineupFromCache.length > 0 ? restoredLineupFromCache : (fresh.lineup || []));
+          const safeAvatar = resolveCanonicalBandLogo(item) || resolveCanonicalBandLogo(fresh);
+          const safeCover = resolveCanonicalBandCover(item) || resolveCanonicalBandCover(fresh);
           processedItem = {
             ...fresh,
             ...item,
@@ -1535,6 +1659,8 @@ export class CommunityBandManager {
             band_name: rawName,
             avatar_url: safeAvatar,
             logo_url: safeAvatar,
+            image_url: safeAvatar,
+            logo: safeAvatar,
             avatar: safeAvatar,
             image: safeAvatar,
             cover_url: safeCover,
@@ -1551,17 +1677,29 @@ export class CommunityBandManager {
             lineup: safeLineup
           };
         } else {
+          const safeAvatar = resolveCanonicalBandLogo(item);
+          const safeCover = resolveCanonicalBandCover(item);
           processedItem = {
             ...processedItem,
             name: rawName,
             band_name: rawName,
+            avatar_url: safeAvatar,
+            logo_url: safeAvatar,
+            image_url: safeAvatar,
+            logo: safeAvatar,
+            avatar: safeAvatar,
+            image: safeAvatar,
+            cover_url: safeCover,
+            banner_url: safeCover,
             discography: deduplicateDiscography([
               ...itemDisco,
               ...(cachedDisco || [])
             ], rawName),
-            lineup: hasExplicitItemLineup
+            lineup: parsedItemLineup.length > 0
               ? parsedItemLineup
-              : (restoredLineupFromCache !== null ? restoredLineupFromCache : [])
+              : isCleared
+              ? []
+              : (restoredLineupFromCache && restoredLineupFromCache.length > 0 ? restoredLineupFromCache : [])
           };
         }
 
@@ -1610,14 +1748,16 @@ export class CommunityBandManager {
         }
       }
 
-      // 3. Append any initial pre-seeded band that is missing from user's storage and not deleted
-      for (const initBand of INITIAL_COMMUNITY_BANDS) {
-        const initNormName = initBand.name.toLowerCase().trim();
-        if (deletedIds.has(initBand.id) || deletedIds.has(ensureUUID(initBand.id))) continue;
-        if (!seenIds.has(initBand.id) && !seenNames.has(initNormName)) {
-          seenIds.add(initBand.id);
-          seenNames.add(initNormName);
-          result.push(initBand);
+      // 3. Append any initial pre-seeded band that is missing from user's storage and not deleted (skipped after an authoritative cloud sync)
+      if (!this.hasAuthoritativeCloudSync) {
+        for (const initBand of INITIAL_COMMUNITY_BANDS) {
+          const initNormName = initBand.name.toLowerCase().trim();
+          if (deletedIds.has(initBand.id) || deletedIds.has(ensureUUID(initBand.id))) continue;
+          if (!seenIds.has(initBand.id) && !seenNames.has(initNormName)) {
+            seenIds.add(initBand.id);
+            seenNames.add(initNormName);
+            result.push(initBand);
+          }
         }
       }
 
@@ -2269,12 +2409,16 @@ export class CommunityBandManager {
 
       const incomingParsedLineup = band.lineup !== undefined ? parseBandLineup(band.lineup) : null;
       const resolvedLineup: LineupMember[] = (() => {
-        if (incomingParsedLineup !== null) return incomingParsedLineup;
+        if (incomingParsedLineup !== null && (incomingParsedLineup.length > 0 || options?.allowEmptyLineup)) {
+          return incomingParsedLineup;
+        }
         if (idx >= 0 && all[idx].lineup !== undefined && all[idx].lineup !== null) {
-          return parseBandLineup(all[idx].lineup);
+          const fromAll = parseBandLineup(all[idx].lineup);
+          if (fromAll.length > 0) return fromAll;
         }
         if (existing?.lineup !== undefined && existing?.lineup !== null) {
-          return parseBandLineup(existing.lineup);
+          const fromExisting = parseBandLineup(existing.lineup);
+          if (fromExisting.length > 0) return fromExisting;
         }
         const stored = (band.id ? safeLocalStorage.getItem(`nexus_core_band_lineup_${band.id}`) : null) ||
                        safeLocalStorage.getItem(`nexus_core_band_lineup_${bandUUID}`) ||
@@ -2440,8 +2584,6 @@ export class CommunityBandManager {
               id: releaseId,
               band_id: bandUUID,
               band: resolvedBandName,
-              band_name: resolvedBandName,
-              artist: resolvedBandName,
               title: album.title || `Release ${idx + 1}`,
               type: album.type || 'album',
               release_date: album.year || String(new Date().getFullYear()),
@@ -2534,44 +2676,112 @@ export class CommunityBandManager {
     }
   }
 
-  // Fetch live Supabase 'bands' and 'releases' rows with explicit column selection and .range() pagination
-  public async fetchFromSupabase(options?: { page?: number; pageSize?: number; searchQuery?: string }): Promise<CommunityBandRecord[]> {
+  // Fetch live Supabase 'bands' and 'releases' rows with schema-resilient selection and full alphabetical batch pagination
+  public async fetchFromSupabase(options?: {
+    page?: number;
+    pageSize?: number;
+    searchQuery?: string;
+    authoritative?: boolean;
+  }): Promise<CommunityBandRecord[]> {
     try {
       const client = getSupabase();
       if (!client) return this.getAll();
 
-      const page = options?.page ?? 0;
-      const pageSize = options?.pageSize ?? 50;
-      const from = page * pageSize;
-      const to = from + pageSize - 1;
+      const hasExplicitPagination =
+        typeof options?.page === 'number' || typeof options?.pageSize === 'number';
+      const cleanSearch = options?.searchQuery?.trim() || '';
 
-      let bandsQuery = client
-        .from('bands')
-        .select('id, band_name, custom_slug, genre, micro_genres, founded_year, city, state_province, country, record_label, creator_id, bio, logo_url, avatar_url, cover_url, banner_url, spotify, bandcamp, metal_archives_url, featured_youtube_url, lineup, status, is_split_up, verification_status, is_verified, followers_count, created_at, updated_at')
-        .order('created_at', { ascending: false })
-        .range(from, to);
+      let bandsData: any[] = [];
+      let bandsErr: any = null;
 
-      if (options?.searchQuery && options.searchQuery.trim().length > 0) {
-        const q = options.searchQuery.trim();
-        bandsQuery = bandsQuery.or(`band_name.ilike.%${q}%,city.ilike.%${q}%,state_province.ilike.%${q}%,genre.ilike.%${q}%`);
+      if (hasExplicitPagination) {
+        const page = options?.page ?? 0;
+        const pageSize = options?.pageSize ?? 50;
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+
+        let bandsQuery = client
+          .from('bands')
+          .select('*')
+          .order('band_name', { ascending: true })
+          .range(from, to);
+
+        if (cleanSearch.length > 0) {
+          const safeQ = cleanSearch.replace(/[,%()]/g, ' ').trim();
+          if (safeQ) {
+            bandsQuery = bandsQuery.or(`band_name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,state_province.ilike.%${safeQ}%`);
+          }
+        }
+
+        const res = await bandsQuery;
+        bandsErr = res.error;
+        if (Array.isArray(res.data)) bandsData = res.data;
+      } else {
+        const BATCH_SIZE = 500;
+        const MAX_BATCHES = 20;
+        const seenRowKeys = new Set<string>();
+
+        for (let batchIdx = 0; batchIdx < MAX_BATCHES; batchIdx++) {
+          const from = batchIdx * BATCH_SIZE;
+          const to = from + BATCH_SIZE - 1;
+
+          let bandsQuery = client
+            .from('bands')
+            .select('*')
+            .order('band_name', { ascending: true })
+            .range(from, to);
+
+          if (cleanSearch.length > 0) {
+            const safeQ = cleanSearch.replace(/[,%()]/g, ' ').trim();
+            if (safeQ) {
+              bandsQuery = bandsQuery.or(`band_name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,state_province.ilike.%${safeQ}%`);
+            }
+          }
+
+          const { data: batchData, error: batchErr } = await bandsQuery;
+          if (batchErr) {
+            bandsErr = batchErr;
+            break;
+          }
+          if (!Array.isArray(batchData) || batchData.length === 0) {
+            break;
+          }
+
+          for (const row of batchData) {
+            const rowKey = row?.id ? String(row.id) : `${row?.band_name || row?.name || ''}::${bandsData.length}`;
+            if (!seenRowKeys.has(rowKey)) {
+              seenRowKeys.add(rowKey);
+              bandsData.push(row);
+            }
+          }
+
+          if (batchData.length < BATCH_SIZE) {
+            break;
+          }
+        }
       }
 
-      const { data: bandsData, error: bandsErr } = await bandsQuery;
-
-      if (bandsErr || !bandsData || !Array.isArray(bandsData)) {
+      if (bandsErr || !Array.isArray(bandsData)) {
         return this.getAll();
       }
 
       let releasesData: any[] = [];
       try {
-        const { data: relData, error: relErr } = await client
-          .from('releases')
-          .select('id, band_id, band_name, artist_name, title, release_date, type, cover_url, cover_image, label, catalog_id, tracks')
-          .range(0, 199);
+        const REL_BATCH_SIZE = 500;
+        for (let rBatch = 0; rBatch < 5; rBatch++) {
+          const rFrom = rBatch * REL_BATCH_SIZE;
+          const rTo = rFrom + REL_BATCH_SIZE - 1;
+          const { data: relData, error: relErr } = await client
+            .from('releases')
+            .select('*')
+            .range(rFrom, rTo);
 
-        if (!relErr && Array.isArray(relData) && relData.length > 0) {
-          releasesData = relData;
-        } else {
+          if (relErr || !Array.isArray(relData) || relData.length === 0) break;
+          releasesData.push(...relData);
+          if (relData.length < REL_BATCH_SIZE) break;
+        }
+
+        if (releasesData.length === 0) {
           // Fall back to releasesService which checks server /api/releases and IndexedDB
           const fallbackReleases = await fetchReleasesFromDatabase();
           if (Array.isArray(fallbackReleases) && fallbackReleases.length > 0) {
@@ -2596,16 +2806,22 @@ export class CommunityBandManager {
         if (Array.isArray(fallbackReleases)) releasesData = fallbackReleases;
       }
 
-      const all = this.getAll();
-      const updatedList = [...all];
+      const isAuthoritativeSync = Boolean(options?.authoritative && !cleanSearch && bandsData.length > 0);
+      if (isAuthoritativeSync) {
+        this.hasAuthoritativeCloudSync = true;
+      }
+
+      const updatedList: CommunityBandRecord[] = isAuthoritativeSync ? [] : [...this.getAll()];
+      const cloudSyncedIds = new Set<string>();
       const deletedIds = getDeletedBandIds();
 
       for (const b of bandsData as any[]) {
-        let bandName = b.band_name || b.name;
-        if (!bandName || (bandName.toLowerCase().trim() === 'nexus artist' && !b.bio && (!b.micro_genres || b.micro_genres.length === 0))) continue;
+        let bandName = (b.band_name || b.name || '').trim();
+        const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
+        if (!bandName && !bSlug) continue;
+        if (bandName.toLowerCase() === 'nexus artist' && !b.bio && (!b.micro_genres || b.micro_genres.length === 0)) continue;
 
         let cleanBandName = bandName.toLowerCase().trim();
-        const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
         const bId = String(b.id || '').trim();
         const bUUID = bId ? ensureUUID(bId) : '';
 
@@ -2697,7 +2913,6 @@ export class CommunityBandManager {
           if (cleanBandName && sName === cleanBandName && cleanBandName !== 'nexus artist' && cleanBandName !== 'underground label') return true;
           return false;
         });
-        const effectiveExisting = existingItem || seedMatch;
 
         // Protect against accidental label / placeholder corruption (e.g. 'Underground Label', 'Nexus Artist')
         if (cleanBandName === 'underground label' || cleanBandName === 'nexus artist' || !cleanBandName) {
@@ -2725,40 +2940,18 @@ export class CommunityBandManager {
           ? b.micro_genres.split(',').map((s: string) => s.trim())
           : [];
 
-        const pickBestImage = (...urls: (string | undefined | null)[]): string => {
-          for (const u of urls) {
-            if (isValidBandImageUrl(u)) {
-              return (u as string).trim();
-            }
-          }
-          for (const u of urls) {
-            if (u && typeof u === 'string' && u.trim() && !BROKEN_BAND_IMAGE_FRAGMENTS.some(frag => u.toLowerCase().includes(frag))) {
-              return u.trim();
-            }
-          }
-          return '';
-        };
-
-        // Supabase is the single source of truth when online: lock custom uploaded logo/cover whenever DB value is non-null
-        const hasDbLogo = (b.logo_url !== null && b.logo_url !== undefined && String(b.logo_url).trim() !== '') ||
-                          (b.avatar_url !== null && b.avatar_url !== undefined && String(b.avatar_url).trim() !== '');
+        // Unified Supabase image resolution: check all canonical columns in priority order without Unsplash fallbacks
+        const dbLogo = resolveCanonicalBandLogo(b);
+        const hasDbLogo = dbLogo.length > 0;
         const resolvedAvatar = hasDbLogo
-          ? pickBestImage(b.logo_url, b.avatar_url)
-          : pickBestImage(
-              seedMatch?.logo_url,
-              seedMatch?.avatar_url,
-              (seedMatch as any)?.avatar,
-              (seedMatch as any)?.image
-            );
+          ? dbLogo
+          : resolveCanonicalBandLogo(seedMatch);
 
-        const hasDbCover = (b.cover_url !== null && b.cover_url !== undefined && String(b.cover_url).trim() !== '') ||
-                           (b.banner_url !== null && b.banner_url !== undefined && String(b.banner_url).trim() !== '');
+        const dbCover = resolveCanonicalBandCover(b);
+        const hasDbCover = dbCover.length > 0;
         const resolvedCover = hasDbCover
-          ? pickBestImage(b.cover_url, b.banner_url)
-          : pickBestImage(
-              seedMatch?.cover_url,
-              seedMatch?.banner_url
-            );
+          ? dbCover
+          : resolveCanonicalBandCover(seedMatch);
 
         // Authoritative discography from Supabase releases table, falling back to seedMatch only when DB has no releases for a seeded band
         const validRemote = (remoteDiscography || []).filter(r => !isDeletedRelease(r.id, r.title, cleanBandName));
@@ -2772,24 +2965,29 @@ export class CommunityBandManager {
           if (bUUID) saveBandDiscographyToCache(bUUID, cleanBandName, mergedDiscography);
         }
 
-        // Authoritative lineup from Supabase: if b.lineup is non-null (including '[]' when all members were removed),
-        // use it directly and NEVER overwrite with seed data or localStorage!
-        const mergedLineup: LineupMember[] = hasDbLineup
+        // Authoritative lineup from Supabase: use non-empty DB lineup directly; if DB lineup is empty ('[]' or null),
+        // only keep it empty if the user explicitly cleared it (tracked via isLineupIntentionallyCleared), otherwise heal from seedMatch!
+        const isCleared = isLineupIntentionallyCleared(bId, bUUID, cleanBandName);
+        const mergedLineup: LineupMember[] = parsedLineup.length > 0
           ? deduplicateLineup(parsedLineup)
+          : isCleared
+          ? []
           : deduplicateLineup(seedMatch?.lineup || []);
 
         const isOfficialVE = (b.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || cleanBandName === 'virulent excision');
         const resolvedVerification: BandVerificationStatus = isOfficialVE
           ? 'verified_official'
-          : 'community_archive';
+          : (b.verification_status === 'verified_official' || b.is_verified ? 'verified_official' : 'community_archive');
 
         // Prioritize Supabase cloud data with absolute precedence
         const record: CommunityBandRecord = {
-          id: b.id || existingItem?.id,
+          id: b.id || existingItem?.id || bSlug || generateUUID(),
           name: b.band_name || b.name || existingItem?.name || bandName,
           band_name: b.band_name || b.name || existingItem?.name || bandName,
+          custom_slug: b.custom_slug || existingItem?.custom_slug || seedMatch?.custom_slug,
           genre: b.genre || microGenres[0] || existingItem?.genre || seedMatch?.genre || 'Extreme Metal',
           subgenres: (microGenres.length > 0 ? microGenres : (existingItem?.subgenres && existingItem.subgenres.length > 0 ? existingItem.subgenres : (seedMatch?.subgenres || []))),
+          micro_genres: (microGenres.length > 0 ? microGenres : (existingItem?.micro_genres && existingItem.micro_genres.length > 0 ? existingItem.micro_genres : (seedMatch?.micro_genres || []))),
           founded_year: b.founded_year ?? seedMatch?.founded_year ?? '',
           city: b.city ?? seedMatch?.city ?? '',
           state: b.state_province ?? b.state ?? seedMatch?.state ?? '',
@@ -2798,9 +2996,11 @@ export class CommunityBandManager {
           record_label: b.record_label ?? b.label_name ?? b.label ?? seedMatch?.record_label ?? seedMatch?.label ?? '',
           label: b.label ?? b.record_label ?? b.label_name ?? seedMatch?.label ?? seedMatch?.record_label ?? '',
           creator_id: b.creator_id || existingItem?.creator_id,
-          bio: (b.bio !== null && b.bio !== undefined && b.bio.trim() !== '') ? b.bio.trim() : (seedMatch?.bio || 'Not written yet.'),
+          bio: (b.bio !== null && b.bio !== undefined && String(b.bio).trim() !== '') ? String(b.bio).trim() : (seedMatch?.bio || 'Not written yet.'),
           avatar_url: resolvedAvatar,
           logo_url: resolvedAvatar,
+          image_url: resolvedAvatar,
+          logo: resolvedAvatar,
           avatar: resolvedAvatar,
           image: resolvedAvatar,
           cover_url: resolvedCover,
@@ -2819,10 +3019,13 @@ export class CommunityBandManager {
           status: b.status || ((b as any).is_split_up ? 'split-up' : (existingItem?.status || 'active')),
           is_split_up: Boolean(b.status === 'split-up' || (b as any).is_split_up || existingItem?.status === 'split-up' || (existingItem as any)?.is_split_up),
           verification_status: resolvedVerification,
-          followers_count: existingItem?.followers_count || seedMatch?.followers_count || 120
+          followers_count: b.followers_count ?? existingItem?.followers_count ?? seedMatch?.followers_count ?? 120
         };
 
-        // Update localStorage strictly as a read-through cache of Supabase
+        cloudSyncedIds.add(record.id);
+        cloudSyncedIds.add(ensureUUID(record.id));
+
+        // Update localStorage strictly as a read-through cache of Supabase (and purge stale logo/cover entries when missing in Supabase)
         try {
           if (hasDbLineup || mergedLineup.length > 0) {
             const serializedLineup = JSON.stringify(mergedLineup);
@@ -2831,15 +3034,23 @@ export class CommunityBandManager {
             if (bUUID) safeLocalStorage.setItem(`nexus_core_band_lineup_${bUUID}`, serializedLineup);
             if (cleanBandName) safeLocalStorage.setItem(`nexus_core_band_lineup_${cleanBandName}`, serializedLineup);
           }
-          if (hasDbLogo && resolvedAvatar) {
+          if (resolvedAvatar) {
             if (record.id) safeLocalStorage.setItem(`nexus_core_band_logo_${record.id}`, resolvedAvatar);
             if (bId) safeLocalStorage.setItem(`nexus_core_band_logo_${bId}`, resolvedAvatar);
             if (bUUID) safeLocalStorage.setItem(`nexus_core_band_logo_${bUUID}`, resolvedAvatar);
+          } else {
+            if (record.id) safeLocalStorage.removeItem(`nexus_core_band_logo_${record.id}`);
+            if (bId) safeLocalStorage.removeItem(`nexus_core_band_logo_${bId}`);
+            if (bUUID) safeLocalStorage.removeItem(`nexus_core_band_logo_${bUUID}`);
           }
-          if (hasDbCover && resolvedCover) {
+          if (resolvedCover) {
             if (record.id) safeLocalStorage.setItem(`nexus_core_band_cover_${record.id}`, resolvedCover);
             if (bId) safeLocalStorage.setItem(`nexus_core_band_cover_${bId}`, resolvedCover);
             if (bUUID) safeLocalStorage.setItem(`nexus_core_band_cover_${bUUID}`, resolvedCover);
+          } else {
+            if (record.id) safeLocalStorage.removeItem(`nexus_core_band_cover_${record.id}`);
+            if (bId) safeLocalStorage.removeItem(`nexus_core_band_cover_${bId}`);
+            if (bUUID) safeLocalStorage.removeItem(`nexus_core_band_cover_${bUUID}`);
           }
         } catch {}
 
@@ -2870,6 +3081,10 @@ export class CommunityBandManager {
       for (const group of byIdentity.values()) {
         if (group.length > 1) {
           group.sort((a, b) => {
+            const isCloudA = cloudSyncedIds.has(a.id) || cloudSyncedIds.has(ensureUUID(a.id));
+            const isCloudB = cloudSyncedIds.has(b.id) || cloudSyncedIds.has(ensureUUID(b.id));
+            if (isCloudA !== isCloudB) return isCloudA ? -1 : 1;
+
             const isOfficialA = (a.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || (a.name || '').toLowerCase() === 'virulent excision');
             const isOfficialB = (b.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || (b.name || '').toLowerCase() === 'virulent excision');
             if (isOfficialA && !isOfficialB) return -1;
@@ -2909,6 +3124,30 @@ export class CommunityBandManager {
       });
 
       this.saveToStorage(sortedDedupedList);
+
+      // Overwrite secondary local caches with authoritative Supabase data so stale local entries never persist
+      try {
+        const regRaw = safeLocalStorage.getItem('nexus_registered_bands');
+        if (regRaw) {
+          const regParsed = JSON.parse(regRaw);
+          if (Array.isArray(regParsed)) {
+            const byKey = new Map<string, CommunityBandRecord>();
+            for (const rec of sortedDedupedList) {
+              byKey.set(rec.id, rec);
+              byKey.set(ensureUUID(rec.id), rec);
+              if (rec.name) byKey.set(rec.name.toLowerCase().trim(), rec);
+            }
+            const refreshedReg = regParsed.map((old: any) => {
+              const match = (old?.id && (byKey.get(old.id) || byKey.get(ensureUUID(old.id)))) ||
+                            (old?.name && byKey.get(String(old.name).toLowerCase().trim())) ||
+                            (old?.band_name && byKey.get(String(old.band_name).toLowerCase().trim()));
+              return match ? { ...old, ...match } : old;
+            });
+            safeLocalStorage.setItem('nexus_registered_bands', JSON.stringify(refreshedReg));
+          }
+        }
+      } catch {}
+
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: sortedDedupedList }));
       }

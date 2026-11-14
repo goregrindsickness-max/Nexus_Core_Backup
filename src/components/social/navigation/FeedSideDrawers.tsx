@@ -338,14 +338,22 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
           {/* Floating Right Handle - Pull to open Notifications */}
           <button
             onClick={() => setRightDrawerOpen(true)}
-            className={`fixed right-0 top-[55%] z-30 bg-zinc-900/95 border border-r-0 border-zinc-800 rounded-l-xl py-4 px-1.5 flex flex-col items-center gap-1.5 group transition-all duration-300 ${
-              portalRole === 'band'
-                ? 'hover:bg-emerald-950/95 hover:border-emerald-500/50 shadow-[-4px_0_20px_rgba(57,255,20,0.2)]'
+            className={`fixed right-0 top-[55%] z-30 bg-zinc-900/95 border border-r-0 rounded-l-xl py-4 px-1.5 flex flex-col items-center gap-1.5 group transition-all duration-300 ${
+              unreadNotifsCount > 0
+                ? portalRole === 'band'
+                  ? 'border-[#39ff14]/70 shadow-[-3px_0_14px_rgba(57,255,20,0.42)] hover:bg-emerald-950/95'
+                  : portalRole === 'promoter'
+                  ? 'border-yellow-400/75 shadow-[-3px_0_14px_rgba(234,179,8,0.42)] hover:bg-yellow-950/95'
+                  : portalRole === 'fan_only'
+                  ? 'border-cyan-400/75 shadow-[-3px_0_14px_rgba(34,211,238,0.42)] hover:bg-cyan-950/95'
+                  : 'border-rose-500 shadow-[0_0_12px_#f43f5e] hover:bg-rose-950/95'
+                : portalRole === 'band'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-emerald-950/95 hover:border-emerald-500/50'
                 : portalRole === 'promoter'
-                ? 'hover:bg-yellow-950/95 hover:border-yellow-500/50 shadow-[-4px_0_20px_rgba(234,179,8,0.2)]'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-yellow-950/95 hover:border-yellow-500/50'
                 : portalRole === 'fan_only'
-                ? 'hover:bg-cyan-950/95 hover:border-cyan-500/50 shadow-[-4px_0_20px_rgba(34,211,238,0.2)]'
-                : 'hover:bg-rose-950/95 hover:border-rose-500/50 shadow-[-4px_0_20px_rgba(244,63,94,0.15)]'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-cyan-950/95 hover:border-cyan-500/50'
+                : 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-rose-950/95 hover:border-rose-500/50'
             }`}
             title="Open Notifications"
           >

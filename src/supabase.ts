@@ -164,3 +164,11 @@ export {
 } from './services/archiveShowsService';
 export type { ArchiveShowItem } from './services/archiveShowsService';
 
+// 11. Community Show Sync & Reconciliation Service
+export {
+  syncCommunityShowToCloud,
+  reconcilePendingCommunityShows,
+} from './services/communityShowSyncService';
+export type { SyncCommunityShowResult } from './services/communityShowSyncService';
+
+

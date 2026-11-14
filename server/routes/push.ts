@@ -1,5 +1,4 @@
 import express from 'express';
-import webpush from 'web-push';
 import {
   getSupabaseService,
   getUserOwnedEntityIds,
@@ -9,12 +8,17 @@ import {
   getVapidKeys,
   initVapidKeys,
   loadPushSubscriptionsAsync,
-  writePushSubscriptions,
-  syncPushSubscriptionToSupabase,
-  deletePushSubscriptionFromSupabase,
   checkAndSend24hShowReminders,
-  StoredPushSubscription,
 } from '../lib/clients';
+import {
+  initFirebaseAdmin,
+  isFcmReady,
+  normalizePlatform,
+  registerPushSubscription,
+  markPushSubscriptionInactive,
+  getActivePushSubscriptionsForUser,
+  dispatchPushToUsers,
+} from '../lib/pushDispatcher';
 import {
   requireAuth,
   requireAdmin,
@@ -31,105 +35,207 @@ pushRouter.get('/api/push/vapid-public-key', async (_req, res) => {
   res.json({ publicKey: keys.publicKey });
 });
 
-// API ROUTE: Get Web Push gateway status & active subscription count
+// API ROUTE: Get Push gateway status & active subscription count across FCM + Web Push
 pushRouter.get('/api/push/status', requireAuth, async (req, res) => {
-  const subs = await loadPushSubscriptionsAsync();
+  initFirebaseAdmin();
   const keys = getVapidKeys() || (await initVapidKeys());
-  const userSubs = req.authUser?.isAdmin
-    ? subs
-    : subs.filter(
+  const isAdmin = Boolean(req.authUser?.isAdmin);
+  const authId = req.authUser!.id;
+  const authEmail = req.authUser?.email?.toLowerCase();
+
+  const dbRows = await getActivePushSubscriptionsForUser(authId, isAdmin);
+  const legacySubs = await loadPushSubscriptionsAsync();
+  const userLegacySubs = isAdmin
+    ? legacySubs
+    : legacySubs.filter(
         (s) =>
-          s.userId === req.authUser?.id ||
-          (req.authUser?.email && s.userEmail?.toLowerCase() === req.authUser.email)
+          s.userId === authId ||
+          (authEmail && s.userEmail?.toLowerCase() === authEmail)
       );
+
+  const webEndpoints = new Set<string>();
+  const fcmTokens = new Set<string>();
+  let androidCount = 0;
+  let iosCount = 0;
+  let webCount = 0;
+
+  for (const row of dbRows) {
+    if (row.platform === 'android' && row.fcm_token) {
+      if (!fcmTokens.has(row.fcm_token)) {
+        fcmTokens.add(row.fcm_token);
+        androidCount++;
+      }
+    } else if (row.platform === 'ios' && row.fcm_token) {
+      if (!fcmTokens.has(row.fcm_token)) {
+        fcmTokens.add(row.fcm_token);
+        iosCount++;
+      }
+    } else if (row.platform === 'web' && row.web_push_subscription?.endpoint) {
+      if (!webEndpoints.has(row.web_push_subscription.endpoint)) {
+        webEndpoints.add(row.web_push_subscription.endpoint);
+        webCount++;
+      }
+    }
+  }
+
+  for (const leg of userLegacySubs) {
+    const ep = leg?.subscription?.endpoint;
+    if (ep && !ep.startsWith('native://') && !webEndpoints.has(ep)) {
+      webEndpoints.add(ep);
+      webCount++;
+    }
+  }
+
   res.json({
     configured: Boolean(keys.publicKey && keys.privateKey),
+    fcmConfigured: isFcmReady(),
     publicKey: keys.publicKey,
-    activeSubscriptions: userSubs.length,
+    activeSubscriptions: androidCount + iosCount + webCount,
+    platforms: {
+      android: androidCount,
+      ios: iosCount,
+      web: webCount,
+    },
   });
 });
 
-// API ROUTE: Register or update a browser Web Push subscription
-pushRouter.post('/api/push/subscribe', requireAuth, pushLimiter, express.json(), async (req, res) => {
+// Shared handler for device token & Web Push subscription registration / login refresh
+async function handleRegisterOrRefreshPush(req: express.Request, res: express.Response) {
   try {
-    const { subscription, role, userAgent } = req.body;
-    if (!subscription || !subscription.endpoint) {
-      return res.status(400).json({ error: 'Invalid PushSubscription object (missing endpoint)' });
+    const {
+      subscription,
+      web_push_subscription,
+      token,
+      fcm_token,
+      fcmToken,
+      platform: rawPlatform,
+      role,
+      userAgent,
+    } = req.body || {};
+
+    const resolvedWebSub = web_push_subscription || subscription || null;
+    const resolvedFcmToken = fcm_token || fcmToken || token || null;
+    const hasWebSub = Boolean(resolvedWebSub && resolvedWebSub.endpoint);
+    const hasFcmToken = Boolean(
+      resolvedFcmToken && typeof resolvedFcmToken === 'string' && resolvedFcmToken.trim().length > 0
+    );
+
+    if (!hasWebSub && !hasFcmToken) {
+      return res.status(400).json({
+        error: 'Invalid push registration payload: provide either a valid Web Push subscription (with endpoint) or a native FCM token.',
+      });
+    }
+
+    const platform = normalizePlatform(rawPlatform, hasWebSub && !hasFcmToken);
+    if ((platform === 'android' || platform === 'ios') && !hasFcmToken) {
+      return res.status(400).json({
+        error: `Missing fcm_token for platform '${platform}'.`,
+      });
+    }
+    if (platform === 'web' && !hasWebSub) {
+      return res.status(400).json({
+        error: 'Invalid PushSubscription object (missing endpoint) for platform web.',
+      });
     }
 
     const verifiedUserId = req.authUser!.id;
     const verifiedEmail = req.authUser!.email;
 
-    const subs = await loadPushSubscriptionsAsync();
-    const now = new Date().toISOString();
-    const existingIndex = subs.findIndex((s) => s.subscription?.endpoint === subscription.endpoint);
+    const { savedRow, totalLocalSubscriptions } = await registerPushSubscription({
+      userId: verifiedUserId,
+      userEmail: verifiedEmail,
+      platform,
+      fcmToken: hasFcmToken ? String(resolvedFcmToken).trim() : null,
+      webPushSubscription: hasWebSub ? resolvedWebSub : null,
+      role,
+      userAgent,
+    });
 
-    let savedEntry: StoredPushSubscription;
-
-    if (existingIndex >= 0) {
-      subs[existingIndex] = {
-        ...subs[existingIndex],
-        userId: verifiedUserId || subs[existingIndex].userId,
-        userEmail: verifiedEmail || subs[existingIndex].userEmail,
-        role: role || subs[existingIndex].role,
-        subscription,
-        userAgent: userAgent || subs[existingIndex].userAgent,
-        last_used_at: now,
-      };
-      savedEntry = subs[existingIndex];
-    } else {
-      savedEntry = {
-        id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        userId: verifiedUserId,
-        userEmail: verifiedEmail,
-        role,
-        subscription,
-        userAgent,
-        created_at: now,
-        last_used_at: now,
-      };
-      subs.push(savedEntry);
-    }
-
-    writePushSubscriptions(subs);
-    syncPushSubscriptionToSupabase(savedEntry).catch(() => {});
-
-    res.json({ success: true, totalSubscriptions: subs.length });
+    res.json({
+      success: true,
+      platform,
+      isActive: true,
+      subscription: savedRow,
+      totalSubscriptions: totalLocalSubscriptions,
+    });
   } catch (err: any) {
-    console.error('[WEB PUSH SUBSCRIBE ERROR]', err);
+    console.error('[PUSH SUBSCRIBE ERROR]', err);
     res.status(500).json({ error: err.message || 'Failed to save push subscription' });
   }
-});
+}
 
-// API ROUTE: Unsubscribe a browser endpoint
+// API ROUTE: Register or refresh a device token (Android/iOS FCM) or Web Push subscription
+pushRouter.post('/api/push/subscribe', requireAuth, pushLimiter, express.json(), handleRegisterOrRefreshPush);
+pushRouter.post('/api/push/register', requireAuth, pushLimiter, express.json(), handleRegisterOrRefreshPush);
+pushRouter.post('/api/push/refresh', requireAuth, pushLimiter, express.json(), handleRegisterOrRefreshPush);
+
+// API ROUTE: Deactivate a device token or browser Web Push endpoint
 pushRouter.post('/api/push/unsubscribe', requireAuth, pushLimiter, express.json(), async (req, res) => {
   try {
-    const { endpoint } = req.body;
-    if (!endpoint) {
-      return res.status(400).json({ error: 'Missing endpoint' });
+    const { endpoint, token, fcm_token, fcmToken } = req.body || {};
+    const cleanToken = fcm_token || fcmToken || token || null;
+
+    if (!endpoint && !cleanToken) {
+      return res.status(400).json({ error: 'Missing endpoint or fcm_token' });
     }
-    const subs = await loadPushSubscriptionsAsync();
-    const target = subs.find((s) => s.subscription?.endpoint === endpoint);
-    if (
-      target &&
-      !req.authUser!.isAdmin &&
-      target.userId &&
-      target.userId !== req.authUser!.id
-    ) {
-      return res.status(403).json({
-        error: 'Forbidden: Cannot unsubscribe another user endpoint.',
-      });
+
+    const authUser = req.authUser!;
+    const supabase = getSupabaseService();
+
+    if (!authUser.isAdmin) {
+      if (supabase && cleanToken) {
+        const { data: rows } = await supabase
+          .from('push_subscriptions')
+          .select('id, user_id')
+          .eq('fcm_token', String(cleanToken).trim());
+        if (Array.isArray(rows) && rows.some((r: any) => r.user_id && r.user_id !== authUser.id)) {
+          return res.status(403).json({
+            error: 'Forbidden: Cannot unsubscribe another user device token.',
+          });
+        }
+      }
+      if (endpoint) {
+        const subs = await loadPushSubscriptionsAsync();
+        const target = subs.find((s) => s.subscription?.endpoint === endpoint);
+        if (target && target.userId && target.userId !== authUser.id) {
+          return res.status(403).json({
+            error: 'Forbidden: Cannot unsubscribe another user endpoint.',
+          });
+        }
+        if (supabase) {
+          const { data: webRows } = await supabase
+            .from('push_subscriptions')
+            .select('id, user_id, web_push_subscription')
+            .eq('platform', 'web');
+          const ownerMatch = Array.isArray(webRows)
+            ? webRows.find((r: any) => r?.web_push_subscription?.endpoint === endpoint)
+            : null;
+          if (ownerMatch && ownerMatch.user_id && ownerMatch.user_id !== authUser.id) {
+            return res.status(403).json({
+              error: 'Forbidden: Cannot unsubscribe another user endpoint.',
+            });
+          }
+        }
+      }
     }
-    const filtered = subs.filter((s) => s.subscription?.endpoint !== endpoint);
-    writePushSubscriptions(filtered);
-    deletePushSubscriptionFromSupabase(endpoint).catch(() => {});
-    res.json({ success: true, totalSubscriptions: filtered.length });
+
+    await markPushSubscriptionInactive({
+      fcmToken: cleanToken ? String(cleanToken).trim() : null,
+      endpoint: endpoint ? String(endpoint).trim() : null,
+    });
+
+    const remaining = await loadPushSubscriptionsAsync();
+    res.json({
+      success: true,
+      deactivated: true,
+      totalSubscriptions: remaining.length,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to unsubscribe' });
   }
 });
 
-// API ROUTE: Dispatch real Web Push Notification via VAPID + Persist to Supabase
+// API ROUTE: Dispatch Notification via FCM (Android/iOS) + VAPID Web Push + Persist to Supabase
 pushRouter.post('/api/push/send', requireAuth, pushLimiter, express.json(), async (req, res) => {
   try {
     const {
@@ -145,6 +251,11 @@ pushRouter.post('/api/push/send', requireAuth, pushLimiter, express.json(), asyn
       targetUserId,
       targetEmail,
       targetSubscription,
+      excludeUserId,
+      excludeUserEmail,
+      route,
+      targetId,
+      type,
       data = {},
     } = req.body || {};
 
@@ -170,98 +281,55 @@ pushRouter.post('/api/push/send', requireAuth, pushLimiter, express.json(), asyn
       }
     }
 
-    const allSubs = await loadPushSubscriptionsAsync();
-
-    if (
-      targetSubscription &&
-      targetSubscription.endpoint &&
-      !allSubs.some((s) => s.subscription?.endpoint === targetSubscription.endpoint)
-    ) {
-      const now = new Date().toISOString();
-      const adhocEntry: StoredPushSubscription = {
-        id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    if (targetSubscription?.endpoint) {
+      await registerPushSubscription({
         userId: authUser.id,
         userEmail: authUser.email,
-        subscription: targetSubscription,
-        created_at: now,
-        last_used_at: now,
-      };
-      allSubs.push(adhocEntry);
-      writePushSubscriptions(allSubs);
-      syncPushSubscriptionToSupabase(adhocEntry).catch(() => {});
+        platform: 'web',
+        webPushSubscription: targetSubscription,
+      });
     }
 
-    let targetSubs = allSubs;
-    if (targetSubscription?.endpoint) {
-      const directMatches = allSubs.filter(
-        (s) => s.subscription?.endpoint === targetSubscription.endpoint
-      );
-      if (directMatches.length > 0) targetSubs = directMatches;
-    } else if (targetUserId || targetEmail) {
-      const matches = allSubs.filter(
-        (s) =>
-          (targetUserId && (s.userId === targetUserId || s.userEmail === targetUserId)) ||
-          (targetEmail && s.userEmail?.toLowerCase() === String(targetEmail).toLowerCase())
-      );
-      if (matches.length > 0) {
-        targetSubs = matches;
-      } else if (!authUser.isAdmin) {
-        targetSubs = [];
-      }
-    }
+    const alertType =
+      type === 'dm' || type === 'show_reminder' || type === 'notice'
+        ? type
+        : category === 'direct_messages' || targetTab === 'messages'
+          ? 'dm'
+          : category === 'vip_guestlist_access'
+            ? 'show_reminder'
+            : 'notice';
 
-    const payload = JSON.stringify({
-      title: String(title).slice(0, 140),
-      body: String(body).slice(0, 500),
+    const resolvedRoute =
+      route ||
+      (alertType === 'dm' ? '/messages' : alertType === 'show_reminder' ? '/shows' : '/');
+
+    const dispatchResult = await dispatchPushToUsers({
+      userIds: targetUserId ? [String(targetUserId)] : [],
+      userEmails: targetEmail ? [String(targetEmail)] : [],
+      excludeUserId: excludeUserId ? String(excludeUserId) : undefined,
+      excludeUserEmail: excludeUserEmail ? String(excludeUserEmail) : undefined,
+      directSubscriptions: targetSubscription?.endpoint ? [targetSubscription] : undefined,
+      broadcastAll: Boolean(authUser.isAdmin && !targetUserId && !targetEmail && !targetSubscription),
+      title: String(title),
+      body: String(body),
       icon,
       badge,
-      tag: tag || `nexus-push-${Date.now()}`,
-      targetTab,
-      category,
-      priority,
-      workspace,
+      tag,
       data: {
         ...data,
+        type: alertType,
+        targetId: String(targetId || data?.targetId || data?.postId || data?.showId || data?.senderId || ''),
+        route: String(resolvedRoute),
         targetTab,
         category,
         priority,
         workspace,
-        url: '/',
       },
-      timestamp: Date.now(),
     });
 
-    const expiredEndpoints = new Set<string>();
-    const results = await Promise.allSettled(
-      targetSubs.map(async (entry) => {
-        try {
-          if (entry.subscription?.endpoint?.startsWith('native://')) {
-            return { id: entry.id, status: 'delivered_native_bridge' };
-          }
-          await webpush.sendNotification(entry.subscription, payload);
-          return { id: entry.id, status: 'delivered' };
-        } catch (err: any) {
-          if (err.statusCode === 404 || err.statusCode === 410) {
-            expiredEndpoints.add(entry.subscription.endpoint);
-            deletePushSubscriptionFromSupabase(entry.subscription.endpoint).catch(() => {});
-          }
-          throw err;
-        }
-      })
-    );
-
-    if (expiredEndpoints.size > 0) {
-      const cleaned = allSubs.filter((s) => !expiredEndpoints.has(s.subscription.endpoint));
-      writePushSubscriptions(cleaned);
-    }
-
-    const deliveredCount = results.filter((r) => r.status === 'fulfilled').length;
-    const failedCount = results.filter((r) => r.status === 'rejected').length;
-
-    const supabase = getSupabaseService();
-    if (supabase && (targetUserId || targetEmail)) {
+    if (sb && (targetUserId || targetEmail)) {
       try {
-        await supabase.from('nexus_notifications').insert({
+        await sb.from('nexus_notifications').insert({
           id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           user_id: targetUserId || targetEmail,
           type: category,
@@ -272,24 +340,32 @@ pushRouter.post('/api/push/send', requireAuth, pushLimiter, express.json(), asyn
           created_at: new Date().toISOString(),
         });
       } catch (dbErr: any) {
-        console.warn('[WEB PUSH SUPABASE SYNC NOTICE]', dbErr?.message || dbErr);
+        console.warn('[PUSH SUPABASE SYNC NOTICE]', dbErr?.message || dbErr);
       }
     }
 
+    const activeSubs = await getActivePushSubscriptionsForUser(authUser.id, authUser.isAdmin);
+    const legacySubs = await loadPushSubscriptionsAsync();
+
     res.json({
       success: true,
-      delivered: deliveredCount,
-      failed: failedCount,
-      expiredCleaned: expiredEndpoints.size,
-      totalActiveSubscriptions: allSubs.length - expiredEndpoints.size,
+      delivered: dispatchResult.delivered,
+      failed: dispatchResult.failed,
+      fcmDelivered: dispatchResult.fcmDelivered,
+      fcmSkipped: dispatchResult.fcmSkipped,
+      webPushDelivered: dispatchResult.webPushDelivered,
+      expiredCleaned: dispatchResult.deactivatedCount,
+      deactivatedCount: dispatchResult.deactivatedCount,
+      totalActiveSubscriptions: Math.max(activeSubs.length, legacySubs.length),
+      ...(dispatchResult.warning ? { warning: dispatchResult.warning } : {}),
     });
   } catch (err: any) {
-    console.error('[WEB PUSH SEND ERROR]', err);
-    res.status(500).json({ error: err.message || 'Failed to dispatch Web Push notification' });
+    console.error('[PUSH SEND ERROR]', err);
+    res.status(500).json({ error: err.message || 'Failed to dispatch Push notification' });
   }
 });
 
-// API ROUTE: Manually trigger 24h VAPID push reminder dispatch for show RSVPs
+// API ROUTE: Manually trigger 24h FCM + VAPID push reminder dispatch for show RSVPs
 pushRouter.post('/api/push/trigger-show-reminders', requireAdmin, async (_req, res) => {
   try {
     const result = await checkAndSend24hShowReminders();

@@ -5,6 +5,7 @@ import { Type } from '@google/genai';
 import {
   getSupabaseService,
   getUserOwnedEntityIds,
+  assertBandOrEntityOwner,
   hasAnyOwnershipMatch,
 } from '../lib/supabaseAdmin';
 import {
@@ -18,6 +19,10 @@ import {
   loadPushSubscriptionsAsync,
   writePushSubscriptions,
 } from '../lib/clients';
+import {
+  registerPushSubscription,
+  dispatchPushToUsers,
+} from '../lib/pushDispatcher';
 import {
   requireAuth,
 } from '../middleware/auth';
@@ -337,9 +342,17 @@ showsRouter.post(
       }
 
       writeShowRsvps(rsvps);
-      await syncRsvpToSupabase(rsvpRecord);
+
+      const { fcmToken, token, platform: devicePlatform, sendReminderNow } = req.body || {};
+      const resolvedToken = fcmToken || token;
 
       if (pushSubscription && pushSubscription.endpoint) {
+        await registerPushSubscription({
+          userId: verifiedUserId,
+          userEmail: verifiedEmail,
+          platform: 'web',
+          webPushSubscription: pushSubscription,
+        });
         const subs = await loadPushSubscriptionsAsync();
         const subEndpoint = pushSubscription.endpoint;
         const subIdx = subs.findIndex((s) => s.subscription?.endpoint === subEndpoint);
@@ -357,15 +370,352 @@ showsRouter.post(
         if (subIdx >= 0) subs[subIdx] = subEntry;
         else subs.push(subEntry);
         writePushSubscriptions(subs);
+      } else if (resolvedToken && typeof resolvedToken === 'string') {
+        await registerPushSubscription({
+          userId: verifiedUserId,
+          userEmail: verifiedEmail,
+          platform: devicePlatform || 'android',
+          fcmToken: resolvedToken,
+        });
       }
+
+      // Check if show falls within immediate 24-32h window or explicit reminder request
+      let pushResult = null;
+      const now = new Date();
+      const tomorrowStr = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const todayStr = now.toISOString().split('T')[0];
+      const cleanDateStr = String(rsvpRecord.show_date || '').split('T')[0];
+      const showTimeMs = new Date(rsvpRecord.show_date || '').getTime();
+      const hoursDiff = !isNaN(showTimeMs) ? (showTimeMs - now.getTime()) / (1000 * 60 * 60) : 999;
+      const isImmediateWindow =
+        Boolean(sendReminderNow) ||
+        cleanDateStr === tomorrowStr ||
+        cleanDateStr === todayStr ||
+        (hoursDiff >= -2 && hoursDiff <= 32);
+
+      if (isImmediateWindow) {
+        pushResult = await dispatchPushToUsers({
+          userIds: [verifiedUserId],
+          userEmails: verifiedEmail ? [verifiedEmail] : undefined,
+          title: `🔥 Concert Alert: ${rsvpRecord.show_title}`,
+          body: `Reminder: ${rsvpRecord.show_title}${rsvpRecord.venue_name ? ` at ${rsvpRecord.venue_name}` : ''}${rsvpRecord.city ? ` (${rsvpRecord.city})` : ''} is coming up! Your digital pass is ready in your pit list.`,
+          tag: `nexus-rsvp-24h-${rsvpRecord.show_id}`,
+          data: {
+            type: 'show_reminder',
+            targetId: String(rsvpRecord.show_id),
+            route: '/shows',
+            targetTab: 'social',
+            category: 'vip_guestlist_access',
+            priority: 'P1',
+            workspace: 'fan_only',
+            showId: String(rsvpRecord.show_id),
+            showTitle: rsvpRecord.show_title,
+          },
+        });
+        if (pushResult.delivered + pushResult.fcmSkipped > 0) {
+          rsvpRecord.reminder_sent_24h = true;
+          const idx = rsvps.findIndex((r) => r.id === rsvpRecord.id);
+          if (idx >= 0) rsvps[idx] = rsvpRecord;
+          writeShowRsvps(rsvps);
+        }
+      }
+
+      await syncRsvpToSupabase(rsvpRecord);
 
       console.log(
         `[SHOW RSVP SUCCESS] Registered RSVP for "${show_title}" (ID: ${show_id}, User: ${verifiedEmail || verifiedUserId})`
       );
-      res.json({ success: true, rsvp: rsvpRecord });
+      res.json({ success: true, rsvp: rsvpRecord, ...(pushResult ? { pushResult } : {}) });
     } catch (err: any) {
       console.error('[SHOW RSVP ERROR]', err);
       res.status(500).json({ error: err.message || 'Failed to register RSVP' });
+    }
+  }
+);
+
+// ============================================================
+// SHOW SETTLEMENT FINALIZATION + SERVER-TRIGGERED PUSH ALERT
+// ============================================================
+showsRouter.post(
+  '/api/shows/settlements',
+  requireAuth,
+  apiMutationLimiter,
+  express.json(),
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const authUser = req.authUser!;
+      const sb = getSupabaseService();
+      const {
+        show_id,
+        showId,
+        show_title,
+        showTitle,
+        band_id,
+        bandId,
+        gross_merch_sales = 0,
+        venue_cut_apparel_pct = 0,
+        venue_cut_media_pct = 0,
+        show_guarantee = 0,
+        variance_penalty_total = 0,
+        net_venue_cut = 0,
+        band_net_payout = 0,
+        artist_signature = '',
+        venue_signature = '',
+        status = 'settled',
+        finalize = true,
+        recipientUserIds = [],
+      } = req.body || {};
+
+      const resolvedShowId = String(show_id || showId || '').trim();
+      if (!resolvedShowId) {
+        return res.status(400).json({ error: 'show_id is required' });
+      }
+
+      const resolvedBandId = band_id || bandId || null;
+      if (resolvedBandId && !authUser.isAdmin) {
+        const ownsBand = await assertBandOrEntityOwner(sb, authUser, String(resolvedBandId));
+        if (!ownsBand) {
+          return res.status(403).json({ error: 'Forbidden: Not authorized to settle this show.' });
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const settlementPayload = {
+        show_id: resolvedShowId,
+        created_at: nowIso,
+        gross_merch_sales: Number(gross_merch_sales) || 0,
+        venue_cut_apparel_pct: Number(venue_cut_apparel_pct) || 0,
+        venue_cut_media_pct: Number(venue_cut_media_pct) || 0,
+        show_guarantee: Number(show_guarantee) || 0,
+        variance_penalty_total: Number(variance_penalty_total) || 0,
+        net_venue_cut: Number(net_venue_cut) || 0,
+        band_net_payout: Number(band_net_payout) || 0,
+        artist_signature: String(artist_signature || ''),
+        venue_signature: String(venue_signature || ''),
+        status: String(status || 'settled'),
+      };
+
+      const targetRecipientIds = new Set<string>(
+        Array.isArray(recipientUserIds) ? recipientUserIds.map((id: any) => String(id).trim()).filter(Boolean) : []
+      );
+      let resolvedTitle = String(show_title || showTitle || '').trim();
+
+      if (sb) {
+        const { data: showRow } = await sb
+          .from('shows')
+          .select('id, show_name, headliner, creator_id, promoter_id, owner_id, band_id')
+          .eq('id', resolvedShowId)
+          .maybeSingle();
+
+        if (showRow) {
+          if (!resolvedTitle) {
+            resolvedTitle = showRow.show_name || showRow.headliner || 'Live Show';
+          }
+          if (!authUser.isAdmin && !resolvedBandId) {
+            const ownedIds = await getUserOwnedEntityIds(sb, authUser);
+            const isShowParty = hasAnyOwnershipMatch(authUser, ownedIds, [
+              showRow.creator_id,
+              showRow.promoter_id,
+              showRow.owner_id,
+              showRow.band_id,
+            ]);
+            if (!isShowParty) {
+              return res.status(403).json({ error: 'Forbidden: Not authorized to settle this show.' });
+            }
+          }
+          if (showRow.creator_id) targetRecipientIds.add(String(showRow.creator_id));
+          if (showRow.promoter_id) targetRecipientIds.add(String(showRow.promoter_id));
+          if (showRow.owner_id) targetRecipientIds.add(String(showRow.owner_id));
+        }
+
+        await sb.from('show_settlements_v1').insert([settlementPayload]);
+
+        if (finalize !== false) {
+          await sb
+            .from('shows')
+            .update({ status: 'Closed', revenue: settlementPayload.band_net_payout })
+            .eq('id', resolvedShowId);
+        }
+      }
+
+      if (targetRecipientIds.size === 0) {
+        targetRecipientIds.add(authUser.id);
+      }
+
+      const notifTitle = `💰 Settlement Locked${resolvedTitle ? `: ${resolvedTitle}` : ''}`;
+      const notifBody = `Show settlement finalized. Net band payout: $${settlementPayload.band_net_payout.toFixed(2)}.`;
+
+      if (sb) {
+        for (const uid of targetRecipientIds) {
+          try {
+            await sb.from('nexus_notifications').insert([
+              {
+                id: `notif_settle_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                user_id: uid,
+                actor_id: authUser.id,
+                type: 'settlement',
+                title: notifTitle,
+                message: notifBody,
+                is_read: false,
+                read: false,
+                created_at: nowIso,
+              },
+            ]);
+          } catch (_) {}
+        }
+      }
+
+      const pushResult = await dispatchPushToUsers({
+        userIds: Array.from(targetRecipientIds),
+        title: notifTitle,
+        body: notifBody,
+        tag: `nexus-settlement-${resolvedShowId}`,
+        data: {
+          type: 'notice',
+          targetId: resolvedShowId,
+          route: '/shows',
+          targetTab: 'shows',
+          category: 'settlement',
+          priority: 'P0',
+          showId: resolvedShowId,
+          payout: String(settlementPayload.band_net_payout),
+        },
+      });
+
+      return res.json({
+        success: true,
+        settlement: settlementPayload,
+        pushResult,
+      });
+    } catch (err: any) {
+      console.error('[SHOW SETTLEMENT ERROR]', err);
+      return res.status(500).json({ error: err.message || 'Failed to finalize show settlement' });
+    }
+  }
+);
+
+// ============================================================
+// SHOW TICKET VELOCITY / SALE ALERT + SERVER-TRIGGERED PUSH
+// ============================================================
+showsRouter.post(
+  '/api/shows/ticket-alert',
+  requireAuth,
+  apiMutationLimiter,
+  express.json(),
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const authUser = req.authUser!;
+      const sb = getSupabaseService();
+      const {
+        show_id,
+        showId,
+        show_title,
+        showTitle,
+        venue_name,
+        venueName,
+        city,
+        percentage,
+        quantity = 1,
+        gateRevenue = 0,
+        recipientUserId,
+        recipientUserIds = [],
+        buyerUserId,
+        alertType = 'ticket_velocity',
+      } = req.body || {};
+
+      const resolvedShowId = String(show_id || showId || '').trim();
+      let resolvedTitle = String(show_title || showTitle || '').trim();
+      const resolvedVenue = String(venue_name || venueName || '').trim();
+
+      if (!resolvedShowId && !resolvedTitle) {
+        return res.status(400).json({ error: 'showId or showTitle is required' });
+      }
+
+      const targetIds = new Set<string>();
+      if (recipientUserId) targetIds.add(String(recipientUserId).trim());
+      if (Array.isArray(recipientUserIds)) {
+        recipientUserIds.forEach((id: any) => {
+          if (id) targetIds.add(String(id).trim());
+        });
+      }
+
+      if (sb && resolvedShowId) {
+        const { data: showRow } = await sb
+          .from('shows')
+          .select('id, show_name, headliner, creator_id, promoter_id, owner_id, band_id')
+          .eq('id', resolvedShowId)
+          .maybeSingle();
+
+        if (showRow) {
+          if (!resolvedTitle) resolvedTitle = showRow.show_name || showRow.headliner || 'Live Show';
+          if (showRow.creator_id) targetIds.add(String(showRow.creator_id));
+          if (showRow.promoter_id) targetIds.add(String(showRow.promoter_id));
+          if (showRow.owner_id) targetIds.add(String(showRow.owner_id));
+        }
+      }
+
+      if (buyerUserId && String(buyerUserId) === authUser.id) {
+        targetIds.add(authUser.id);
+      }
+
+      if (targetIds.size === 0) {
+        targetIds.add(authUser.id);
+      }
+
+      const cleanTitle = resolvedTitle || 'Live Show';
+      const pctText = percentage !== undefined ? `${percentage}% sold` : `${quantity} pass(es) issued`;
+      const notifTitle =
+        alertType === 'ticket_confirmation'
+          ? `🎟️ Pass Issued: ${cleanTitle}`
+          : `💰 Ticket Alert: ${cleanTitle}`;
+      const notifBody = `${pctText}${resolvedVenue ? ` at ${resolvedVenue}` : ''}${city ? ` (${city})` : ''}${Number(gateRevenue) > 0 ? ` — Gate revenue: $${Number(gateRevenue).toFixed(2)}` : ''}.`;
+
+      if (sb) {
+        const nowIso = new Date().toISOString();
+        for (const uid of targetIds) {
+          try {
+            await sb.from('nexus_notifications').insert([
+              {
+                id: `notif_tkt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                user_id: uid,
+                actor_id: authUser.id,
+                type: String(alertType),
+                title: notifTitle,
+                message: notifBody,
+                is_read: false,
+                read: false,
+                created_at: nowIso,
+              },
+            ]);
+          } catch (_) {}
+        }
+      }
+
+      const pushResult = await dispatchPushToUsers({
+        userIds: Array.from(targetIds),
+        title: notifTitle,
+        body: notifBody,
+        tag: `nexus-ticket-${resolvedShowId || 'sale'}`,
+        data: {
+          type: 'notice',
+          targetId: resolvedShowId || cleanTitle,
+          route: '/sales',
+          targetTab: 'sales',
+          category: 'ticket_velocity',
+          priority: 'P0',
+          showId: resolvedShowId,
+          percentage: percentage !== undefined ? String(percentage) : '',
+          quantity: String(quantity),
+        },
+      });
+
+      return res.json({
+        success: true,
+        pushResult,
+      });
+    } catch (err: any) {
+      console.error('[SHOW TICKET ALERT ERROR]', err);
+      return res.status(500).json({ error: err.message || 'Failed to dispatch ticket alert' });
     }
   }
 );

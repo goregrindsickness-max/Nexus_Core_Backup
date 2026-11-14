@@ -26,10 +26,19 @@ import {
   FileAudio,
   Film,
   Volume2,
+  ChevronDown,
+  Skull,
 } from 'lucide-react';
 import { MASTER_GENRES } from '../../constants/genres';
 import { getSupabase } from '../../supabase';
 import { uploadBase64ToStorage } from '../../services/storageService';
+import {
+  BRUTAL_DEATH_METAL_HIGHLIGHTS,
+  LEGACY_MOCK_THREAD_IDS,
+  LEGACY_MOCK_TITLES,
+  isRetiredNonExtremeMock,
+} from '../../services/forumHighlightService';
+import { initialForumThreads } from '../../data/forumMockData';
 import { FirstTimeTooltip } from '../common/FirstTimeTooltip';
 
 export function isAudioUrl(url?: string): boolean {
@@ -289,6 +298,170 @@ const NativeMediaUploader: React.FC<NativeMediaUploaderProps> = ({ value, onChan
   );
 };
 
+export function getCategoryAccentClasses(category?: string): {
+  text: string;
+  dot: string;
+  tint: string;
+} {
+  switch ((category || '').toLowerCase()) {
+    case 'album art':
+      return { text: 'text-fuchsia-400', dot: 'bg-fuchsia-400', tint: 'border-fuchsia-500/30 bg-fuchsia-950/30' };
+    case 'album reviews':
+      return { text: 'text-teal-300', dot: 'bg-teal-400', tint: 'border-teal-500/30 bg-teal-950/30' };
+    case 'show & fest':
+      return { text: 'text-amber-300', dot: 'bg-amber-400', tint: 'border-amber-500/30 bg-amber-950/30' };
+    case 'gear & rig':
+      return { text: 'text-sky-300', dot: 'bg-sky-400', tint: 'border-sky-500/30 bg-sky-950/30' };
+    case 'recommendations':
+      return { text: 'text-emerald-300', dot: 'bg-emerald-400', tint: 'border-emerald-500/30 bg-emerald-950/30' };
+    default:
+      return { text: 'text-rose-400', dot: 'bg-rose-400', tint: 'border-rose-500/30 bg-rose-950/30' };
+  }
+}
+
+export function getThreadActivityBadge(thread: any): 'trending' | 'new_replies' | null {
+  const votes = Number(thread?.votes) || 0;
+  const commentsCount = Array.isArray(thread?.comments) ? thread.comments.length : 0;
+  if (votes >= 95 || commentsCount >= 3) return 'trending';
+  if (commentsCount > 0) {
+    const latestReplyTime = String(thread.comments[commentsCount - 1]?.timeAgo || '').toLowerCase();
+    if (
+      latestReplyTime.includes('just now') ||
+      latestReplyTime.includes('m ago') ||
+      latestReplyTime === '1h ago' ||
+      latestReplyTime === '2h ago'
+    ) {
+      return 'new_replies';
+    }
+  }
+  return null;
+}
+
+export function getThreadRecencyScore(thread: any, fallbackIndex: number): number {
+  if (thread?.createdAt) {
+    const ms = Date.parse(thread.createdAt);
+    if (Number.isFinite(ms)) return ms;
+  }
+  const t = String(thread?.timeAgo || '').toLowerCase().trim();
+  const now = Date.now();
+  if (t === 'just now') return now;
+  const minMatch = t.match(/^(\d+)\s*m/);
+  if (minMatch) return now - Number(minMatch[1]) * 60_000;
+  const hrMatch = t.match(/^(\d+)\s*h/);
+  if (hrMatch) return now - Number(hrMatch[1]) * 3_600_000;
+  const dayMatch = t.match(/^(\d+)\s*d/);
+  if (dayMatch) return now - Number(dayMatch[1]) * 86_400_000;
+  return now - (fallbackIndex + 100) * 86_400_000;
+}
+
+export const SEEDED_FORUM_THRESHOLD = 10;
+
+const SEEDED_FORUM_IDS = new Set([
+  ...LEGACY_MOCK_THREAD_IDS,
+  'bdm-h1',
+  'bdm-h2',
+]);
+
+const SEEDED_FORUM_TITLES = new Set([
+  ...LEGACY_MOCK_TITLES,
+  "suffocation — pierced from within snare ping vs. effigy's raw cavern mix",
+  'defeated sanity & devourment: guttural slam riff architecture breakdown',
+]);
+
+export function isSeededForumThread(thread: any): boolean {
+  if (!thread) return false;
+  if (thread.isSeeded === true) return true;
+  if (thread.isUserCreated === true) return false;
+  const id = String(thread.id || '');
+  if (SEEDED_FORUM_IDS.has(id)) return true;
+  const title = String(thread.title || '').trim().toLowerCase();
+  if (SEEDED_FORUM_TITLES.has(title)) {
+    return true;
+  }
+  return false;
+}
+
+export function isThreadHighlighted(thread: any, allThreads: any[]): boolean {
+  if (!thread || isSeededForumThread(thread)) return false;
+  const realThreads = (allThreads || []).filter((t) => !isSeededForumThread(t));
+  if (realThreads.length === 0 || realThreads.length >= SEEDED_FORUM_THRESHOLD) return false;
+  const highlightedIds = new Set(realThreads.slice(0, 3).map((t) => String(t.id)));
+  return highlightedIds.has(String(thread.id));
+}
+
+export interface ForumFilterOptions {
+  category: string;
+  sort: 'hot' | 'new';
+  primaryGenre: string;
+  microGenre: string;
+  subscribedSpaces: string[];
+  searchQuery: string;
+}
+
+export function filterAndSortForumThreads(
+  threads: any[],
+  opts: ForumFilterOptions
+): any[] {
+  const q = (opts.searchQuery || '').trim().toLowerCase();
+  const sourceThreads = (threads || []).filter((t) => t && !isRetiredNonExtremeMock(t));
+  const realCount = sourceThreads.filter((t) => !isSeededForumThread(t)).length;
+  const hideSeeded = realCount >= SEEDED_FORUM_THRESHOLD;
+  const prioritizeRealOverSeeded = realCount > 0 && !hideSeeded;
+
+  const filtered = sourceThreads
+    .filter((t) => (hideSeeded ? !isSeededForumThread(t) : true))
+    .map((t, idx) => ({ t, idx }))
+    .filter(({ t }) => {
+      if (opts.category === 'All') return true;
+      if (opts.category === 'My Subscriptions') {
+        return (
+          opts.subscribedSpaces.includes(t.genre) ||
+          opts.subscribedSpaces.includes(t.category) ||
+          opts.subscribedSpaces.includes(t.primaryGenre)
+        );
+      }
+      return t.category === opts.category;
+    })
+    .filter(({ t }) => {
+      if (opts.primaryGenre === 'All') return true;
+      const cluster = MASTER_GENRES.find((c) => c.name === opts.primaryGenre);
+      if (!cluster) return false;
+      const validTags = cluster.tags.map((tag) => tag.label);
+      if (opts.microGenre === 'All') {
+        return validTags.includes(t.genre);
+      }
+      return t.genre === opts.microGenre;
+    })
+    .filter(({ t }) => {
+      if (!q) return true;
+      return (
+        String(t.title || '').toLowerCase().includes(q) ||
+        String(t.content || '').toLowerCase().includes(q) ||
+        String(t.author || '').toLowerCase().includes(q) ||
+        String(t.genre || '').toLowerCase().includes(q)
+      );
+    });
+
+  filtered.sort((a, b) => {
+    if (prioritizeRealOverSeeded) {
+      const aSeeded = isSeededForumThread(a.t);
+      const bSeeded = isSeededForumThread(b.t);
+      if (aSeeded !== bSeeded) {
+        return aSeeded ? 1 : -1;
+      }
+    }
+    if (opts.sort === 'new') {
+      return getThreadRecencyScore(b.t, b.idx) - getThreadRecencyScore(a.t, a.idx);
+    }
+    const scoreA = (Number(a.t.votes) || 0) + (Array.isArray(a.t.comments) ? a.t.comments.length * 4 : 0);
+    const scoreB = (Number(b.t.votes) || 0) + (Array.isArray(b.t.comments) ? b.t.comments.length * 4 : 0);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    return getThreadRecencyScore(b.t, b.idx) - getThreadRecencyScore(a.t, a.idx);
+  });
+
+  return filtered.map(({ t }) => t);
+}
+
 interface ForumViewProps {
   userProfile?: any;
   profileHandle?: string;
@@ -300,156 +473,73 @@ interface ForumViewProps {
   onClearInitialThread?: () => void;
 }
 
-const DEFAULT_FORUM_THREADS = [
-  {
-    id: 't1',
-    title: "Close to a World Below's album art is a masterpiece. Who is the artist?",
-    content:
-      'The surreal apocalyptic aesthetic fits the dissonant death metal sound so perfectly. Is it Andreas Marschall or someone inspired by him?',
-    category: 'Album Art',
-    genre: 'Death Metal',
-    author: '@StarGazer',
-    image: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '2h ago',
-    votes: 148,
-    userVote: null as 'up' | 'down' | null,
-    comments: [
-      {
-        id: 'fc1',
-        author: '@CosmicVoid',
-        text: "It's actually painted by Andreas Marschall! Incredible choice by Immolation.",
-        timeAgo: '1h ago',
-        replies: [
-          {
-            id: 'fr1',
-            author: '@StarGazer',
-            text: 'That is awesome! No wonder it felt so familiar. His vintage covers are incredible.',
-            timeAgo: '30m ago',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 't2',
-    title: 'Immolation - Close to a World Below: Decades Later',
-    content:
-      "Can we talk about how well this legendary record has aged? The crushing riffs, the intricate dissonant chords, and Ross Dolan's iconic vocal delivery.",
-    category: 'Album Reviews',
-    genre: 'Death Metal',
-    author: '@OnyxRiff',
-    timeAgo: '4h ago',
-    votes: 95,
-    userVote: null as 'up' | 'down' | null,
-    comments: [
-      {
-        id: 'fc2',
-        author: '@PummelingBass',
-        text: 'Totally agree. It pioneered a resurgence of dark dissonant death metal. Every track is a 10/10.',
-        timeAgo: '3h ago',
-        replies: [],
-      },
-    ],
-  },
-  {
-    id: 't3',
-    title: 'Maryland Deathfest 2026 predictions and wishlist',
-    content:
-      "Who are we hoping to see on the bill next year? I'm hoping for a Cryptopsy/Immolation co-headlining set, plus maybe some European legends.",
-    category: 'Show & Fest',
-    genre: 'Death Metal',
-    author: '@FestivalGoon',
-    image: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '1d ago',
-    votes: 112,
-    userVote: null as 'up' | 'down' | null,
-    comments: [],
-  },
-  {
-    id: 't4',
-    title: 'What gear did Cryptopsy use on None So Vile for that extreme speed?',
-    content:
-      "Is it standard Marshall amps or custom distortion chains? Jon Levasseur's guitar tone is unbelievably raw and fast, especially paired with Flo Mounier's gravity blasts.",
-    category: 'Gear & Rig',
-    genre: 'Death Metal',
-    author: '@GuitarNerd_666',
-    image: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '2d ago',
-    votes: 64,
-    userVote: null as 'up' | 'down' | null,
-    comments: [],
-  },
-  {
-    id: 't5',
-    title: "Cosmic Black Metal: Paysage d'Hiver vs. Alcest vs. Darkspace",
-    content:
-      "I'm fascinated by black metal that reaches into the cold starry abyss instead of just cold forests. Who do you think captures the galactic loneliness best?",
-    category: 'Album Reviews',
-    genre: 'Black Metal',
-    author: '@AstraVoid',
-    image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '5h ago',
-    votes: 78,
-    userVote: null as 'up' | 'down' | null,
-    comments: [
-      {
-        id: 'fc3',
-        author: '@SpectralGlow',
-        text: "Darkspace is the absolute pinnacle of cosmic dread. Paysage d'Hiver is more like being trapped in a blinding blizzard!",
-        timeAgo: '3h ago',
-        replies: [],
-      },
-    ],
-  },
-  {
-    id: 't6',
-    title: 'The vintage 4-track raw tape sound of early Norwegian Black Metal',
-    content:
-      'Is there any modern plug-in or analog deck that actually replicates that Transilvanian Hunger fuzz? Everything today sounds too clean or too artificial.',
-    category: 'Gear & Rig',
-    genre: 'Black Metal',
-    author: '@GravenSoul',
-    timeAgo: '1d ago',
-    votes: 42,
-    userVote: null as 'up' | 'down' | null,
-    comments: [],
-  },
-  {
-    id: 't7',
-    title: 'Is Electric Wizard\'s "Dopethrone" the heaviest record ever recorded?',
-    content:
-      "That guitar tone sounds like molten sludge. I've heard rumors they used maxed-out Boss FZ-2 Hyper Fuzz pedals into vintage Sound City tube heads. Anyone got details?",
-    category: 'Gear & Rig',
-    genre: 'Doom/Sludge',
-    author: '@SludgeWorship',
-    image: 'https://images.unsplash.com/photo-1526478806334-5fd488fcaabc?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '3h ago',
-    votes: 115,
-    userVote: null as 'up' | 'down' | null,
-    comments: [
-      {
-        id: 'fc4',
-        author: '@FuzzLord',
-        text: 'Yes! It is indeed the FZ-2 on Mode II (scooped boost) pushing those power tubes to near-explosion. Pure genius.',
-        timeAgo: '1h ago',
-        replies: [],
-      },
-    ],
-  },
-  {
-    id: 't8',
-    title: 'Bell Witch live is a colossal, crushing, slow-motion experience',
-    content:
-      'Just saw them perform Mirror Reaper in its entirety last night. Only two musicians on stage, but it felt louder and more emotionally massive than a full orchestra.',
-    category: 'Show & Fest',
-    genre: 'Doom/Sludge',
-    author: '@MournfulChord',
-    timeAgo: '2d ago',
-    votes: 93,
-    userVote: null as 'up' | 'down' | null,
-    comments: [],
-  },
-];
+const DEFAULT_FORUM_THREADS = initialForumThreads;
+
+const isValidForumAvatarUrl = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.length <= 5) return false;
+  if (
+    trimmed.includes('undefined') ||
+    trimmed.includes('null') ||
+    trimmed.includes('ui-avatars.com')
+  ) {
+    return false;
+  }
+  return (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('blob:')
+  );
+};
+
+interface ForumAuthorAvatarProps {
+  name: string;
+  candidates: string[];
+}
+
+const ForumAuthorAvatar: React.FC<ForumAuthorAvatarProps> = ({ name, candidates }) => {
+  const [failedIdx, setFailedIdx] = useState(0);
+  const candidateKey = candidates.join('|');
+
+  useEffect(() => {
+    setFailedIdx(0);
+  }, [candidateKey]);
+
+  const initials =
+    (name || 'Fan')
+      .replace(/@/g, '')
+      .split(/[\s_]+/)
+      .filter(Boolean)
+      .map((n: string) => n[0])
+      .join('')
+      .substring(0, 2)
+      .toUpperCase() || 'BD';
+
+  const activeSrc = candidates[failedIdx];
+
+  if (activeSrc) {
+    return (
+      <div className="w-5 h-5 rounded-full overflow-hidden shrink-0 border border-zinc-700/80 bg-zinc-900 flex items-center justify-center">
+        <img
+          src={activeSrc}
+          alt={name}
+          referrerPolicy="no-referrer"
+          className="w-full h-full object-cover"
+          onError={() => setFailedIdx((idx) => idx + 1)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-5 h-5 rounded-full bg-red-950/80 border border-red-800/60 text-[9px] font-black text-red-300 flex items-center justify-center shrink-0">
+      {initials}
+    </div>
+  );
+};
 
 // Helper functions for UUID generation and local caching
 function generateUUID(): string {
@@ -481,7 +571,13 @@ function loadForumCache(): any[] | null {
     const saved = localStorage.getItem('nexus_forum_threads_cache');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const cleaned = parsed.filter((t) => t && !isRetiredNonExtremeMock(t));
+        if (cleaned.length !== parsed.length) {
+          localStorage.setItem('nexus_forum_threads_cache', JSON.stringify(cleaned));
+        }
+        return cleaned.length > 0 ? cleaned : null;
+      }
     }
   } catch (e) {}
   return null;
@@ -498,14 +594,27 @@ export const ForumView: React.FC<ForumViewProps> = ({
   onClearInitialThread,
 }) => {
   const [forumThreads, setForumThreads] = useState<any[]>(() => {
-    const cached = loadForumCache();
-    return cached && cached.length > 0 ? cached : DEFAULT_FORUM_THREADS;
+    const cached = loadForumCache() || [];
+    const realCount = cached.filter((t) => !isSeededForumThread(t)).length;
+    if (realCount >= SEEDED_FORUM_THRESHOLD) {
+      return cached.filter((t) => !isSeededForumThread(t));
+    }
+    const existingIds = new Set(cached.map((t) => String(t.id)));
+    const existingTitles = new Set(cached.map((t) => String(t.title || '').trim().toLowerCase()));
+    const missingSeeds = DEFAULT_FORUM_THREADS.filter(
+      (s) => !existingIds.has(String(s.id)) && !existingTitles.has(String(s.title || '').trim().toLowerCase())
+    );
+    return [...cached, ...missingSeeds];
   });
   const [forumSearch, setForumSearch] = useState('');
   const [forumCategory, setForumCategory] = useState('All');
+  const [forumSort, setForumSort] = useState<'hot' | 'new'>('hot');
   const [forumPrimaryGenre, setForumPrimaryGenre] = useState('All');
   const [forumMicroGenre, setForumMicroGenre] = useState('All');
+  const [showCircleSheet, setShowCircleSheet] = useState(false);
+  const [showInlineSearch, setShowInlineSearch] = useState(false);
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(initialThreadId || null);
+  const [activeInlineYoutubeIds, setActiveInlineYoutubeIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (initialThreadId) {
@@ -525,11 +634,16 @@ export const ForumView: React.FC<ForumViewProps> = ({
         setForumThreads(cached);
       }
     };
+    const handleOpenCircleSelector = () => {
+      setShowCircleSheet(true);
+    };
     window.addEventListener('nexus_open_forum_thread' as any, handleOpenThread);
     window.addEventListener('nexus_forum_cache_updated' as any, handleCacheUpdated);
+    window.addEventListener('nexus:open-circle-selector' as any, handleOpenCircleSelector);
     return () => {
       window.removeEventListener('nexus_open_forum_thread' as any, handleOpenThread);
       window.removeEventListener('nexus_forum_cache_updated' as any, handleCacheUpdated);
+      window.removeEventListener('nexus:open-circle-selector' as any, handleOpenCircleSelector);
     };
   }, []);
 
@@ -549,6 +663,7 @@ export const ForumView: React.FC<ForumViewProps> = ({
       const updated = exists ? prev.filter((s) => s !== spaceName) : [...prev, spaceName];
       try {
         localStorage.setItem('nexus_forum_subscriptions', JSON.stringify(updated));
+        window.dispatchEvent(new CustomEvent('nexus_onboarding_checklist_updated'));
       } catch (e) {}
 
       const msg = exists ? `Unsubscribed from ${spaceName}` : `Subscribed to ${spaceName} space!`;
@@ -583,7 +698,13 @@ export const ForumView: React.FC<ForumViewProps> = ({
   };
 
   // Check if thread or comment belongs to current user
-  const isUserOwner = (authorName?: string) => {
+  const isUserOwner = (authorName?: string, threadObj?: any) => {
+    if (threadObj) {
+      if (threadObj.isUserCreated === true) return true;
+      if (userProfile?.id && (threadObj.userId === userProfile.id || threadObj.user_id === userProfile.id)) {
+        return true;
+      }
+    }
     if (!authorName) return false;
     const currentUserName = userProfile?.name || '';
     const myHandle = (userProfile?.console_handle || profileHandle || userProfile?.handle || '').replace('@', '').toLowerCase().trim();
@@ -622,8 +743,23 @@ export const ForumView: React.FC<ForumViewProps> = ({
 
     async function loadThreadsAndComments() {
       const cachedThreads = loadForumCache() || [];
+      const ensureSeedsMerged = (list: any[]) => {
+        const activeList = (list || []).filter((t) => t && !isRetiredNonExtremeMock(t));
+        const realCount = activeList.filter((t) => !isSeededForumThread(t)).length;
+        if (realCount >= SEEDED_FORUM_THRESHOLD) {
+          return activeList.filter((t) => !isSeededForumThread(t));
+        }
+        const existingIds = new Set(activeList.map((t) => String(t.id)));
+        const existingTitles = new Set(activeList.map((t) => String(t.title || '').trim().toLowerCase()));
+        const missingSeeds = DEFAULT_FORUM_THREADS.filter(
+          (s) => !existingIds.has(String(s.id)) && !existingTitles.has(String(s.title || '').trim().toLowerCase())
+        );
+        return [...activeList, ...missingSeeds];
+      };
+
       if (!supabase) {
-        if (cachedThreads.length > 0) setForumThreads(cachedThreads);
+        const merged = ensureSeedsMerged(cachedThreads);
+        if (merged.length > 0) setForumThreads(merged);
         return;
       }
 
@@ -699,9 +835,12 @@ export const ForumView: React.FC<ForumViewProps> = ({
               primaryGenre: t.primary_genre || 'Extreme Metal',
               author: t.author || t.author_name || 'Fan',
               authorAvatar: t.author_avatar || t.author_avatar_url,
+              userId: t.user_id,
+              user_id: t.user_id,
               image: t.image_url || t.image || t.media_url,
               youtubeId: t.youtube_id,
               votes: t.votes ?? 1,
+              createdAt: t.created_at || undefined,
               timeAgo: t.created_at ? new Date(t.created_at).toLocaleDateString() : 'Recently',
               comments: threadComments || [],
               userVote: null,
@@ -712,16 +851,22 @@ export const ForumView: React.FC<ForumViewProps> = ({
           const supabaseIds = new Set(mappedSupabase.map((t) => String(t.id)));
           const localOnly = cachedThreads.filter((ct) => !supabaseIds.has(String(ct.id)));
 
-          const combined = [...localOnly, ...mappedSupabase];
+          const combined = ensureSeedsMerged([...localOnly, ...mappedSupabase]);
+
           setForumThreads(combined);
           saveForumCache(combined);
-        } else if (cachedThreads.length > 0) {
-          setForumThreads(cachedThreads);
+        } else {
+          const merged = ensureSeedsMerged(cachedThreads);
+          if (merged.length > 0) {
+            setForumThreads(merged);
+            saveForumCache(merged);
+          }
         }
       } catch (err) {
         console.warn('Supabase forum load error, fallback to local cache:', err);
-        if (cachedThreads.length > 0) {
-          setForumThreads(cachedThreads);
+        const merged = ensureSeedsMerged(cachedThreads);
+        if (merged.length > 0) {
+          setForumThreads(merged);
         }
       }
     }
@@ -984,90 +1129,58 @@ export const ForumView: React.FC<ForumViewProps> = ({
     };
   };
 
-  const renderAvatarForName = (name: string) => {
+  const getAvatarCandidates = (name: string, threadObj?: any): string[] => {
+    const cleanName = (name || '').replace(/^@+/, '').toLowerCase().trim();
+    const myAvatar =
+      profileAvatarUrl ||
+      userProfile?.avatar_url ||
+      userProfile?.avatar ||
+      userProfile?.profile_avatar;
+
+    const allKnownProfiles = [...(discoverProfiles || []), ...(allProfiles || [])];
+    const matchedProfile = allKnownProfiles.find((p) => {
+      if (!p) return false;
+      if (threadObj?.userId && p.id && String(p.id) === String(threadObj.userId)) return true;
+      if (threadObj?.user_id && p.id && String(p.id) === String(threadObj.user_id)) return true;
+      const pName = (p?.name || '').toLowerCase().trim();
+      const pHandle = (p?.handle || p?.console_handle || '').replace(/^@+/, '').toLowerCase().trim();
+      return Boolean(cleanName && (pName === cleanName || pHandle === cleanName));
+    });
+
+    const matchedAvatar =
+      matchedProfile?.avatar ||
+      matchedProfile?.avatar_url ||
+      matchedProfile?.profile_avatar;
+
+    const storedAvatar =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar') || ''
+        : '';
+
+    const ownerMatch =
+      isUserOwner(name, threadObj) ||
+      (userProfile?.name && name === userProfile.name) ||
+      (profileHandle && name === profileHandle);
+
+    const rawList = ownerMatch
+      ? [myAvatar, storedAvatar, matchedAvatar, threadObj?.authorAvatar]
+      : [matchedAvatar, threadObj?.authorAvatar];
+
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    for (const url of rawList) {
+      if (isValidForumAvatarUrl(url) && !seen.has(url)) {
+        seen.add(url);
+        valid.push(url);
+      }
+    }
+    return valid;
+  };
+
+  const renderAvatarForName = (name: string, threadObj?: any) => {
     if (!name) return null;
-    const isValidImgUrl = (url?: string) =>
-      typeof url === 'string' &&
-      url.length > 5 &&
-      (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('/') || url.startsWith('blob:'));
-
-    const myAvatar = profileAvatarUrl || userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar;
-    const cleanName = name.replace('@', '').toLowerCase().trim();
-
-    const initials = (name || 'Fan')
-      .replace(/@/g, '')
-      .split(/[\s_]+/)
-      .map((n: string) => n[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase() || 'FA';
-
-    if ((isUserOwner(name) || name === userProfile?.name || name === profileHandle) && isValidImgUrl(myAvatar)) {
-      return (
-        <div className="w-5 h-5 rounded-full overflow-hidden shrink-0 border border-zinc-900/50 bg-rose-950/60 flex items-center justify-center">
-          <img 
-            src={myAvatar} 
-            className="w-full h-full object-cover" 
-            alt={name} 
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              const target = e.currentTarget as HTMLImageElement;
-              target.style.display = 'none';
-              const parent = target.parentElement;
-              if (parent && !parent.querySelector('.fallback-initials')) {
-                const span = document.createElement('span');
-                span.className = 'text-[9px] font-black text-rose-400 font-mono fallback-initials';
-                span.textContent = initials;
-                parent.appendChild(span);
-              }
-            }}
-          />
-        </div>
-      );
-    }
-
-    const found =
-      discoverProfiles.find((p) => {
-        const pName = (p?.name || '').toLowerCase().trim();
-        const pHandle = (p?.handle || p?.console_handle || '').replace('@', '').toLowerCase().trim();
-        return pName === cleanName || pHandle === cleanName;
-      }) ||
-      allProfiles.find((p) => {
-        const pName = (p?.name || '').toLowerCase().trim();
-        const pHandle = (p?.handle || p?.console_handle || '').replace('@', '').toLowerCase().trim();
-        return pName === cleanName || pHandle === cleanName;
-      });
-
-    const foundAvatar = found?.avatar || found?.avatar_url || found?.profile_avatar;
-    if (isValidImgUrl(foundAvatar)) {
-      return (
-        <div className="w-5 h-5 rounded-full overflow-hidden shrink-0 border border-zinc-900/50 bg-rose-950/60 flex items-center justify-center">
-          <img 
-            src={foundAvatar} 
-            className="w-full h-full object-cover" 
-            alt={name} 
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              const target = e.currentTarget as HTMLImageElement;
-              target.style.display = 'none';
-              const parent = target.parentElement;
-              if (parent && !parent.querySelector('.fallback-initials')) {
-                const span = document.createElement('span');
-                span.className = 'text-[9px] font-black text-rose-400 font-mono fallback-initials';
-                span.textContent = initials;
-                parent.appendChild(span);
-              }
-            }}
-          />
-        </div>
-      );
-    }
-
-    return (
-      <div className="w-5 h-5 rounded-full bg-rose-950/60 border border-rose-900/40 text-[9px] font-black text-rose-400 flex items-center justify-center shrink-0">
-        {initials}
-      </div>
-    );
+    const candidates = getAvatarCandidates(name, threadObj);
+    return <ForumAuthorAvatar name={formatForumAuthor(name)} candidates={candidates} />;
   };
 
   const handleCreateThread = async () => {
@@ -1094,6 +1207,7 @@ export const ForumView: React.FC<ForumViewProps> = ({
       isUserCreated: true,
       image: newThreadMediaUrl || undefined,
       youtubeId: yId,
+      createdAt: new Date().toISOString(),
       timeAgo: 'Just now',
       votes: 1,
       userVote: 'up' as const,
@@ -1101,7 +1215,9 @@ export const ForumView: React.FC<ForumViewProps> = ({
     };
 
     setForumThreads((prev) => {
-      const updated = [newThread, ...prev];
+      const next = [newThread, ...prev];
+      const realCount = next.filter((t) => !isSeededForumThread(t)).length;
+      const updated = realCount >= SEEDED_FORUM_THRESHOLD ? next.filter((t) => !isSeededForumThread(t)) : next;
       saveForumCache(updated);
       return updated;
     });
@@ -1451,57 +1567,374 @@ export const ForumView: React.FC<ForumViewProps> = ({
     );
   };
 
+  const activeCircleLabel =
+    forumPrimaryGenre === 'All'
+      ? 'All Genres Collective'
+      : forumMicroGenre === 'All'
+        ? `All ${forumPrimaryGenre}`
+        : forumMicroGenre;
+
+  const isCircleSubscribed =
+    forumMicroGenre !== 'All' && subscribedSpaces.includes(forumMicroGenre);
+
+  const handleSelectTopicTab = (tabId: string) => {
+    setExpandedThreadId(null);
+    if (tabId === 'Hot') {
+      setForumSort('hot');
+      setForumCategory('All');
+    } else if (tabId === 'New') {
+      setForumSort('new');
+      setForumCategory('All');
+    } else {
+      setForumCategory(tabId);
+    }
+  };
+
+  const isTopicTabActive = (tabId: string) => {
+    if (tabId === 'Hot') return forumCategory === 'All' && forumSort === 'hot';
+    if (tabId === 'New') return forumCategory === 'All' && forumSort === 'new';
+    return forumCategory === tabId;
+  };
+
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 pb-20 animate-in fade-in duration-300">
-      {/* Forum Header Banner (Centered) */}
-      <div className="bg-[#101014] border border-zinc-900/90 rounded-2xl p-5 mb-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm">
-        <div className="space-y-1">
-          <h2 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-white">
-            The Forums
-          </h2>
-          <p className="text-xs text-zinc-400 font-medium">
-            The place to discuss all things music.
-          </p>
+    <div className="max-w-3xl mx-auto pb-10 sm:pb-8 animate-in fade-in duration-300">
+      {/* Compact Sticky Header: Circle Selector + +Post CTA on Row 1, Scrollable Filter Tabs on Row 2 */}
+      <div className="sticky top-0 z-20 bg-[#08090d]/92 backdrop-blur-xl border-b border-zinc-800/80 px-4 sm:px-6 pt-2.5 pb-2">
+        {/* Row 1: Current Circle Selector Pill + Search Toggle + Compact + Post CTA */}
+        <div className="flex items-center justify-between gap-2 min-h-[42px]">
+          <button
+            type="button"
+            onClick={() => setShowCircleSheet(true)}
+            className="min-w-0 max-w-[66%] inline-flex items-center gap-1.5 bg-zinc-900/90 hover:bg-zinc-800/90 border border-zinc-800 hover:border-rose-500/40 rounded-full px-3 py-1.5 text-xs font-bold text-white transition-all cursor-pointer"
+            title="Switch Circle or Manage Subscriptions"
+          >
+            <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
+            <span className="truncate">{activeCircleLabel}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          </button>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowInlineSearch((prev) => !prev)}
+              aria-label="Search forum discussions"
+              className={`min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-xl border transition-colors cursor-pointer ${
+                showInlineSearch || forumSearch.trim()
+                  ? 'bg-rose-950/50 border-rose-500/50 text-rose-300'
+                  : 'bg-zinc-900/80 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+              }`}
+              title="Search discussions"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+
+            <FirstTimeTooltip
+              id="forum_new_discussion"
+              title="Start a Discussion"
+              tip="Post recommendations, gig reviews, album debates, or gear questions on forum boards."
+              position="bottom"
+              accentColor="rose"
+              triggerOn="hover"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setExpandedThreadId(null);
+                  setShowCreateThread((prev) => !prev);
+                }}
+                className="min-h-[36px] px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all duration-150 shadow-md shadow-rose-950/40 cursor-pointer inline-flex items-center gap-1 active:scale-95 whitespace-nowrap"
+              >
+                {showCreateThread ? (
+                  <>
+                    <X className="w-3.5 h-3.5" />
+                    <span>Close</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Post</span>
+                  </>
+                )}
+              </button>
+            </FirstTimeTooltip>
+          </div>
         </div>
 
-        <FirstTimeTooltip
-          id="forum_new_discussion"
-          title="Start a Discussion"
-          tip="Post recommendations, gig reviews, album debates, or gear questions on forum boards."
-          position="bottom"
-          accentColor="rose"
-          triggerOn="hover"
-        >
-          <button
-            onClick={() => setShowCreateThread(!showCreateThread)}
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all duration-150 shadow-md shadow-rose-900/30 font-bold cursor-pointer inline-flex items-center gap-1.5 active:scale-95"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {showCreateThread ? 'View Board' : 'New Discussion'}
-          </button>
-        </FirstTimeTooltip>
-
-        {forumMicroGenre !== 'All' && (
-          <button
-            onClick={() => toggleSubscribeSpace(forumMicroGenre)}
-            className={`text-[10px] px-3 py-1.5 rounded-full border uppercase tracking-wider font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-              subscribedSpaces.includes(forumMicroGenre)
-                ? 'bg-rose-950/80 border-rose-500/60 text-rose-300'
-                : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-400 hover:text-white'
-            }`}
-          >
-            {subscribedSpaces.includes(forumMicroGenre) ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-rose-400" /> Subscribed to {forumMicroGenre}
-              </>
-            ) : (
-              <>
-                <BellPlus className="w-3.5 h-3.5 text-rose-400" /> Subscribe to {forumMicroGenre}
-              </>
+        {/* Optional expandable compact search input */}
+        {(showInlineSearch || forumSearch.trim().length > 0) && !showCreateThread && !expandedThreadId && (
+          <div className="mt-2 relative animate-in fade-in duration-150">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+            <input
+              type="text"
+              placeholder={`Search in ${activeCircleLabel}...`}
+              value={forumSearch}
+              onChange={(e) => setForumSearch(e.target.value)}
+              className="w-full bg-zinc-900/90 border border-zinc-800 focus:border-rose-500/50 rounded-xl py-2 pl-9 pr-8 text-xs text-white placeholder:text-zinc-500 focus:outline-none transition-colors"
+            />
+            {forumSearch && (
+              <button
+                type="button"
+                onClick={() => setForumSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white cursor-pointer"
+                aria-label="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             )}
-          </button>
+          </div>
+        )}
+
+        {/* Row 2: Horizontal Scrollable Filter / Topic Tabs */}
+        {!showCreateThread && !expandedThreadId && (
+          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            {[
+              { id: 'Hot', label: 'Hot', icon: Flame },
+              { id: 'New', label: 'New', icon: Sparkles },
+              { id: 'My Subscriptions', label: `Subscriptions (${subscribedSpaces.length})`, icon: Bell },
+              { id: 'Album Art', label: 'Album Art', icon: null },
+              { id: 'Album Reviews', label: 'Album Reviews', icon: null },
+              { id: 'Show & Fest', label: 'Show & Fest', icon: null },
+              { id: 'Gear & Rig', label: 'Gear & Rig', icon: null },
+            ].map((tab) => {
+              const active = isTopicTabActive(tab.id);
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={`forum-tab-${tab.id}`}
+                  type="button"
+                  onClick={() => handleSelectTopicTab(tab.id)}
+                  className={`shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-bold tracking-wide transition-colors cursor-pointer whitespace-nowrap ${
+                    active
+                      ? 'bg-rose-950/60 text-rose-300 border border-rose-500/45'
+                      : 'bg-zinc-900/60 text-zinc-400 border border-zinc-800/80 hover:text-zinc-200 hover:border-zinc-700'
+                  }`}
+                >
+                  {Icon && <Icon className={`w-3 h-3 ${active ? 'text-rose-400' : 'text-zinc-500'}`} />}
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
+
+      {/* Circle Selector & Subscriptions Bottom Sheet / Modal */}
+      {showCircleSheet && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div
+            onClick={() => setShowCircleSheet(false)}
+            className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+          />
+          <div className="relative w-full sm:max-w-lg bg-[#0d0e13] border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-2xl px-5 pt-3 pb-8 sm:pb-6 max-h-[82vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom-4 duration-200">
+            {/* Drag Handle */}
+            <div className="w-10 h-1 bg-zinc-700 rounded-full mx-auto mb-3 sm:hidden" />
+
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800/80">
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-wider text-white">
+                  Circles & Subscriptions
+                </h3>
+                <p className="text-[11px] text-zinc-400">
+                  Switch music circles or manage followed boards
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCircleSheet(false)}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-900 cursor-pointer"
+                aria-label="Close circles drawer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 pt-4">
+              {/* Quick Subscribe Toggle for Selected Micro-Circle */}
+              {forumMicroGenre !== 'All' && (
+                <div className="flex items-center justify-between gap-3 bg-zinc-900/70 border border-zinc-800 rounded-xl px-3.5 py-2.5">
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                      Active Circle
+                    </span>
+                    <span className="text-xs font-bold text-white truncate block">
+                      {forumMicroGenre}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSubscribeSpace(forumMicroGenre)}
+                    className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold uppercase tracking-wide border transition-colors cursor-pointer ${
+                      isCircleSubscribed
+                        ? 'bg-rose-950/70 border-rose-500/50 text-rose-300'
+                        : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
+                    }`}
+                  >
+                    {isCircleSubscribed ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Subscribed</span>
+                      </>
+                    ) : (
+                      <>
+                        <BellPlus className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Subscribe</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Genre Cluster & Sub-Genre Picker */}
+              <div className="space-y-2.5">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400 block">
+                  Select Circle
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForumPrimaryGenre('All');
+                      setForumMicroGenre('All');
+                      setShowCircleSheet(false);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                      forumPrimaryGenre === 'All'
+                        ? 'bg-rose-950/70 border-rose-500/60 text-rose-200'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    All Genres Collective
+                  </button>
+                  {MASTER_GENRES.map((cluster, idx) => (
+                    <button
+                      key={`sheet-cluster-${cluster.name}-${idx}`}
+                      type="button"
+                      onClick={() => {
+                        setForumPrimaryGenre(cluster.name);
+                        setForumMicroGenre('All');
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                        forumPrimaryGenre === cluster.name
+                          ? 'bg-rose-950/70 border-rose-500/60 text-rose-200'
+                          : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                      }`}
+                    >
+                      {cluster.name}
+                    </button>
+                  ))}
+                </div>
+
+                {forumPrimaryGenre !== 'All' && (
+                  <div className="pt-2 border-t border-zinc-800/70 space-y-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500 block">
+                      Sub-Circles in {forumPrimaryGenre}
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForumMicroGenre('All');
+                          setShowCircleSheet(false);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                          forumMicroGenre === 'All'
+                            ? 'bg-rose-600 text-white border-rose-500'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        All {forumPrimaryGenre}
+                      </button>
+                      {MASTER_GENRES.find((c) => c.name === forumPrimaryGenre)?.tags.map((tag, tagIdx) => (
+                        <button
+                          key={`sheet-tag-${tag.id}-${tagIdx}`}
+                          type="button"
+                          onClick={() => {
+                            setForumMicroGenre(tag.label);
+                            setShowCircleSheet(false);
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                            forumMicroGenre === tag.label
+                              ? 'bg-rose-600 text-white border-rose-500'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white'
+                          }`}
+                        >
+                          {tag.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Subscribed Spaces Management */}
+              <div className="pt-3 border-t border-zinc-800/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <Bell className="w-3 h-3 text-rose-400" />
+                    Subscribed Spaces ({subscribedSpaces.length})
+                  </span>
+                  {subscribedSpaces.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForumCategory('My Subscriptions');
+                        setShowCircleSheet(false);
+                      }}
+                      className="text-[11px] font-bold text-rose-400 hover:text-rose-300 cursor-pointer"
+                    >
+                      View Feed →
+                    </button>
+                  )}
+                </div>
+
+                {subscribedSpaces.length === 0 ? (
+                  <p className="text-xs text-zinc-500">
+                    No subscriptions yet. Pick any circle above to subscribe.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {subscribedSpaces.map((space, sIdx) => (
+                      <div
+                        key={`sheet-sub-${space}-${sIdx}`}
+                        className="inline-flex items-center gap-1 bg-rose-950/40 border border-rose-900/50 text-rose-200 px-2.5 py-1 rounded-lg text-xs font-bold"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const parentCluster = MASTER_GENRES.find((c) =>
+                              c.tags.some((tg) => tg.label === space)
+                            );
+                            if (parentCluster) {
+                              setForumPrimaryGenre(parentCluster.name);
+                              setForumMicroGenre(space);
+                            } else {
+                              setForumPrimaryGenre('All');
+                              setForumMicroGenre('All');
+                              setForumCategory(space);
+                            }
+                            setShowCircleSheet(false);
+                          }}
+                          className="hover:text-white cursor-pointer"
+                        >
+                          {space}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleSubscribeSpace(space)}
+                          className="text-rose-400 hover:text-white cursor-pointer ml-0.5 p-0.5"
+                          title={`Unsubscribe from ${space}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Thread Modal Overlay */}
       {editingThreadId && (
@@ -1588,7 +2021,7 @@ export const ForumView: React.FC<ForumViewProps> = ({
 
       {/* Create Thread Form Box */}
       {showCreateThread ? (
-        <div className="bg-[#121214] border border-zinc-900 rounded-2xl p-5 mb-6 space-y-4 animate-in slide-in-from-top-4 duration-200">
+        <div className="bg-[#121214] border border-zinc-900 rounded-2xl p-5 mx-4 sm:mx-6 mt-4 mb-6 space-y-4 animate-in slide-in-from-top-4 duration-200">
           <h3 className="text-sm font-black uppercase tracking-wider text-rose-400">Start a New Discussion Thread</h3>
           <div>
             <label className="block text-[10px] font-bold uppercase text-zinc-500 mb-1.5">Thread Title</label>
@@ -1708,115 +2141,16 @@ export const ForumView: React.FC<ForumViewProps> = ({
         </div>
       ) : (
         <>
-          {/* Genre Selector Dropdown & Space Subscriptions Bar */}
-          <div className="flex flex-col items-start gap-3 mb-5 bg-zinc-950/60 border border-purple-900/40 shadow-[0_0_25px_rgba(168,85,247,0.2)] rounded-2xl p-4 relative">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 w-full">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">Current Circle:</span>
-                <div className="flex items-center gap-1.5 bg-rose-950/30 border border-rose-900/40 px-3 py-1 rounded-full text-xs font-black text-rose-400 uppercase tracking-wide whitespace-nowrap shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-                  {forumPrimaryGenre === 'All' ? '🌌 All Genres Collective' : (forumMicroGenre === 'All' ? `All ${forumPrimaryGenre}` : forumMicroGenre)}
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full md:w-auto">
-                <label className="text-[10px] font-black uppercase text-zinc-400 tracking-wider shrink-0">Switch Circle:</label>
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                  <select
-                    value={forumPrimaryGenre}
-                    onChange={(e) => {
-                      setForumPrimaryGenre(e.target.value);
-                      setForumMicroGenre('All');
-                    }}
-                    className="w-full sm:w-auto bg-zinc-900 border border-zinc-800 text-[10px] font-bold text-white rounded-xl px-3 py-2 focus:outline-none hover:border-zinc-700 transition-colors cursor-pointer uppercase tracking-wider min-w-[130px]"
-                  >
-                    <option value="All">All Categories</option>
-                    {MASTER_GENRES.map((cluster, idx) => (
-                      <option key={`fcluster-${cluster.name}-${idx}`} value={cluster.name}>{cluster.name}</option>
-                    ))}
-                  </select>
-
-                  {forumPrimaryGenre !== 'All' && (
-                    <select
-                      value={forumMicroGenre}
-                      onChange={(e) => {
-                        setForumMicroGenre(e.target.value);
-                      }}
-                      className="w-full sm:w-auto bg-zinc-900 border border-zinc-800 text-[10px] font-bold text-white rounded-xl px-3 py-2 focus:outline-none hover:border-zinc-700 transition-colors cursor-pointer uppercase tracking-wider min-w-[130px]"
-                    >
-                      <option value="All">All {forumPrimaryGenre}</option>
-                      {MASTER_GENRES.find((c) => c.name === forumPrimaryGenre)?.tags.map((tag, tagIdx) => (
-                        <option key={`ftag-${tag.id}-${tagIdx}`} value={tag.label}>{tag.label}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Subscribed Spaces Bar */}
-            <div className="w-full pt-3 border-t border-zinc-900 flex items-center gap-2 flex-wrap text-[10px]">
-              <span className="text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                <Bell className="w-3 h-3 text-rose-400" /> Subscribed Spaces:
-              </span>
-              {subscribedSpaces.length === 0 ? (
-                <span className="text-zinc-600 font-mono italic">No subscriptions yet</span>
-              ) : (
-                subscribedSpaces.map((space, sIdx) => (
-                  <span
-                    key={`subscribed-space-${space}-${sIdx}`}
-                    className="bg-rose-950/40 border border-rose-900/50 text-rose-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 font-bold"
-                  >
-                    {space}
-                    <button
-                      onClick={() => toggleSubscribeSpace(space)}
-                      className="hover:text-white transition-colors cursor-pointer ml-0.5"
-                      title="Unsubscribe"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Topic Tag Pills & Search */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 mb-6">
-            <div className="relative w-full sm:flex-1">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-              <input
-                type="text"
-                placeholder={`Search in ${forumPrimaryGenre === 'All' ? 'all circles' : forumMicroGenre}...`}
-                value={forumSearch}
-                onChange={(e) => setForumSearch(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-800/80 rounded-xl py-2.5 pl-10 pr-4 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 transition-colors"
-              />
-            </div>
-            <div className="flex gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 no-scrollbar">
-              {['All', 'My Subscriptions', 'Album Art', 'Album Reviews', 'Show & Fest', 'Gear & Rig'].map((cat, catIdx) => (
-                <button
-                  key={`forum-cat-${cat}-${catIdx}`}
-                  onClick={() => setForumCategory(cat)}
-                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors shrink-0 cursor-pointer ${
-                    forumCategory === cat
-                      ? 'bg-rose-950 text-rose-400 border border-rose-900/80'
-                      : 'bg-zinc-950 text-zinc-500 border border-zinc-900 hover:text-zinc-300'
-                  }`}
-                >
-                  {cat === 'My Subscriptions' ? `🔔 Subscriptions (${subscribedSpaces.length})` : cat}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {/* Threads List or Single Thread Expanded */}
           {expandedThreadId ? (
             (() => {
-              const thread = forumThreads.find((t) => t.id === expandedThreadId);
+              const thread =
+                forumThreads.find((t) => String(t.id) === String(expandedThreadId)) ||
+                BRUTAL_DEATH_METAL_HIGHLIGHTS.find((t) => String(t.id) === String(expandedThreadId));
               if (!thread) return null;
               return (
-                <div className="bg-[#121214] border border-zinc-900 rounded-2xl p-5 space-y-6 animate-in fade-in duration-200">
+                <div className="bg-[#121214] border border-zinc-900 rounded-2xl p-5 mx-4 sm:mx-6 mt-4 space-y-6 animate-in fade-in duration-200">
                   <div className="flex justify-between items-center">
                     <button
                       onClick={() => { setExpandedThreadId(null); setThreadCommentInput(''); }}
@@ -1826,7 +2160,7 @@ export const ForumView: React.FC<ForumViewProps> = ({
                     </button>
 
                     {/* Owner controls on expanded thread */}
-                    {isUserOwner(thread.author) && (
+                    {isUserOwner(thread.author, thread) && (
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleStartEditThread(thread)}
@@ -1860,29 +2194,7 @@ export const ForumView: React.FC<ForumViewProps> = ({
                     </div>
                     <h3 className="text-lg font-black text-white leading-snug">{thread.title}</h3>
                     <div className="flex items-center gap-2">
-                      {thread.authorAvatar && typeof thread.authorAvatar === 'string' && thread.authorAvatar.length > 5 && (thread.authorAvatar.startsWith('http') || thread.authorAvatar.startsWith('data:') || thread.authorAvatar.startsWith('/')) ? (
-                        <div className="w-5 h-5 rounded-full overflow-hidden shrink-0 border border-zinc-900/50 bg-rose-950/60 flex items-center justify-center">
-                          <img 
-                            src={thread.authorAvatar} 
-                            alt={formatForumAuthor(thread.author)} 
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer"
-                            onError={(e) => {
-                              const target = e.currentTarget as HTMLImageElement;
-                              target.style.display = 'none';
-                              const parent = target.parentElement;
-                              if (parent && !parent.querySelector('.fallback-initials')) {
-                                const span = document.createElement('span');
-                                span.className = 'text-[9px] font-black text-rose-400 font-mono fallback-initials';
-                                span.textContent = (thread.author || 'Fan').replace(/@/g, '').split(/[\s_]+/).map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
-                                parent.appendChild(span);
-                              }
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        renderAvatarForName(thread.author)
-                      )}
+                      {renderAvatarForName(thread.author, thread)}
                       <span className="text-xs text-zinc-300 font-bold">posted by {formatForumAuthor(thread.author)}</span>
                     </div>
                   </div>
@@ -2140,45 +2452,27 @@ export const ForumView: React.FC<ForumViewProps> = ({
               );
             })()
           ) : (
-            <div className="space-y-2.5">
+            <div className="divide-y divide-zinc-800/80 border-b border-zinc-800/80">
               {(() => {
-                const filteredList = forumThreads
-                  .filter((t) => {
-                    if (forumCategory === 'All') return true;
-                    if (forumCategory === 'My Subscriptions') {
-                      return (
-                        subscribedSpaces.includes(t.genre) ||
-                        subscribedSpaces.includes(t.category) ||
-                        subscribedSpaces.includes(t.primaryGenre)
-                      );
-                    }
-                    return t.category === forumCategory;
-                  })
-                  .filter((t) => {
-                    if (forumPrimaryGenre === 'All') return true;
-                    const cluster = MASTER_GENRES.find((c) => c.name === forumPrimaryGenre);
-                    if (!cluster) return false;
-                    const validTags = cluster.tags.map((tag) => tag.label);
-                    if (forumMicroGenre === 'All') {
-                      return validTags.includes(t.genre);
-                    }
-                    return t.genre === forumMicroGenre;
-                  })
-                  .filter(
-                    (t) =>
-                      t.title.toLowerCase().includes(forumSearch.toLowerCase()) ||
-                      t.content.toLowerCase().includes(forumSearch.toLowerCase())
-                  );
+                const filteredList = filterAndSortForumThreads(forumThreads, {
+                  category: forumCategory,
+                  sort: forumSort,
+                  primaryGenre: forumPrimaryGenre,
+                  microGenre: forumMicroGenre,
+                  subscribedSpaces,
+                  searchQuery: forumSearch,
+                });
 
                 if (filteredList.length === 0) {
                   return (
-                    <div className="text-center py-12 px-4 bg-[#121214] border border-zinc-900 rounded-2xl space-y-3">
+                    <div className="text-center py-14 px-7 sm:px-8 space-y-3">
                       <MessageSquare className="w-8 h-8 text-zinc-600 mx-auto" />
                       <h4 className="text-sm font-bold uppercase text-white font-mono">No Discussions Found</h4>
                       <p className="text-xs text-zinc-500 max-w-sm mx-auto">
                         No threads match your current filter or search criteria. Be the first to start a discussion!
                       </p>
                       <button
+                        type="button"
                         onClick={() => setShowCreateThread(true)}
                         className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
                       >
@@ -2193,148 +2487,222 @@ export const ForumView: React.FC<ForumViewProps> = ({
                   const hasVideo = thread.image && isVideoUrl(thread.image);
                   const hasAudio = thread.image && isAudioUrl(thread.image);
                   const hasYoutube = !!thread.youtubeId;
+                  const catAccent = getCategoryAccentClasses(thread.category);
+                  const activity = getThreadActivityBadge(thread);
+                  const highlighted = isThreadHighlighted(thread, forumThreads);
+                  const commentsCount = Array.isArray(thread.comments) ? thread.comments.length : 0;
 
                   return (
-                    <div
+                    <article
                       key={thread.id ? `thread-${thread.id}-${tIdx}` : `thread-${tIdx}`}
                       onClick={() => setExpandedThreadId(thread.id)}
-                      className="bg-[#121214] hover:bg-[#15161a] border border-zinc-900/90 hover:border-zinc-800 rounded-xl p-3 sm:p-3.5 cursor-pointer transition-all duration-150 flex flex-col justify-between gap-2.5 relative group shadow-sm"
+                      className={`px-7 sm:px-8 py-4 hover:bg-zinc-950/70 active:bg-zinc-900/40 cursor-pointer transition-colors duration-150 flex flex-col gap-2.5 group ${
+                        highlighted ? 'bg-gradient-to-r from-red-950/25 via-[#0d0607] to-transparent border-l-2 border-l-red-600' : ''
+                      }`}
                     >
-                      {/* Top row: Badges & Author */}
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap text-[10px] text-zinc-500 font-bold">
-                          <span className="text-[9px] font-black uppercase text-rose-400 bg-rose-950/30 border border-rose-900/40 px-2 py-0.5 rounded-full shrink-0">
+                      {/* Tight Single-Row Metadata Header */}
+                      <div className="flex items-center justify-between gap-2 min-w-0 text-[11px]">
+                        <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+                          {renderAvatarForName(thread.author, thread)}
+
+                          <span className="font-semibold text-zinc-200 truncate max-w-[115px] sm:max-w-[160px]">
+                            {formatForumAuthor(thread.author)}
+                          </span>
+
+                          <span className="text-zinc-600 shrink-0" aria-hidden="true">·</span>
+
+                          <span className={`font-bold truncate shrink-0 ${catAccent.text}`}>
                             {thread.category}
                           </span>
+
                           {thread.genre && (
-                            <span className="text-[9px] font-black uppercase text-purple-400 bg-purple-950/30 border border-purple-900/40 px-2 py-0.5 rounded-full font-mono shrink-0">
-                              {thread.genre}
-                            </span>
+                            <>
+                              <span className="text-zinc-600 shrink-0 hidden sm:inline" aria-hidden="true">·</span>
+                              <span className="text-zinc-400 truncate max-w-[110px] hidden sm:inline">
+                                {thread.genre}
+                              </span>
+                            </>
                           )}
-                          <span className="text-zinc-600">•</span>
+
+                          <span className="text-zinc-600 shrink-0" aria-hidden="true">·</span>
+                          <span className="text-zinc-500 font-mono text-[10px] shrink-0">
+                            {thread.timeAgo}
+                          </span>
                         </div>
 
-                        {/* Author line */}
-                        <div className="flex items-center gap-1.5 min-w-0 pt-0.5">
-                          {thread.authorAvatar && typeof thread.authorAvatar === 'string' && thread.authorAvatar.length > 5 && (thread.authorAvatar.startsWith('http') || thread.authorAvatar.startsWith('data:') || thread.authorAvatar.startsWith('/')) ? (
-                            <div className="w-3.5 h-3.5 rounded-full overflow-hidden shrink-0 border border-zinc-800">
-                              <img src={thread.authorAvatar} alt={formatForumAuthor(thread.author)} className="w-full h-full object-cover" />
-                            </div>
-                          ) : (
-                            renderAvatarForName(thread.author)
-                          )}
-                          <span className="truncate max-w-[160px] text-zinc-300 font-mono text-xs font-bold">{formatForumAuthor(thread.author)}</span>
-                        </div>
+                        {highlighted ? (
+                          <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wide text-red-300 bg-red-950/80 border border-red-600/60 px-2 py-0.5 rounded-full whitespace-nowrap">
+                            <Skull className="w-2.5 h-2.5 text-red-400" />
+                            <span>Highlighted</span>
+                          </span>
+                        ) : activity === 'trending' ? (
+                          <span className="shrink-0 text-[10px] font-bold text-amber-300 whitespace-nowrap">
+                            🔥 Trending
+                          </span>
+                        ) : activity === 'new_replies' ? (
+                          <span className="shrink-0 text-[10px] font-bold text-teal-300 whitespace-nowrap">
+                            New Replies
+                          </span>
+                        ) : null}
                       </div>
 
-                      {/* Middle row: Title & Concise Excerpt on left, Media Thumbnail on right */}
-                      <div className="flex gap-3 sm:gap-4 items-center justify-between">
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <h3 className="text-sm font-bold text-white group-hover:text-rose-400 transition-colors leading-snug line-clamp-2">
-                            {thread.title}
-                          </h3>
-                          <p className="text-xs text-zinc-400 line-clamp-2 font-normal leading-relaxed">
-                            {thread.content}
-                          </p>
-                        </div>
+                      {/* Thread Title */}
+                      <h3 className="text-[15px] sm:text-base font-bold text-white group-hover:text-rose-400 transition-colors leading-snug">
+                        {thread.title}
+                      </h3>
 
-                        {/* Right: Small preview of attached image / media */}
-                        {(hasYoutube || hasImage || hasVideo) && (
-                          <div className="shrink-0">
-                            {hasYoutube ? (
-                              <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl border border-zinc-800 overflow-hidden bg-black shadow-inner">
+                      {/* Prominent Media Preview OR Sleek 3-Line Text Excerpt */}
+                      {hasImage ? (
+                        <div className="space-y-2">
+                          <div className="w-full rounded-2xl overflow-hidden border border-zinc-800/80 bg-zinc-950">
+                            <img
+                              referrerPolicy="no-referrer"
+                              src={thread.image}
+                              alt={thread.title || 'Forum attachment'}
+                              loading="lazy"
+                              className="w-full max-h-72 object-cover group-hover:scale-[1.01] transition-transform duration-300"
+                            />
+                          </div>
+                          {thread.content && (
+                            <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+                              {thread.content}
+                            </p>
+                          )}
+                        </div>
+                      ) : hasYoutube ? (
+                        <div className="space-y-2">
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveInlineYoutubeIds((prev) => ({ ...prev, [String(thread.id)]: true }));
+                            }}
+                            className="relative w-full aspect-video max-h-72 rounded-2xl overflow-hidden border border-zinc-800/80 bg-black cursor-pointer"
+                          >
+                            {activeInlineYoutubeIds[String(thread.id)] ? (
+                              <iframe
+                                src={`https://www.youtube.com/embed/${thread.youtubeId}?autoplay=1`}
+                                title={thread.title || 'YouTube Video'}
+                                className="w-full h-full border-0"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowFullScreen
+                              />
+                            ) : (
+                              <>
                                 <img
                                   referrerPolicy="no-referrer"
                                   src={`https://img.youtube.com/vi/${thread.youtubeId}/hqdefault.jpg`}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                                  alt="YouTube preview"
+                                  alt={thread.title || 'YouTube preview'}
+                                  loading="lazy"
+                                  className="w-full h-full object-cover group-hover:scale-[1.01] transition-transform duration-300"
                                 />
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/10 transition-colors">
-                                  <PlayCircle className="w-4 h-4 text-white/90 drop-shadow" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-transparent flex items-center justify-center">
+                                  <div className="w-12 h-12 rounded-full bg-red-600/90 hover:bg-red-500 border border-white/30 backdrop-blur-sm flex items-center justify-center shadow-lg transition-colors">
+                                    <PlayCircle className="w-6 h-6 text-white" />
+                                  </div>
                                 </div>
-                              </div>
-                            ) : hasVideo ? (
-                              <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl border border-zinc-800 overflow-hidden bg-zinc-900 shadow-inner flex items-center justify-center">
-                                <video src={thread.image} className="w-full h-full object-cover pointer-events-none" />
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/40 group-hover:bg-black/20 transition-colors">
-                                  <PlayCircle className="w-4 h-4 text-white/90 drop-shadow" />
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl border border-zinc-800 overflow-hidden bg-zinc-950 shadow-inner">
-                                <img
-                                  referrerPolicy="no-referrer"
-                                  src={thread.image}
-                                  alt="Attached image preview"
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                                />
-                              </div>
+                                <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-zinc-700/80 text-[10px] font-mono font-bold text-red-300">
+                                  <Youtube className="w-3 h-3 text-red-500" />
+                                  <span>Watch on YouTube</span>
+                                </span>
+                              </>
                             )}
                           </div>
-                        )}
-                      </div>
+                          {thread.content && (
+                            <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+                              {thread.content}
+                            </p>
+                          )}
+                        </div>
+                      ) : hasVideo ? (
+                        <div className="space-y-2">
+                          <div className="relative w-full max-h-72 rounded-2xl overflow-hidden border border-zinc-800/80 bg-black flex items-center justify-center">
+                            <video
+                              src={thread.image}
+                              className="w-full max-h-72 object-cover pointer-events-none"
+                            />
+                            <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                              <div className="w-12 h-12 rounded-full bg-black/70 border border-white/25 backdrop-blur-sm flex items-center justify-center">
+                                <PlayCircle className="w-6 h-6 text-white" />
+                              </div>
+                            </div>
+                          </div>
+                          {thread.content && (
+                            <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+                              {thread.content}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {thread.content && (
+                            <p className="text-xs sm:text-[13px] text-zinc-400 line-clamp-3 font-normal leading-relaxed">
+                              {thread.content}
+                            </p>
+                          )}
+                          {hasAudio && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs text-rose-300"
+                            >
+                              <Volume2 className="w-4 h-4 text-rose-400 shrink-0" />
+                              <span className="font-bold truncate">Attached Audio Track</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                      {/* Footer row: Pill-shaped Upvote/Downvote next to Comments + Media badges + Read Full (all on same level) */}
-                      <div className="flex items-center justify-between gap-2 pt-1 text-[10px] text-zinc-500 font-bold w-full">
-                        <div className="flex items-center gap-2 flex-wrap min-w-0">
-                          {/* Upvote / Downvote Pill Node */}
+                      {/* Bottom Action Bar */}
+                      <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px] text-zinc-400 w-full">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {/* Upvote / Downvote Pill */}
                           <div
                             onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-0.5 bg-zinc-950 border border-zinc-800/90 hover:border-zinc-700 rounded-full px-2 py-0.5 text-[11px] shadow-sm transition-colors shrink-0"
+                            className="inline-flex items-center gap-0.5 bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 rounded-full px-2.5 py-1 shadow-sm transition-colors shrink-0"
                           >
                             <button
+                              type="button"
                               onClick={() => handleVote(thread.id, 'up')}
                               className={`p-0.5 transition-colors cursor-pointer ${
-                                thread.userVote === 'up' ? 'text-rose-500 scale-110' : 'text-zinc-500 hover:text-rose-400'
+                                thread.userVote === 'up' ? 'text-rose-500 scale-110' : 'text-zinc-400 hover:text-rose-400'
                               }`}
                               title="Upvote / Flame"
                             >
-                              <Flame className="w-3 h-3 fill-current" />
+                              <Flame className="w-3.5 h-3.5 fill-current" />
                             </button>
-                            <span className="font-mono font-black text-white text-[10px] px-1 min-w-[14px] text-center">
+                            <span className="font-mono tabular-nums font-black text-white text-[11px] px-1.5 min-w-[20px] text-center">
                               {thread.votes}
                             </span>
                             <button
+                              type="button"
                               onClick={() => handleVote(thread.id, 'down')}
                               className={`p-0.5 transition-colors cursor-pointer ${
-                                thread.userVote === 'down' ? 'text-purple-500 scale-110' : 'text-zinc-500 hover:text-purple-400'
+                                thread.userVote === 'down' ? 'text-purple-500 scale-110' : 'text-zinc-400 hover:text-purple-400'
                               }`}
                               title="Downvote"
                             >
-                              <Zap className="w-3 h-3 rotate-180 fill-current" />
+                              <Zap className="w-3.5 h-3.5 rotate-180 fill-current" />
                             </button>
                           </div>
 
                           {/* Comments Count Pill */}
-                          <span className="inline-flex items-center gap-1.5 text-zinc-400 bg-zinc-950 border border-zinc-800/90 rounded-full px-2.5 py-0.5 text-[10px] font-mono group-hover:text-zinc-200 transition-colors whitespace-nowrap shrink-0">
-                            <MessageSquare className="w-3 h-3 text-zinc-500" />
-                            <span>{thread.comments?.length || 0} {thread.comments?.length === 1 ? 'Comment' : 'Comments'}</span>
+                          <span className="inline-flex items-center gap-1.5 text-zinc-300 bg-zinc-900/90 border border-zinc-800 rounded-full px-3 py-1 text-[11px] font-mono tabular-nums group-hover:text-white transition-colors whitespace-nowrap shrink-0">
+                            <MessageSquare className="w-3.5 h-3.5 text-zinc-400" />
+                            <span>{commentsCount}</span>
                           </span>
 
-                          {/* Compact Media Type Indicators (audio/video/youtube only) */}
-                          {hasAudio && (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-mono text-rose-400 bg-rose-950/40 border border-rose-900/40 px-1.5 py-0.5 rounded-full shrink-0">
-                              <Volume2 className="w-2.5 h-2.5 text-rose-500" /> Audio Track
-                            </span>
-                          )}
-                          {hasVideo && (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-mono text-sky-400 bg-sky-950/40 border border-sky-900/40 px-1.5 py-0.5 rounded-full shrink-0">
-                              <Film className="w-2.5 h-2.5 text-sky-400" /> Video
-                            </span>
-                          )}
-                          {hasYoutube && (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-mono text-red-400 bg-red-950/40 border border-red-900/40 px-1.5 py-0.5 rounded-full shrink-0">
-                              <Youtube className="w-2.5 h-2.5 text-red-500" /> YouTube
+                          {thread.genre && (
+                            <span className="sm:hidden text-[10px] text-zinc-500 truncate max-w-[96px]">
+                              {thread.genre}
                             </span>
                           )}
                         </div>
 
-                        <span className="text-[10px] font-mono text-zinc-500 group-hover:text-rose-400 flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap">
-                          <span>Read Full</span>
+                        <span className="text-[11px] font-semibold text-zinc-500 group-hover:text-rose-400 inline-flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap">
+                          <span>Open</span>
                           <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
                         </span>
                       </div>
-                    </div>
+                    </article>
                   );
                 });
               })()}

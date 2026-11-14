@@ -15,6 +15,7 @@ import {
   Database 
 } from 'lucide-react';
 import { Show } from '../types';
+import { formatShowDate } from '../utils/socialFeedUtils';
 
 interface FanProfile {
   id: string;
@@ -371,7 +372,7 @@ ALTER TABLE public.staged_tickets ENABLE ROW LEVEL SECURITY;
                           </span>
                         </div>
                         <div className="text-[9px] font-mono text-zinc-500 uppercase">
-                          {show.date} • {show.name || 'Unknown Venue'}
+                          {formatShowDate(show.date)} • {show.name || 'Unknown Venue'}
                         </div>
                       </div>
 

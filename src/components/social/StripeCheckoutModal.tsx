@@ -418,14 +418,35 @@ export function StripeCheckoutModal({
       // Dispatch real-time push notification for Ticket Velocity or Merch Low Stock
       if (isTicket) {
         const simulatedPercentage = Math.min(100, Math.floor(82 + Math.random() * 16));
-        pushManager.sendPushToServer({
-          userId: rawItem?.creator_id || rawItem?.user_id || rawItem?.promoter_id,
-          title: `💰 Ticket Velocity Alert: ${rawItem?.headliner || itemName}`,
-          body: `Sell-out threshold reached! ${simulatedPercentage}% sold out (${quantity} new pass(es) issued)! Gate revenue: $${grandTotal}`,
-          category: 'ticket_velocity',
-          priority: 'P0',
-          targetTab: 'sales',
-          data: { showTitle: itemName, percentage: simulatedPercentage, type: 'ticket_velocity' }
+        const showIdVal = rawItem?.id || rawItem?.show_id || '';
+        const recipientUid = rawItem?.creator_id || rawItem?.user_id || rawItem?.promoter_id;
+        authFetch('/api/shows/ticket-alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            showId: showIdVal ? String(showIdVal) : undefined,
+            showTitle: rawItem?.headliner || itemName,
+            venueName: rawItem?.venue || rawItem?.venue_name || '',
+            city: rawItem?.city || '',
+            percentage: simulatedPercentage,
+            quantity,
+            gateRevenue: grandTotal,
+            recipientUserId: recipientUid,
+            buyerUserId: userProfile?.id,
+            alertType: 'ticket_velocity',
+          }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            await pushManager.sendPushToServer({
+              userId: recipientUid,
+              title: `💰 Ticket Velocity Alert: ${rawItem?.headliner || itemName}`,
+              body: `Sell-out threshold reached! ${simulatedPercentage}% sold out (${quantity} new pass(es) issued)! Gate revenue: $${grandTotal}`,
+              category: 'ticket_velocity',
+              priority: 'P0',
+              targetTab: 'sales',
+              data: { showTitle: itemName, percentage: simulatedPercentage, type: 'ticket_velocity' }
+            });
+          }
         }).catch(() => {});
       } else {
         const remainingStock = Math.max(2, Math.floor(Math.random() * 4) + 1);
