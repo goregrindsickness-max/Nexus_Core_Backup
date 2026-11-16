@@ -1,10 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 import { getSupabase } from './clientService';
 import { ensureImagesUploadedToStorage } from './storageService';
-import { sanitizeProfilePayload } from './profileService';
-import { sanitizeBandPayload } from './bandService';
-import { sanitizeCreativePayload } from './creativeService';
-import { sanitizeReleaseForDb } from './releasesService';
+type SanitizerRegistry = {
+  sanitizeProfilePayload?: (payload: any) => any;
+  sanitizeBandPayload?: (payload: any) => any;
+  sanitizeCreativePayload?: (payload: any) => any;
+  sanitizeReleaseForDb?: (payload: any) => any;
+};
+
+const sanitizersRegistry: SanitizerRegistry = {};
+
+export function registerSchemaSanitizers(registered: SanitizerRegistry) {
+  Object.assign(sanitizersRegistry, registered);
+}
 
 /**
  * Strips properties from an InventoryItem that are not present in the
@@ -477,18 +485,25 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
     }
     payload = deduped.map((item: any) => {
       if (!item || typeof item !== 'object') return item;
-      const isBand = 'band_name' in item || 'micro_genres' in item || 'subgenres' in item || 'tour_vehicle' in item || 'metal_archives_url' in item || ('logo_url' in item && ('genre' in item || 'city' in item || 'bio' in item));
-      if (isBand) {
-        return sanitizeBandPayload(item);
-      }
-      const isRelease = 'tracks' in item || 'catalog_id' in item || 'audio_vault_path' in item || ('title' in item && ('release_date' in item || 'band_id' in item || 'formats' in item));
+      const isRelease = 'tracks' in item || 'catalog_id' in item || 'audio_vault_path' in item || ('title' in item && ('release_date' in item || 'band_id' in item || 'formats' in item || 'digital' in item));
       if (isRelease) {
-        return sanitizeReleaseForDb(item);
+        return sanitizersRegistry.sanitizeReleaseForDb ? sanitizersRegistry.sanitizeReleaseForDb(item) : item;
+      }
+      const isBand = !isRelease && ('band_name' in item || 'micro_genres' in item || 'subgenres' in item || 'tour_vehicle' in item || 'metal_archives_url' in item || ('logo_url' in item && ('genre' in item || 'city' in item || 'bio' in item)));
+      if (isBand) {
+        return sanitizersRegistry.sanitizeBandPayload ? sanitizersRegistry.sanitizeBandPayload(item) : item;
       }
       return item;
     });
   } else {
+    const isReleasePayload =
+      payload &&
+      typeof payload === 'object' &&
+      !Array.isArray(payload) &&
+      ('tracks' in payload || 'catalog_id' in payload || 'audio_vault_path' in payload || ('title' in payload && ('release_date' in payload || 'formats' in payload || 'digital' in payload || 'band_id' in payload)));
+
     const isBandPayload =
+      !isReleasePayload &&
       payload &&
       typeof payload === 'object' &&
       !Array.isArray(payload) &&
@@ -508,10 +523,11 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
 
     // If this payload targets the 'bands' table, normalize it strictly for the 'bands' database table columns:
     if (isBandPayload) {
-      payload = sanitizeBandPayload(payload);
+      payload = sanitizersRegistry.sanitizeBandPayload ? sanitizersRegistry.sanitizeBandPayload(payload) : payload;
     }
 
     const isCreativePayload =
+      !isReleasePayload &&
       !isBandPayload &&
       payload &&
       typeof payload === 'object' &&
@@ -538,10 +554,11 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
 
     // If this payload targets the 'creatives' table, normalize it strictly for the 'creatives' database table columns:
     if (isCreativePayload) {
-      payload = sanitizeCreativePayload(payload);
+      payload = sanitizersRegistry.sanitizeCreativePayload ? sanitizersRegistry.sanitizeCreativePayload(payload) : payload;
     }
 
     const isProfilePayload =
+      !isReleasePayload &&
       !isBandPayload &&
       !isCreativePayload &&
       payload &&
@@ -565,20 +582,11 @@ export async function executeWithSchemaResilience<T extends Record<string, any> 
 
     // If this payload is a profile, normalize it for the 'profiles' database table columns:
     if (isProfilePayload) {
-      payload = sanitizeProfilePayload(payload);
+      payload = sanitizersRegistry.sanitizeProfilePayload ? sanitizersRegistry.sanitizeProfilePayload(payload) : payload;
     }
 
-    const isReleasePayload =
-      !isBandPayload &&
-      !isCreativePayload &&
-      !isProfilePayload &&
-      payload &&
-      typeof payload === 'object' &&
-      !Array.isArray(payload) &&
-      ('tracks' in payload || 'catalog_id' in payload || 'audio_vault_path' in payload || ('title' in payload && ('release_date' in payload || 'formats' in payload || 'digital' in payload || 'band_id' in payload)));
-
     if (isReleasePayload) {
-      payload = sanitizeReleaseForDb(payload);
+      payload = sanitizersRegistry.sanitizeReleaseForDb ? sanitizersRegistry.sanitizeReleaseForDb(payload) : payload;
     }
   }
 
@@ -921,8 +929,9 @@ export function subscribeToTable(table: string, onEvent: (payload: any) => void)
   const supabase = getSupabase();
   if (!supabase) return null;
 
+  const topic = `realtime_sync_${table}_${Math.random().toString(36).substring(2, 8)}`;
   const channel = supabase
-    .channel(`realtime_sync_${table}`)
+    .channel(topic)
     .on(
       'postgres_changes',
       {
@@ -934,13 +943,20 @@ export function subscribeToTable(table: string, onEvent: (payload: any) => void)
         onEvent(payload);
       }
     )
-    .subscribe((status) => {
-      console.log(`Supabase Realtime subscription current status [${table}]:`, status);
+    .subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        console.log(`[Supabase Realtime] Subscribed to [${table}]`);
+      } else if (status === 'CLOSED') {
+        // Normal channel unsubscribe or cleanup
+        console.debug(`[Supabase Realtime] Subscription closed for [${table}]`);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[Supabase Realtime] Subscription issue on [${table}]: ${status}`, err || '');
+      }
     });
 
   return () => {
     if (supabase && channel) {
-      supabase.removeChannel(channel).then();
+      supabase.removeChannel(channel).catch(() => {});
     }
   };
 }

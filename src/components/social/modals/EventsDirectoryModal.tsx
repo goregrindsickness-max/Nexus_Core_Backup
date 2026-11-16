@@ -41,7 +41,10 @@ import {
 import { getSupabase } from '../../../supabase';
 import { showsStore } from '../../../utils/indexedDB';
 import { resolveLocationCoordinates } from '../../../lib/geoResolution';
-import { isPastShowDate } from '../../../utils/socialFeedUtils';
+import { isPastShowDate, formatShowDate } from '../../../utils/socialFeedUtils';
+import { isShowEmbargoedOrDraft } from '../../../utils/showDisplayUtils';
+import { tourPackageManager } from '../../../lib/tourPackageManager';
+import { authFetch } from '../../../utils/apiConfig';
 
 export interface EventsDirectoryModalProps {
   isOpen: boolean;
@@ -101,10 +104,7 @@ export const checkIsPersonallyBooked = (show: any, userProfile?: any, promoterPr
  */
 export const isEmbargoedShow = (show: any): boolean => {
   if (!show) return false;
-  if (show.status === 'Embargoed' || show.status === 'Draft' || show.publication_status === 'embargoed_private' || show.publication_status === 'draft' || show.is_published === false) {
-    return true;
-  }
-  return false;
+  return isShowEmbargoedOrDraft(show, tourPackageManager.getAllTours());
 };
 
 // Color palette themes for distinct show card borders (underground / cyberpunk / scene aesthetic)
@@ -320,7 +320,28 @@ export const normalizeShowToEventDirectoryItem = (show: any, idx: number = 0, us
   }
 
   const ticketUrl = show.ticketUrl || show.ticket_url || show.external_ticket_url || '';
-  const flyerUrl = show.flyerUrl || show.flyer_url || show.image || show.thumbnail || show.image_url || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80';
+  const rawFlyerCandidate =
+    show.flyerUrl ||
+    show.flyer_url ||
+    extraNotes.flyer_url ||
+    extraNotes.flyerUrl ||
+    show.image_url ||
+    show.cover_url ||
+    show.poster_url ||
+    show.image ||
+    show.thumbnail ||
+    '';
+  const isGenericStockFlyer = (url?: string) => {
+    if (!url || typeof url !== 'string') return true;
+    const trimmed = url.trim();
+    if (!trimmed) return true;
+    return (
+      trimmed.includes('photo-1514525253161-7a46d19cd819') ||
+      trimmed.includes('photo-1470225620780-dba8ba36b745') ||
+      trimmed.includes('photo-1516450360452-9312f5e86fc7')
+    );
+  };
+  const flyerUrl = isGenericStockFlyer(rawFlyerCandidate) ? '' : String(rawFlyerCandidate).trim();
   const genre = show.genre || (show.micro_genres && show.micro_genres.length > 0 ? show.micro_genres.join(' / ') : 'Extreme Metal / Touring Route');
 
   // Derive coordinates accurately
@@ -507,7 +528,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
     }
     setIsAiParsing(true);
     try {
-      const res = await fetch('/api/parse-show-flyer', {
+      const res = await authFetch('/api/parse-show-flyer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -642,7 +663,8 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
           const { data: dbShows, error: dbErr } = await client
             .from('shows')
             .select('*')
-            .order('date', { ascending: true });
+            .order('date', { ascending: true })
+            .range(0, 4999);
 
           if (!dbErr && dbShows && Array.isArray(dbShows) && dbShows.length > 0) {
             allExtractedShows.push(...dbShows);
@@ -676,20 +698,51 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
         allExtractedShows.push(...shows);
       }
 
-      // 4. Deduplicate extracted shows by id or headliner + date
+      // 3b. Also read extended show metadata from localStorage so locally attached flyers are preserved
+      try {
+        const rawExt = localStorage.getItem('nexus_core_shows_extended');
+        if (rawExt) {
+          const parsedExt = JSON.parse(rawExt);
+          if (parsedExt && typeof parsedExt === 'object') {
+            allExtractedShows.push(...Object.values(parsedExt));
+          }
+        }
+      } catch (_) {}
+
+      // 4. Deduplicate extracted shows by id or headliner + date, merging attached flyers from any duplicate copy
       const dedupedShows: any[] = [];
-      const seenShowSigs = new Set<string>();
+      const sigToIndexMap = new Map<string, number>();
 
       allExtractedShows.forEach((s, idx) => {
         if (!s || isEmbargoedShow(s)) return;
-        const sId = String(s.id || '').toLowerCase().trim();
-        const sH = String(s.headliner || s.band_name || s.name || s.show_name || '').toLowerCase().trim();
-        const sD = String(s.date || s.show_date || '').toLowerCase().trim();
-        const sig = sId ? `id_${sId}` : `h_${sH}__${sD}`;
+        const normalized = normalizeShowToEventDirectoryItem(s, idx);
+        const sId = String(normalized.id || s.id || '').toLowerCase().trim();
+        const sH = String(normalized.headliner || s.headliner || s.band_name || s.name || s.show_name || '').toLowerCase().trim();
+        const sD = String(normalized.rawDate || s.date || s.show_date || '').toLowerCase().trim();
+        const idSig = sId ? `id_${sId}` : '';
+        const hdSig = sH && sD ? `h_${sH}__${sD}` : '';
 
-        if (!seenShowSigs.has(sig)) {
-          seenShowSigs.add(sig);
-          dedupedShows.push(normalizeShowToEventDirectoryItem(s, idx));
+        const existingIdx =
+          (idSig && sigToIndexMap.has(idSig) ? sigToIndexMap.get(idSig) : undefined) ??
+          (hdSig && sigToIndexMap.has(hdSig) ? sigToIndexMap.get(hdSig) : undefined);
+
+        if (existingIdx === undefined) {
+          const newIdx = dedupedShows.length;
+          dedupedShows.push(normalized);
+          if (idSig) sigToIndexMap.set(idSig, newIdx);
+          if (hdSig) sigToIndexMap.set(hdSig, newIdx);
+        } else {
+          const existing = dedupedShows[existingIdx];
+          if (!existing.flyerUrl && normalized.flyerUrl) {
+            existing.flyerUrl = normalized.flyerUrl;
+            existing.flyer_url = normalized.flyerUrl;
+          }
+          if ((!existing.support || existing.support.length === 0) && normalized.support?.length > 0) {
+            existing.support = normalized.support;
+          }
+          if (!existing.ticketUrl && normalized.ticketUrl) {
+            existing.ticketUrl = normalized.ticketUrl;
+          }
         }
       });
 
@@ -731,54 +784,95 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
   const normalizedEvents = useMemo(() => {
     const rawList = (liveEvents && liveEvents.length > 0) ? liveEvents.filter(e => !isEmbargoedShow(e)) : [];
     
-    // Merge liveEvents with localImportedShows and props.shows
+    // Merge liveEvents with localImportedShows, props.shows, and extended localStorage metadata
     const combined = [...rawList];
-    const seenSigs = new Set<string>();
+    const sigToCombinedIdx = new Map<string, number>();
 
-    // Mark existing liveEvents
-    combined.forEach(evt => {
-      const idStr = String(evt.id || '').toLowerCase().trim();
-      const sig = `${(evt.headliner || evt.title || evt.name || '').toLowerCase()}_${(evt.date || evt.rawDate || '').toLowerCase()}`;
-      if (idStr) seenSigs.add(`id_${idStr}`);
-      if (sig) seenSigs.add(`sig_${sig}`);
-    });
+    const registerOrMergeShow = (candidate: any) => {
+      if (!candidate || isEmbargoedShow(candidate)) return;
+      const idStr = String(candidate.id || '').toLowerCase().trim();
+      const hStr = String(candidate.headliner || candidate.title || candidate.name || '').toLowerCase().trim();
+      const dStr = String(candidate.rawDate || candidate.show_date || candidate.date || '').toLowerCase().trim();
+      const idKey = idStr ? `id_${idStr}` : '';
+      const sigKey = hStr && dStr ? `sig_${hStr}_${dStr}` : '';
 
-    // Add locally imported shows
-    localImportedShows.forEach((showItem, idx) => {
-      if (isEmbargoedShow(showItem)) return;
-      const idStr = String(showItem.id || '').toLowerCase().trim();
-      const sig = `${(showItem.headliner || showItem.title || showItem.name || '').toLowerCase()}_${(showItem.date || showItem.rawDate || '').toLowerCase()}`;
-      if (!seenSigs.has(`id_${idStr}`) && !seenSigs.has(`sig_${sig}`)) {
-        seenSigs.add(`id_${idStr}`);
-        seenSigs.add(`sig_${sig}`);
-        combined.push(showItem);
+      const existingIdx =
+        (idKey && sigToCombinedIdx.has(idKey) ? sigToCombinedIdx.get(idKey) : undefined) ??
+        (sigKey && sigToCombinedIdx.has(sigKey) ? sigToCombinedIdx.get(sigKey) : undefined);
+
+      const candFlyer = candidate.flyerUrl || candidate.flyer_url || candidate.image_url || candidate.cover_url || candidate.image || candidate.thumbnail || '';
+      const validCandFlyer =
+        candFlyer &&
+        !String(candFlyer).includes('photo-1514525253161-7a46d19cd819') &&
+        !String(candFlyer).includes('photo-1470225620780-dba8ba36b745') &&
+        !String(candFlyer).includes('photo-1516450360452-9312f5e86fc7')
+          ? String(candFlyer).trim()
+          : '';
+
+      if (existingIdx === undefined) {
+        const nextIdx = combined.length;
+        combined.push(validCandFlyer ? { ...candidate, flyerUrl: validCandFlyer, flyer_url: validCandFlyer } : candidate);
+        if (idKey) sigToCombinedIdx.set(idKey, nextIdx);
+        if (sigKey) sigToCombinedIdx.set(sigKey, nextIdx);
+      } else {
+        const target = combined[existingIdx];
+        const targetFlyer = target.flyerUrl || target.flyer_url || '';
+        const hasValidTargetFlyer =
+          targetFlyer &&
+          !String(targetFlyer).includes('photo-1514525253161-7a46d19cd819') &&
+          !String(targetFlyer).includes('photo-1470225620780-dba8ba36b745') &&
+          !String(targetFlyer).includes('photo-1516450360452-9312f5e86fc7');
+        if (!hasValidTargetFlyer && validCandFlyer) {
+          combined[existingIdx] = {
+            ...target,
+            flyerUrl: validCandFlyer,
+            flyer_url: validCandFlyer,
+          };
+        }
       }
+    };
+
+    // Index initial liveEvents
+    combined.forEach((evt, i) => {
+      const idStr = String(evt.id || '').toLowerCase().trim();
+      const hStr = String(evt.headliner || evt.title || evt.name || '').toLowerCase().trim();
+      const dStr = String(evt.rawDate || evt.show_date || evt.date || '').toLowerCase().trim();
+      if (idStr) sigToCombinedIdx.set(`id_${idStr}`, i);
+      if (hStr && dStr) sigToCombinedIdx.set(`sig_${hStr}_${dStr}`, i);
     });
 
-    // Add shows from props.shows if not already present
+    // Merge locally imported shows
+    localImportedShows.forEach((showItem) => {
+      registerOrMergeShow(showItem);
+    });
+
+    // Merge shows from props.shows
     if (shows && Array.isArray(shows)) {
       shows.forEach((s, idx) => {
-        if (isEmbargoedShow(s)) {
-          return;
-        }
+        if (isEmbargoedShow(s)) return;
         const normalized = normalizeShowToEventDirectoryItem(s, idx, userProfile, promoterProfile);
-        const idStr = String(normalized.id || '').toLowerCase().trim();
-        const sig = `${(normalized.headliner || normalized.title || normalized.name || '').toLowerCase()}_${(normalized.date || normalized.rawDate || '').toLowerCase()}`;
-        if (!seenSigs.has(`id_${idStr}`) && !seenSigs.has(`sig_${sig}`)) {
-          seenSigs.add(`id_${idStr}`);
-          seenSigs.add(`sig_${sig}`);
-          combined.push(normalized);
-        }
+        registerOrMergeShow(normalized);
       });
     }
 
+    // Merge extended localStorage show metadata
+    try {
+      const rawExt = localStorage.getItem('nexus_core_shows_extended');
+      if (rawExt) {
+        const parsedExt = JSON.parse(rawExt);
+        if (parsedExt && typeof parsedExt === 'object') {
+          Object.values(parsedExt).forEach((extShow: any, idx: number) => {
+            if (extShow && !isEmbargoedShow(extShow)) {
+              registerOrMergeShow(normalizeShowToEventDirectoryItem(extShow, idx, userProfile, promoterProfile));
+            }
+          });
+        }
+      }
+    } catch (_) {}
+
     // Add curated items not yet in list
     DEFAULT_CURATED_EVENTS.forEach(curated => {
-      if (isEmbargoedShow(curated)) return;
-      const sig = `${(curated.headliner || curated.title).toLowerCase()}_${(curated.date || '').toLowerCase()}`;
-      if (!seenSigs.has(`sig_${sig}`)) {
-        combined.push(curated);
-      }
+      registerOrMergeShow(curated);
     });
 
     // Load deleted show blacklist
@@ -853,7 +947,30 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
       }
 
       const ticketUrl = evt.ticketUrl || evt.ticket_url || evt.external_ticket_url || '';
-      const flyerUrl = evt.flyerUrl || evt.flyer_url || evt.image || evt.thumbnail || '';
+      let extraNotesObj: any = {};
+      if (typeof evt.additional_notes === 'string') {
+        try { extraNotesObj = JSON.parse(evt.additional_notes); } catch (_) {}
+      } else if (evt.additional_notes && typeof evt.additional_notes === 'object') {
+        extraNotesObj = evt.additional_notes;
+      }
+      const rawFlyer =
+        evt.flyerUrl ||
+        evt.flyer_url ||
+        extraNotesObj.flyer_url ||
+        extraNotesObj.flyerUrl ||
+        evt.image_url ||
+        evt.cover_url ||
+        evt.poster_url ||
+        evt.image ||
+        evt.thumbnail ||
+        '';
+      const flyerUrl =
+        rawFlyer &&
+        !String(rawFlyer).includes('photo-1514525253161-7a46d19cd819') &&
+        !String(rawFlyer).includes('photo-1470225620780-dba8ba36b745') &&
+        !String(rawFlyer).includes('photo-1516450360452-9312f5e86fc7')
+          ? String(rawFlyer).trim()
+          : '';
       const verified = Boolean(evt.verified || evt.is_community_submitted || evt.isFollowed || evt.isFromShowsTable || evt.source === 'shows_table');
       const isFromShowsTable = Boolean(evt.isFromShowsTable || evt.source === 'shows_table');
       const isPersonallyBooked = checkIsPersonallyBooked(evt, userProfile, promoterProfile);
@@ -1140,14 +1257,13 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
       }
 
       // 4. Date Presets & Past Event Filtering
-      const rawDate = evt.rawDate || evt.date || '';
+      const rawDate = evt.rawDate || evt.show_date || evt.date || '';
       const isPastEvent = Boolean(
         evt.isPast ||
         evt.isArchived ||
-        isPastShowDate(evt.date) ||
         isPastShowDate(rawDate) ||
         evt.id === '5c8a0bc3-aff4-491f-9693-d3ca3ed406ee' ||
-        ((evt.headliner || '').toLowerCase().includes('vader') && String(evt.date || rawDate).includes('2026-09-24'))
+        ((evt.headliner || '').toLowerCase().includes('vader') && String(rawDate).includes('2026-09-24'))
       );
 
       if (dateFilter === 'archives' || viewMode === 'community_archives') {
@@ -1310,6 +1426,11 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
         tour.startDate = tour.stops[0].date || tour.stops[0].rawDate;
         tour.endDate = tour.stops[tour.stops.length - 1].date || tour.stops[tour.stops.length - 1].rawDate;
       }
+      if (tour.flyerUrl) {
+        tour.stops = tour.stops.map(s =>
+          s.flyerUrl || s.flyer_url ? s : { ...s, flyerUrl: tour.flyerUrl, flyer_url: tour.flyerUrl }
+        );
+      }
       return tour;
     });
 
@@ -1346,8 +1467,11 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
       });
 
       if (bestStop) {
+        const resolvedBestFlyer = bestStop.flyerUrl || bestStop.flyer_url || tour.flyerUrl || '';
         combinedSingleShows.push({
           ...bestStop,
+          flyerUrl: resolvedBestFlyer,
+          flyer_url: resolvedBestFlyer,
           isTourStop: true,
           tourId: tour.id,
           tourName: tour.tourName,
@@ -1857,6 +1981,8 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                           const isTomorrow = evt.date.toLowerCase().includes('tomorrow');
                           const theme = getShowBorderTheme(evt.id || idx);
 
+                          const cardFlyerUrl = evt.flyerUrl || evt.flyer_url || '';
+
                           return (
                             <div
                               key={`single-show-${evt.id || 'show'}-${idx}`}
@@ -1871,8 +1997,24 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                   : `${theme.border} ${theme.glow} bg-[#090b10]`
                               }`}
                             >
+                              {cardFlyerUrl && (
+                                <div
+                                  className="absolute inset-0 pointer-events-none select-none z-0 overflow-hidden"
+                                  data-testid="show-card-flyer-bg"
+                                >
+                                  <img
+                                    src={cardFlyerUrl}
+                                    alt=""
+                                    aria-hidden="true"
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover object-center opacity-[0.23] group-hover:opacity-[0.28] group-hover:scale-[1.03] transition-all duration-500"
+                                  />
+                                  <div className="absolute inset-0 bg-gradient-to-t from-[#090b10]/85 via-[#090b10]/35 to-[#090b10]/55" />
+                                </div>
+                              )}
+
                               {/* Top Banner Tag & Verification Badges */}
-                              <div className="flex items-start justify-between gap-2 mb-2">
+                              <div className="relative z-10 flex items-start justify-between gap-2 mb-2">
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   {isTonight ? (
                                     <span className="bg-rose-950/80 border border-rose-500/60 text-rose-300 font-mono font-bold text-[9px] px-2 py-0.5 rounded flex items-center gap-1 animate-pulse">
@@ -1923,7 +2065,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                               </div>
 
                               {/* Headliner & Title */}
-                              <div className="space-y-1 mb-2">
+                              <div className="relative z-10 space-y-1 mb-2">
                                 <h3 className="text-sm sm:text-base font-black text-white group-hover:text-cyan-300 transition-colors font-mono tracking-tight leading-snug flex items-center flex-wrap gap-1.5">
                                   <span>{evt.headliner}</span>
                                   {evt.tour_name && !evt.headliner.toLowerCase().includes(evt.tour_name.toLowerCase()) && evt.tour_name.toLowerCase() !== 'tour show' && (
@@ -1942,7 +2084,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
 
                               {/* Support Bands Lineup Chips */}
                               {evt.support && evt.support.length > 0 && (
-                                <div className="mb-2.5">
+                                <div className="relative z-10 mb-2.5">
                                   <span className="text-[9px] font-mono text-zinc-500 uppercase font-bold block mb-1">
                                     Lineup Support:
                                   </span>
@@ -1968,7 +2110,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
 
                               {/* Quick Jump to Full Tour Itinerary if part of a tour package */}
                               {evt.isTourStop && evt.totalTourDates && evt.totalTourDates > 1 && (
-                                <div className="mb-2">
+                                <div className="relative z-10 mb-2">
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -1994,7 +2136,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                               )}
 
                               {/* Card Bottom: Doors, RSVP Pit, Google Cal & Action CTA */}
-                              <div className="pt-2 border-t border-zinc-900/80 flex items-center justify-between mt-auto flex-wrap gap-1.5">
+                              <div className="relative z-10 pt-2 border-t border-zinc-900/80 flex items-center justify-between mt-auto flex-wrap gap-1.5">
                                 <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1">
                                   <Clock className="w-3 h-3 text-zinc-600" /> {evt.time}
                                 </span>
@@ -2337,6 +2479,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                             {archiveSingleShowsList.map((evt, idx) => {
                               const isSelected = selectedMapEvent?.id === evt.id;
                               const theme = getShowBorderTheme(evt.id || `arch-${idx}`);
+                              const archFlyerUrl = evt.flyerUrl || evt.flyer_url || '';
                               return (
                                 <div
                                   key={`comm-arch-${evt.id || 'arch'}-${idx}`}
@@ -2351,8 +2494,24 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                       : `${theme.border} ${theme.glow} bg-[#0c0d12]`
                                   }`}
                                 >
+                                  {archFlyerUrl && (
+                                    <div
+                                      className="absolute inset-0 pointer-events-none select-none z-0 overflow-hidden"
+                                      data-testid="archive-card-flyer-bg"
+                                    >
+                                      <img
+                                        src={archFlyerUrl}
+                                        alt=""
+                                        aria-hidden="true"
+                                        referrerPolicy="no-referrer"
+                                        className="w-full h-full object-cover object-center opacity-[0.23] group-hover:opacity-[0.28] group-hover:scale-[1.03] transition-all duration-500"
+                                      />
+                                      <div className="absolute inset-0 bg-gradient-to-t from-[#0c0d12]/85 via-[#0c0d12]/35 to-[#0c0d12]/55" />
+                                    </div>
+                                  )}
+
                                   {/* Top Banner Tag */}
-                                  <div className="flex items-start justify-between gap-2 mb-2">
+                                  <div className="relative z-10 flex items-start justify-between gap-2 mb-2">
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       <span className="bg-amber-950/80 border border-amber-500/60 text-amber-300 font-mono font-bold text-[9px] px-2 py-0.5 rounded flex items-center gap-1">
                                         <CheckCircle2 className="w-3 h-3 text-amber-400" /> CONCLUDED • {evt.date}
@@ -2367,7 +2526,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                   </div>
 
                                   {/* Headliner & Show Title */}
-                                  <div className="space-y-1 mb-2.5">
+                                  <div className="relative z-10 space-y-1 mb-2.5">
                                     <h3 className="text-sm sm:text-base font-black text-white group-hover:text-amber-300 transition-colors font-mono tracking-tight leading-snug">
                                       {evt.headliner}
                                     </h3>
@@ -2386,14 +2545,14 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
 
                                   {/* Description / Archive notes */}
                                   {evt.description && (
-                                    <p className="text-[11px] font-mono text-zinc-400 bg-black/40 border border-zinc-900 rounded-xl p-2.5 mb-3 line-clamp-2 leading-relaxed">
+                                    <p className="relative z-10 text-[11px] font-mono text-zinc-400 bg-black/40 border border-zinc-900 rounded-xl p-2.5 mb-3 line-clamp-2 leading-relaxed">
                                       {evt.description}
                                     </p>
                                   )}
 
                                   {/* Support Bands Lineup Chips */}
                                   {evt.support && evt.support.length > 0 && (
-                                    <div className="mb-3">
+                                    <div className="relative z-10 mb-3">
                                       <span className="text-[9px] font-mono text-zinc-500 uppercase font-bold block mb-1">
                                         Bands on Bill:
                                       </span>
@@ -2414,7 +2573,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                   )}
 
                                   {/* Card Bottom: Archive Status & Actions */}
-                                  <div className="pt-2 border-t border-zinc-900 flex items-center justify-between mt-auto">
+                                  <div className="relative z-10 pt-2 border-t border-zinc-900 flex items-center justify-between mt-auto">
                                     <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1">
                                       <Clock className="w-3 h-3 text-zinc-600" /> Preserved Record
                                     </span>
@@ -2541,17 +2700,35 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                               const citiesPreview = uniqueCities.slice(0, 5).join(' • ') + (uniqueCities.length > 5 ? ` +${uniqueCities.length - 5} more` : '');
                               const isSelected = selectedMapEvent && tour.stops.some((s: any) => s.id === selectedMapEvent.id);
 
+                              const archTourFlyer = tour.flyerUrl || tour.stops.find((s: any) => s.flyerUrl || s.flyer_url)?.flyerUrl || '';
+
                               return (
                                 <div
                                   key={`arch-tour-card-${tour.id || 'tour'}-${tIdx}`}
-                                  className={`bg-[#0c0d14] border-2 rounded-2xl p-4 sm:p-5 transition-all relative overflow-hidden ${
+                                  className={`group bg-[#0c0d14] border-2 rounded-2xl p-4 sm:p-5 transition-all relative overflow-hidden ${
                                     isSelected
                                       ? 'border-amber-400 shadow-[0_0_30px_rgba(245,158,11,0.35)]'
                                       : 'border-amber-900/50 hover:border-amber-500/60 shadow-lg'
                                   }`}
                                 >
+                                  {archTourFlyer && (
+                                    <div
+                                      className="absolute inset-0 pointer-events-none select-none z-0 overflow-hidden"
+                                      data-testid="archive-tour-card-flyer-bg"
+                                    >
+                                      <img
+                                        src={archTourFlyer}
+                                        alt=""
+                                        aria-hidden="true"
+                                        referrerPolicy="no-referrer"
+                                        className="w-full h-full object-cover object-center opacity-[0.23] group-hover:opacity-[0.28] group-hover:scale-[1.03] transition-all duration-500"
+                                      />
+                                      <div className="absolute inset-0 bg-gradient-to-t from-[#0c0d14]/85 via-[#0c0d14]/35 to-[#0c0d14]/55" />
+                                    </div>
+                                  )}
+
                                   {/* Top Banner Badges */}
-                                  <div className="flex items-start justify-between gap-2 mb-3">
+                                  <div className="relative z-10 flex items-start justify-between gap-2 mb-3">
                                     <div className="flex items-center gap-2 flex-wrap">
                                       <span className="bg-gradient-to-r from-amber-950 to-yellow-950 border border-amber-500/60 text-amber-300 font-mono font-bold text-[9.5px] px-2.5 py-0.5 rounded flex items-center gap-1.5 shadow-sm">
                                         <History className="w-3 h-3 text-amber-400" /> CONCLUDED TOUR
@@ -2581,7 +2758,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                   </div>
 
                                   {/* Tour Package Title & Headliner */}
-                                  <div className="space-y-1 mb-2">
+                                  <div className="relative z-10 space-y-1 mb-2">
                                     <h3 className="text-base sm:text-lg font-black text-white font-mono tracking-tight">
                                       {tour.tourName}
                                     </h3>
@@ -2593,14 +2770,14 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                   </div>
 
                                   {/* Cities Visited Summary */}
-                                  <div className="flex items-center gap-1.5 text-zinc-400 text-xs font-mono mb-3">
+                                  <div className="relative z-10 flex items-center gap-1.5 text-zinc-400 text-xs font-mono mb-3">
                                     <MapPin className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                                     <span className="truncate">{citiesPreview}</span>
                                   </div>
 
                                   {/* Lineup Chips */}
                                   {tour.supportBands.length > 0 && (
-                                    <div className="mb-3">
+                                    <div className="relative z-10 mb-3">
                                       <span className="text-[9.5px] font-mono text-zinc-500 uppercase font-bold block mb-1">
                                         Touring Support:
                                       </span>
@@ -2624,7 +2801,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                         initial={{ opacity: 0, height: 0 }}
                                         animate={{ opacity: 1, height: 'auto' }}
                                         exit={{ opacity: 0, height: 0 }}
-                                        className="pt-3 border-t border-zinc-800/80 space-y-2 mt-3"
+                                        className="relative z-10 pt-3 border-t border-zinc-800/80 space-y-2 mt-3"
                                       >
                                         <div className="flex items-center justify-between text-[10px] font-mono text-amber-400 uppercase font-bold px-1">
                                           <span>Complete Concluded Itinerary ({tour.stops.length} Dates)</span>
@@ -2653,7 +2830,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                                     #{sIdx + 1}
                                                   </span>
                                                   <span className="text-amber-300 font-bold text-xs shrink-0">
-                                                    {stop.date}
+                                                    {formatShowDate(stop.date)}
                                                   </span>
                                                   <span className="text-white text-xs truncate">
                                                     {stop.city}
@@ -2898,17 +3075,35 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                           const citiesPreview = uniqueCities.slice(0, 5).join(' • ') + (uniqueCities.length > 5 ? ` +${uniqueCities.length - 5} more` : '');
                           const isSelected = selectedMapEvent && tour.stops.some((s: any) => s.id === selectedMapEvent.id);
 
+                          const tourCardFlyerUrl = tour.flyerUrl || tour.stops.find((s: any) => s.flyerUrl || s.flyer_url)?.flyerUrl || '';
+
                           return (
                             <div
                               key={`tour-card-${tour.id || 'tour'}-${tIdx}`}
-                              className={`bg-[#0c0d14] border-2 rounded-2xl p-4 sm:p-5 transition-all relative overflow-hidden ${
+                              className={`group bg-[#0c0d14] border-2 rounded-2xl p-4 sm:p-5 transition-all relative overflow-hidden ${
                                 isSelected
                                   ? 'border-purple-400 shadow-[0_0_30px_rgba(168,85,247,0.35)]'
                                   : 'border-purple-900/50 hover:border-purple-500/60 shadow-lg'
                               }`}
                             >
+                              {tourCardFlyerUrl && (
+                                <div
+                                  className="absolute inset-0 pointer-events-none select-none z-0 overflow-hidden"
+                                  data-testid="tour-card-flyer-bg"
+                                >
+                                  <img
+                                    src={tourCardFlyerUrl}
+                                    alt=""
+                                    aria-hidden="true"
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover object-center opacity-[0.23] group-hover:opacity-[0.28] group-hover:scale-[1.03] transition-all duration-500"
+                                  />
+                                  <div className="absolute inset-0 bg-gradient-to-t from-[#0c0d14]/85 via-[#0c0d14]/35 to-[#0c0d14]/55" />
+                                </div>
+                              )}
+
                               {/* Top Banner Badges */}
-                              <div className="flex items-start justify-between gap-2 mb-3">
+                              <div className="relative z-10 flex items-start justify-between gap-2 mb-3">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="bg-gradient-to-r from-purple-950 to-indigo-950 border border-purple-500/60 text-purple-300 font-mono font-bold text-[9.5px] px-2.5 py-0.5 rounded flex items-center gap-1.5 shadow-sm">
                                     <Radio className="w-3 h-3 text-purple-400 animate-pulse" /> MULTI-CITY TOUR
@@ -2945,7 +3140,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                               </div>
 
                               {/* Tour Title & Headliner Info */}
-                              <div className="space-y-1.5 mb-3">
+                              <div className="relative z-10 space-y-1.5 mb-3">
                                 <h3 className="text-base sm:text-lg font-black text-white font-mono tracking-tight leading-snug flex items-center gap-2 flex-wrap">
                                   <span>{tour.tourName}</span>
                                 </h3>
@@ -2964,7 +3159,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
 
                               {/* Tour Package Lineup Chips */}
                               {tour.supportBands && tour.supportBands.length > 0 && (
-                                <div className="mb-3">
+                                <div className="relative z-10 mb-3">
                                   <span className="text-[9px] font-mono text-zinc-500 uppercase font-bold block mb-1">
                                     Tour Package Lineup:
                                   </span>
@@ -2992,7 +3187,7 @@ export const EventsDirectoryModal: React.FC<EventsDirectoryModalProps> = ({
                                     animate={{ opacity: 1, height: 'auto' }}
                                     exit={{ opacity: 0, height: 0 }}
                                     transition={{ duration: 0.2 }}
-                                    className="overflow-hidden mt-3 pt-3 border-t border-purple-900/40"
+                                    className="relative z-10 overflow-hidden mt-3 pt-3 border-t border-purple-900/40"
                                   >
                                     <div className="flex items-center justify-between mb-2.5">
                                       <span className="text-[10px] font-mono font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">

@@ -1,18 +1,86 @@
 // Profile utilities and predefined registry for Nexus network profiles
 
+export const LEGACY_ADMIN_EMAILS = new Set([
+  'admin@example.com',
+  'admin@nexus.com',
+  'admin@nexuscore.fm',
+  'session_sync_worker@nexus.live',
+]);
+
+export const LEGACY_ADMIN_IDS = new Set([
+  'profile_admin',
+  'admin',
+  'admin_profile',
+  'default_admin',
+  'guest',
+]);
+
+export const LEGACY_ADMIN_NAMES = new Set([
+  'admin profile',
+  'administrator',
+  'authorized administrator',
+  'default admin',
+  'system admin',
+]);
+
+/**
+ * Detects legacy early-development administrator/worker/dummy identities so they are never
+ * auto-restored or defaulted to on fresh APK installs or session hydration.
+ */
+export const isLegacyAdminOrDummyProfile = (p?: any): boolean => {
+  if (!p || typeof p !== 'object') return true;
+
+  const rawId = String(p.id || p.user_id || '').trim().toLowerCase();
+  if (rawId && LEGACY_ADMIN_IDS.has(rawId)) {
+    return true;
+  }
+
+  const rawEmail = String(p.email || '').trim().toLowerCase();
+  if (rawEmail) {
+    if (LEGACY_ADMIN_EMAILS.has(rawEmail) || /^worker_\d+@nexus\.live$/i.test(rawEmail)) {
+      return true;
+    }
+  }
+
+  const rawName = String(p.full_name || p.name || p.legal_name || '').trim().toLowerCase();
+  if (rawName && LEGACY_ADMIN_NAMES.has(rawName)) {
+    return true;
+  }
+
+  // Reject empty shell objects that lack any real user identifier
+  if (!rawId && !rawEmail && !p.console_handle && !p.handle && !rawName) {
+    return true;
+  }
+
+  return false;
+};
+
 export const isMiguelNameOrProfile = (p?: any): boolean => {
   if (!p) return false;
   if (typeof p === 'string') {
     const s = p.toLowerCase().trim();
-    if (s === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' || s === 'goregrindsickness@gmail.com' || s === 'admin@nexus.com') {
+    if (s === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' || s === 'goregrindsickness@gmail.com') {
       return true;
     }
-    return s === 'miguel goregrinder medina' || s === 'miguel medina';
+    const clean = s.replace(/["'@]/g, '').trim();
+    return (
+      clean === 'miguel goregrinder medina' ||
+      clean === 'miguel medina' ||
+      clean === 'goregrinder' ||
+      clean === 'goregrindsickness' ||
+      clean === 'bdmceo' ||
+      clean.includes('goregrinder') ||
+      clean.includes('miguel medina')
+    );
+  }
+
+  if (isLegacyAdminOrDummyProfile(p)) {
+    return false;
   }
 
   // If a profile has an email, and it is NOT Miguel's email, they are NEVER Miguel
   const email = String(p?.email || p?.booking_email || '').toLowerCase().trim();
-  if (email && email !== 'goregrindsickness@gmail.com' && email !== 'admin@nexus.com') {
+  if (email && email !== 'goregrindsickness@gmail.com') {
     return false;
   }
 
@@ -23,15 +91,22 @@ export const isMiguelNameOrProfile = (p?: any): boolean => {
     return false;
   }
 
-  if (email === 'goregrindsickness@gmail.com' || email === 'admin@nexus.com') {
+  if (email === 'goregrindsickness@gmail.com') {
     return true;
   }
   if (pid === '5403162d-1947-43aa-b5f6-38a1bd2a1b80') {
     return true;
   }
 
-  const rawName = String(p?.full_name || p?.legal_name || p?.legalName || p?.name || '').toLowerCase().trim();
-  if (rawName === 'miguel goregrinder medina' || rawName === 'miguel medina') {
+  const rawName = String(p?.full_name || p?.legal_name || p?.legalName || p?.name || '').toLowerCase().replace(/["'@]/g, '').trim();
+  if (
+    rawName === 'miguel goregrinder medina' ||
+    rawName === 'miguel medina' ||
+    rawName === 'goregrinder' ||
+    rawName === 'goregrindsickness' ||
+    rawName.includes('goregrinder') ||
+    rawName.includes('miguel medina')
+  ) {
     return true;
   }
 

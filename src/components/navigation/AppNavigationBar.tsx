@@ -94,13 +94,12 @@ export function AppNavigationBar({
   return (
     <React.Fragment>
         {/* RECTANGULAR BOTTOM ACTION BAR (STAND IN NAV DECORATION BAR) */}
-        <div className="fixed bottom-0 w-full sm:max-w-[620px] bg-[#0c0e12]/98 border-t border-[#1b1e25] px-4 py-3 grid grid-cols-3 items-center z-10 shadow-[0_-15px_30px_rgba(0,0,0,0.5)]">
+        <div className="fixed bottom-0 w-full sm:max-w-[620px] bg-[#0c0e12]/98 border-t border-[#1b1e25] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] grid grid-cols-3 items-center z-10 shadow-[0_-15px_30px_rgba(0,0,0,0.5)]">
           <div className="flex justify-start">
             <button
               onClick={() => {
                 setActiveTab('home-v2');
                 setDashboardV2ActiveNav('EVENTS');
-                triggerNotification('Returning to Nexus Home');
               }}
               className={`flex flex-col items-center justify-center gap-1.5 py-2 w-[90px] rounded-xl border transition-all duration-200 hover:scale-105 active:scale-95 ${
                 activeTab === 'home-v2' 
@@ -128,7 +127,6 @@ export function AppNavigationBar({
               onClick={() => {
                 setIsPttOpen(true);
                 playPttSound('static');
-                triggerNotification('PTT Walkie Channel open.');
               }}
               className={`flex flex-col items-center justify-center gap-1.5 py-2 w-[90px] rounded-xl border transition-all duration-200 hover:scale-105 active:scale-95 ${
                 isPttOpen 
@@ -274,7 +272,6 @@ export function AppNavigationBar({
                                 setActiveTab(item.tab as any);
                               }
                               setIsNavMenuOpen(false);
-                              triggerNotification(`Navigating to ${item.label}...`);
                             }}
                             className={`w-full flex items-center gap-3 px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
                               isActive 
@@ -311,7 +308,6 @@ export function AppNavigationBar({
                         setActiveTab('home-v2');
                         setDashboardV2ActiveNav('EVENTS');
                         setIsNavMenuOpen(false);
-                        triggerNotification('⚡ Switched to Band & Artist Operator Console.');
                         addLog('Switched user active session to Band console mode.');
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
@@ -357,7 +353,6 @@ export function AppNavigationBar({
                         window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
                         setActiveTab('creative');
                         setIsNavMenuOpen(false);
-                        triggerNotification?.('⚡ Switched to Creative & Crew Showcase Portfolio.');
                         addLog?.('Switched user active session to Creative Showcase mode.');
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
@@ -386,7 +381,6 @@ export function AppNavigationBar({
                         setUserProfile(updated as any);
                         localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
                         setIsNavMenuOpen(false);
-                        triggerNotification?.("⚡ Switched to Venue Promoter Integrated Gateway.");
                         addLog?.("Switched user active session to Promoter gateway mode.");
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
@@ -415,7 +409,6 @@ export function AppNavigationBar({
                         setUserProfile(updated as any);
                         localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
                         setIsNavMenuOpen(false);
-                        triggerNotification?.("⚡ Switched to Record Label HQ Terminal.");
                         addLog?.("Switched user active session to Label administration mode.");
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
@@ -445,7 +438,6 @@ export function AppNavigationBar({
                         localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
                         setActiveTab('social');
                         setIsNavMenuOpen(false);
-                        triggerNotification?.("⚡ Switched to Industry Pro.");
                         addLog?.("Switched user active session to Industry Pro mode.");
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left ${
@@ -488,16 +480,16 @@ export function AppNavigationBar({
                         else if (isBandAcc) setActiveTab('home-v2');
                         else setActiveTab('social');
                         setIsNavMenuOpen(false);
-                        triggerNotification?.("⚡ Opening your public profile...");
                         
                         // Give React a moment to render the view if it isn't already
                         setTimeout(() => {
+                          const isOwnerMiguel = isMiguelNameOrProfile(updated);
                           window.dispatchEvent(new CustomEvent('openPublicProfile', {
                             detail: isCreativeAcc ? {
                               id: updated?.id || null,
-                              name: (updated as any)?.creative_metadata?.business_name || (updated as any)?.creative_name || updated?.name || 'Vortex Graphics',
+                              name: (updated as any)?.creative_metadata?.business_name || (updated as any)?.creative_name || updated?.name || (isOwnerMiguel ? 'Vortex Graphics' : 'Creative Studio'),
                               creative_name: (updated as any)?.creative_name || updated?.name,
-                              business_name: (updated as any)?.creative_metadata?.business_name || (updated as any)?.creative_name || updated?.name || 'Vortex Graphics',
+                              business_name: (updated as any)?.creative_metadata?.business_name || (updated as any)?.creative_name || updated?.name || (isOwnerMiguel ? 'Vortex Graphics' : 'Creative Studio'),
                               legalName: updated?.full_name || updated?.name,
                               avatar: (updated as any)?.creative_avatar || updated?.avatar_url || null,
                               avatar_url: (updated as any)?.creative_avatar || updated?.avatar_url || null,
@@ -514,26 +506,26 @@ export function AppNavigationBar({
                               badges: ['🛠️ Creative Pro', '🎨 Designer'],
                               customBadges: ['🛠️ Creative Pro', '🎨 Designer'],
                               bio: updated?.bio || (updated as any)?.creative_metadata?.bio || 'Professional creative specialist on the Nexus network.',
-                              handle: (updated as any)?.creative_handle || updated?.console_handle || 'vortexgraphics',
-                              console_handle: (updated as any)?.creative_handle || updated?.console_handle || 'vortexgraphics',
+                              handle: (updated as any)?.creative_handle || updated?.console_handle || (isOwnerMiguel ? 'vortexgraphics' : 'creative'),
+                              console_handle: (updated as any)?.creative_handle || updated?.console_handle || (isOwnerMiguel ? 'vortexgraphics' : 'creative'),
                               creative_metadata: (updated as any)?.creative_metadata || {}
                             } : isPromoterAcc ? {
-                              id: (updated as any)?.promoter_id || updated?.id || 'promoter:nexuslive',
-                              name: (updated as any)?.promoter_metadata?.brand_name || (updated as any)?.promoter_metadata?.agency_name || (updated as any)?.promoter_agency || 'Nexus Live Productions',
-                              legalName: (updated as any)?.promoter_metadata?.brand_name || (updated as any)?.promoter_agency || 'Nexus Live Productions',
-                              handle: '@NexusLive',
-                              console_handle: '@NexusLive',
-                              username: '@NexusLive',
-                              avatar: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
-                              avatar_url: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
-                              logo: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
-                              logo_url: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
-                              promoter_logo: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
-                              banner: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635',
-                              banner_url: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635',
-                              cover: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635',
-                              cover_url: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635',
-                              promoter_cover_image: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635',
+                              id: (updated as any)?.promoter_id || updated?.id || (isOwnerMiguel ? 'promoter:nexuslive' : 'promoter:user'),
+                              name: (updated as any)?.promoter_metadata?.brand_name || (updated as any)?.promoter_metadata?.agency_name || (updated as any)?.promoter_agency || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations'),
+                              legalName: (updated as any)?.promoter_metadata?.brand_name || (updated as any)?.promoter_agency || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations'),
+                              handle: isOwnerMiguel ? '@NexusLive' : `@${updated?.console_handle || 'promoter'}`,
+                              console_handle: isOwnerMiguel ? '@NexusLive' : `@${updated?.console_handle || 'promoter'}`,
+                              username: isOwnerMiguel ? '@NexusLive' : `@${updated?.console_handle || 'promoter'}`,
+                              avatar: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : updated?.avatar_url || null),
+                              avatar_url: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : updated?.avatar_url || null),
+                              logo: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : updated?.avatar_url || null),
+                              logo_url: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : updated?.avatar_url || null),
+                              promoter_logo: (updated as any)?.promoter_logo || (updated as any)?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : updated?.avatar_url || null),
+                              banner: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : updated?.banner_url || null),
+                              banner_url: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : updated?.banner_url || null),
+                              cover: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : updated?.banner_url || null),
+                              cover_url: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : updated?.banner_url || null),
+                              promoter_cover_image: (updated as any)?.promoter_cover_image || (updated as any)?.promoter_metadata?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null) || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : updated?.banner_url || null),
                               location: updated?.city ? `${updated.city}, ${(updated as any)?.state || 'TX'}` : 'Denison, TX',
                               role: 'Event Promoter',
                               type: 'promoter',
@@ -542,9 +534,9 @@ export function AppNavigationBar({
                               isPersonal: false,
                               isBandProfile: false,
                               isYou: true,
-                              badges: ['🎪 Event Promoter', '⚡ Nexus Live'],
-                              customBadges: ['🎪 Event Promoter', '⚡ Nexus Live'],
-                              bio: (updated as any)?.promoter_metadata?.bio || (updated as any)?.promoter_bio || 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.',
+                              badges: isOwnerMiguel ? ['🎪 Event Promoter', '⚡ Nexus Live'] : ['🎪 Event Promoter'],
+                              customBadges: isOwnerMiguel ? ['🎪 Event Promoter', '⚡ Nexus Live'] : ['🎪 Event Promoter'],
+                              bio: (updated as any)?.promoter_metadata?.bio || (updated as any)?.promoter_bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.'),
                               promoter_metadata: (updated as any)?.promoter_metadata || {}
                             } : (() => {
                               const isOwnerMiguel = isMiguelNameOrProfile(updated);
@@ -593,7 +585,6 @@ export function AppNavigationBar({
                         setIsLoggedOut(true);
                         setShowSplash(false);
                         setIsNavMenuOpen(false);
-                        triggerNotification?.("Opening Create Account page...");
                       }}
                       className="w-full flex items-center gap-3 px-3 py-2 rounded font-medium text-xs font-mono tracking-wide transition-all duration-150 cursor-pointer text-left text-zinc-400 hover:text-emerald-300 hover:bg-emerald-950/15"
                     >
@@ -675,7 +666,6 @@ export function AppNavigationBar({
                     onClick={() => {
                       setActiveTab('distro-deck');
                       setIsNavMenuOpen(false);
-                      triggerNotification?.("Opening Our Feed & Music Alliances...");
                     }}
                     className="w-full text-left py-2 px-3 text-zinc-500 hover:text-zinc-300 font-mono text-[8.5px] uppercase tracking-wider flex items-center justify-between transition-colors group border-b border-transparent hover:border-[#39ff14]"
                   >
@@ -699,7 +689,6 @@ export function AppNavigationBar({
                     onClick={() => {
                       localStorage.removeItem('nexus_core_user_profile'); setUserProfile(null); window.location.reload();
                       setIsNavMenuOpen(false);
-                      triggerNotification?.("Session terminated. Signed out successfully.");
                     }}
                     className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-red-950/20 hover:bg-red-950/40 border border-red-900/40 hover:border-red-500/50 text-red-300 hover:text-red-200 rounded font-mono font-black text-xs uppercase tracking-wider transition-all duration-300 cursor-pointer shadow-md active:scale-[0.98]"
                     title="Terminate active session and lock console"

@@ -98,18 +98,15 @@ export const CreateDIYEventModal: React.FC<CreateDIYEventModalProps> = ({
         triggerNotification?.('⚠️ Flyer photo exceeds 10MB limit.');
         return;
       }
-      triggerNotification?.('⏳ Processing event flyer...');
       const reader = new FileReader();
       reader.onload = async () => {
         try {
           const base64 = reader.result as string;
           const compressed = await compressImageInSocialFeed(base64, 1024, 1024, 0.8);
           setEventFlyerUrl(compressed);
-          triggerNotification?.('✅ Event flyer uploaded from device!');
         } catch (err) {
           console.error('Flyer compression error:', err);
           setEventFlyerUrl(reader.result as string);
-          triggerNotification?.('✅ Event flyer uploaded!');
         }
       };
       reader.readAsDataURL(file);
@@ -125,7 +122,6 @@ export const CreateDIYEventModal: React.FC<CreateDIYEventModalProps> = ({
       return;
     }
     if (onSaveEvent) onSaveEvent();
-    triggerNotification?.('🎉 DIY Event attached to your post!');
     onClose();
   };
 
@@ -179,34 +175,22 @@ export const CreateDIYEventModal: React.FC<CreateDIYEventModalProps> = ({
                 </div>
               )}
 
-              {/* Event Type Grid */}
+              {/* Event Category Dropdown */}
               <div>
-                <label className="block text-[10px] font-black uppercase text-amber-300 tracking-wide mb-1.5">
+                <label className="block text-[10px] font-black uppercase text-amber-300 tracking-wide mb-1">
                   Event Category
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {EVENT_CATEGORIES.map((cat, catIdx) => {
-                    const isSelected = eventType === cat.id;
-                    return (
-                      <button
-                        key={`diy-cat-${cat.id}-${catIdx}`}
-                        type="button"
-                        onClick={() => setEventType(cat.id)}
-                        className={`flex flex-col items-start p-2 rounded-xl border text-left transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-amber-950/60 border-amber-500 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)]'
-                            : 'bg-zinc-950/80 border-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          <span>{cat.icon}</span>
-                          <span className="text-[10px] font-black uppercase tracking-wide truncate">{cat.label}</span>
-                        </div>
-                        <span className="text-[8px] text-zinc-500 leading-tight">{cat.desc}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <select
+                  value={eventType}
+                  onChange={(e) => setEventType(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-zinc-100 font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
+                >
+                  {EVENT_CATEGORIES.map((cat) => (
+                    <option key={`cat-opt-${cat.id}`} value={cat.id}>
+                      {cat.icon} {cat.label} — {cat.desc}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Event Title */}
@@ -353,7 +337,7 @@ export const CreateDIYEventModal: React.FC<CreateDIYEventModalProps> = ({
                   type="file"
                   ref={flyerFileInputRef}
                   accept="image/*"
-                  className="hidden"
+                  className="sr-only"
                   onChange={handleFlyerFileChange}
                 />
 

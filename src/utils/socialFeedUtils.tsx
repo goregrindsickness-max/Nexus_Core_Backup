@@ -1,5 +1,6 @@
 import React from 'react';
 import { getSupabase } from '../supabase';
+import { authFetch, getSupabaseAccessToken } from './apiConfig';
 
 export const formatPostTimestamp = (
   timestampOrPost?: any,
@@ -602,7 +603,9 @@ export async function resolveBandcampMetadata(url: string): Promise<BandcampReso
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 3500);
         try {
-          const res = await fetch('/api/bandcamp/resolve', {
+          const token = await getSupabaseAccessToken();
+          if (!token) throw new Error('No session token');
+          const res = await authFetch('/api/bandcamp/resolve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: cleanUrl }),
@@ -857,6 +860,31 @@ export const isPastShowDate = (dateVal?: string): boolean => {
   }
 
   return false;
+};
+
+export const formatShowDate = (dateStr?: string): string => {
+  if (!dateStr) return '';
+  const trimmed = String(dateStr).trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'tonight' || lower === 'tomorrow') {
+    return trimmed;
+  }
+  try {
+    if (trimmed.includes(',') && /[A-Za-z]{3},\s+[A-Za-z]{3}\s+\d+/.test(trimmed)) {
+      return trimmed;
+    }
+    const d = new Date(trimmed.includes('T') ? trimmed : `${trimmed}T00:00:00`);
+    if (isNaN(d.getTime())) return trimmed;
+    const isDifferentYear = d.getFullYear() !== new Date().getFullYear();
+    return d.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      ...(isDifferentYear ? { year: 'numeric' } : {})
+    });
+  } catch {
+    return trimmed;
+  }
 };
 
 

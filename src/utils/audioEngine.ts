@@ -595,6 +595,39 @@ class UniversalAudioPlayer {
     }
   }
 
+  private notifyNativeBridge(action: 'start' | 'update' | 'pause' | 'stop'): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const nativeBridge = (window as any).NexusNativeAudio;
+      if (!nativeBridge) return;
+      const title = this.activeTrack?.title || 'Nexus Audio';
+      const artist = this.activeTrack?.artist || 'Nexus Artist';
+      const album = this.activeTrack?.album || 'Scene Radio';
+
+      if (action === 'start') {
+        if (typeof nativeBridge.setAudioActive === 'function') nativeBridge.setAudioActive(true);
+        if (typeof nativeBridge.startForegroundAudio === 'function') {
+          nativeBridge.startForegroundAudio(title, artist, album);
+        }
+      } else if (action === 'update') {
+        if (typeof nativeBridge.setAudioActive === 'function') nativeBridge.setAudioActive(true);
+        if (typeof nativeBridge.updateMetadata === 'function') {
+          nativeBridge.updateMetadata(title, artist);
+        }
+      } else if (action === 'pause') {
+        if (typeof nativeBridge.setAudioActive === 'function') nativeBridge.setAudioActive(false);
+        if (typeof nativeBridge.pauseForegroundAudio === 'function') {
+          nativeBridge.pauseForegroundAudio();
+        }
+      } else if (action === 'stop') {
+        if (typeof nativeBridge.setAudioActive === 'function') nativeBridge.setAudioActive(false);
+        if (typeof nativeBridge.stopForegroundAudio === 'function') {
+          nativeBridge.stopForegroundAudio();
+        }
+      }
+    } catch (_) {}
+  }
+
   public play(track: PlayableTrackInfo, callbacks?: PlayerCallbacks): void {
     this.stop();
     this.activeTrack = track;
@@ -611,6 +644,7 @@ class UniversalAudioPlayer {
     // If no valid audio file is linked, or if stream is not direct URL, engage seamless procedural synthesis
     if (!cleanUrl || (!isBlobOrData && !isHttp)) {
       this.startProceduralSynth(track);
+      this.notifyNativeBridge('start');
       return;
     }
 
@@ -634,6 +668,7 @@ class UniversalAudioPlayer {
               this.isPlaying = true;
               this.isSynthesizing = false;
               this.callbacks.onStateChange?.(true);
+              this.notifyNativeBridge('start');
               if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
                 try {
                   navigator.mediaSession.metadata = new MediaMetadata({
@@ -649,14 +684,17 @@ class UniversalAudioPlayer {
             .catch((err) => {
               console.warn('[UniversalAudioPlayer] play() rejected (falling back to procedural synth):', err);
               this.startProceduralSynth(track);
+              this.notifyNativeBridge('start');
             });
         }
       } else {
         this.startProceduralSynth(track);
+        this.notifyNativeBridge('start');
       }
     } catch (e: any) {
       console.warn('[UniversalAudioPlayer] Error starting audio element (falling back to synth):', e);
       this.startProceduralSynth(track);
+      this.notifyNativeBridge('start');
     }
   }
 
@@ -669,6 +707,7 @@ class UniversalAudioPlayer {
     }
     this.stopProceduralSynth();
     this.callbacks.onStateChange?.(false);
+    this.notifyNativeBridge('pause');
     if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
       try {
         navigator.mediaSession.playbackState = 'paused';
@@ -693,9 +732,11 @@ class UniversalAudioPlayer {
       this.audioElement.play().then(() => {
         this.isPlaying = true;
         this.callbacks.onStateChange?.(true);
+        this.notifyNativeBridge('start');
       }).catch((err) => {
         console.warn('[UniversalAudioPlayer] Resume fallback to synth:', err);
         this.startProceduralSynth(this.activeTrack!);
+        this.notifyNativeBridge('start');
       });
     } else {
       this.play(this.activeTrack, this.callbacks);
@@ -713,6 +754,7 @@ class UniversalAudioPlayer {
     this.stopProceduralSynth();
     this.currentSeconds = 0;
     this.callbacks.onStateChange?.(false);
+    this.notifyNativeBridge('stop');
   }
 
   public setVolume(vol: number): void {

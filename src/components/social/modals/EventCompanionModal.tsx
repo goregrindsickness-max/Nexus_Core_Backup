@@ -181,16 +181,6 @@ export const EventCompanionModal: React.FC<EventCompanionModalProps> = ({
       return updated;
     });
 
-    if (triggerNotification) {
-      if (newStatus === 'going') {
-        triggerNotification('RSVP Confirmed', `You are marked as GOING to ${activeEventData.headliner}!`, '🔥');
-      } else if (newStatus === 'maybe') {
-        triggerNotification('RSVP Updated', `Marked as MAYBE for ${activeEventData.headliner}.`, '🤔');
-      } else if (newStatus === 'cant_make') {
-        triggerNotification('RSVP Updated', `Marked as CAN'T MAKE IT for this show.`, '❌');
-      }
-    }
-
     // Persist to Supabase if table exists
     const supabaseClient = getSupabase ? getSupabase() : null;
     if (supabaseClient && userProfile?.id) {
@@ -398,10 +388,10 @@ export const EventCompanionModal: React.FC<EventCompanionModalProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[150] flex flex-col zoom-in-95 duration-300"
+          className="fixed inset-0 h-[100dvh] bg-black/95 backdrop-blur-xl z-[150] flex flex-col pb-[env(safe-area-inset-bottom)] zoom-in-95 duration-300"
         >
           {/* Header */}
-          <div className="px-4 py-3.5 border-b border-zinc-900 bg-black/80 flex items-center justify-between sticky top-0 z-10 backdrop-blur-md">
+          <div className="px-4 py-3.5 pt-[max(0.875rem,env(safe-area-inset-top))] border-b border-zinc-900 bg-black/80 flex items-center justify-between sticky top-0 z-10 backdrop-blur-md">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-full bg-rose-500/20 flex items-center justify-center border border-rose-500/50 shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
@@ -736,7 +726,6 @@ export const EventCompanionModal: React.FC<EventCompanionModalProps> = ({
                     navigator.clipboard.writeText(fullText);
                     setCopiedAddress(true);
                     setTimeout(() => setCopiedAddress(false), 2000);
-                    triggerNotification?.('📋 Address Copied', 'Venue location copied to clipboard');
                   };
 
                   return (

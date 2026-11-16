@@ -14,6 +14,7 @@ import StripeConnectPayoutSection from '../../StripeConnectPayoutSection';
 import { getSupabase, uploadBase64ToStorage, sanitizeCreativePayload, formatCreativePayload, extractGlobalProfilePayload, executeWithSchemaResilience, autoSyncCreativeProfile } from '../../../supabase';
 import { COUNTRIES, US_STATES } from '../../../constants/location';
 import { CREATIVE_CORE_SKILLS, GENRE_CLUSTERS } from '../../auth/authConstants';
+import { authFetch } from '../../../utils/apiConfig';
 
 // Helper to compress uploaded images to avoid LocalStorage quota overflow
 function compressImage(base64Str: string, maxWidth = 800, maxHeight = 800, quality = 0.7): Promise<string> {
@@ -836,7 +837,15 @@ export default function CreativeSettingsTab({
                               setUserProfile((prev: any) => ({ ...prev, creative_avatar: '' }));
                               const supabase = getSupabase();
                               if (supabase && userProfile?.id) {
-                                await supabase.from('profiles').update({ creative_avatar: null }).eq('id', userProfile.id);
+                                try {
+                                  await supabase.from('profiles').update({
+                                    creative_metadata: {
+                                      ...(userProfile.creative_metadata || {}),
+                                      creative_avatar: null,
+                                      avatar_url: null
+                                    }
+                                  }).eq('id', userProfile.id);
+                                } catch (_) {}
                                 const creativeIdToUse = (userProfile as any).creative_id || userProfile.id;
                                 await supabase.from('creatives').update({ avatar_url: null }).eq('id', creativeIdToUse);
                               }
@@ -866,7 +875,7 @@ export default function CreativeSettingsTab({
                       id="creative-avatar-uploader-acc"
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={handleLocalImageUpload} 
                     />
                   </div>
@@ -891,7 +900,15 @@ export default function CreativeSettingsTab({
                               setUserProfile((prev: any) => ({ ...prev, creative_banner: '' }));
                               const supabase = getSupabase();
                               if (supabase && userProfile?.id) {
-                                await supabase.from('profiles').update({ creative_banner: null }).eq('id', userProfile.id);
+                                try {
+                                  await supabase.from('profiles').update({
+                                    creative_metadata: {
+                                      ...(userProfile.creative_metadata || {}),
+                                      creative_banner: null,
+                                      banner_url: null
+                                    }
+                                  }).eq('id', userProfile.id);
+                                } catch (_) {}
                                 const creativeIdToUse = (userProfile as any).creative_id || userProfile.id;
                                 await supabase.from('creatives').update({ banner_url: null, cover_url: null }).eq('id', creativeIdToUse);
                               }
@@ -924,7 +941,7 @@ export default function CreativeSettingsTab({
                       id="creative-cover-uploader-acc"
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={handleLocalCoverImageUpload} 
                     />
                   </div>
@@ -1459,7 +1476,7 @@ export default function CreativeSettingsTab({
                         onClick={async () => {
                           setIsConnectingPaypal(true);
                           try {
-                            const response = await fetch('/api/auth/paypal/url');
+                            const response = await authFetch('/api/auth/paypal/url');
                             if (!response.ok) throw new Error('Failed to fetch PayPal auth URL');
                             const { url } = await response.json();
                             const width = 600, height = 700;

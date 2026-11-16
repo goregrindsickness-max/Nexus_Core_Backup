@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ErrorBoundary } from '../../ErrorBoundary';
 import ReleasesCatalogTab from './ReleasesCatalogTab';
 import MarqueeText from '../../MarqueeText';
+import { FOLLOW_EVENT_NAME } from '../../../utils/followSyncService';
 import CashDrawerView from '../Band/CashDrawerView';
 import PublicStorefrontView from '../../sales/PublicStorefrontView';
 import {
@@ -1593,6 +1594,28 @@ export default function LabelDashboardViewV2({
     profileStore.setItem('label_followed_bands', followedBandIds).catch((e) => console.error(e));
   }, [followedBandIds]);
 
+  useEffect(() => {
+    const handleGlobalFollowUpdate = () => {
+      try {
+        const saved = localStorage.getItem('label_followed_bands');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            setFollowedBandIds(Array.from(new Set(parsed)));
+          }
+        }
+      } catch (_) {}
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+      window.addEventListener('storage', handleGlobalFollowUpdate);
+      return () => {
+        window.removeEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+        window.removeEventListener('storage', handleGlobalFollowUpdate);
+      };
+    }
+  }, []);
+
   // Label Public Profile Info State
   const [labelPublicProfile, setLabelPublicProfile] = useState(() => {
     const cached = localStorage.getItem('label_public_profile');
@@ -1940,7 +1963,7 @@ export default function LabelDashboardViewV2({
   return (
     <div className="min-h-screen bg-[#050505] font-sans text-zinc-100 flex flex-col items-center selection:bg-orange-500/30 selection:text-orange-400">
       {/* STICKY TOP HEADER ROW */}
-      <div className="sticky top-0 z-20 bg-[#0c0e12]/95 backdrop-blur-md border-b border-zinc-900 w-full shadow-[0_10px_30px_rgba(0,0,0,0.9)] flex flex-col">
+      <div className="sticky top-0 z-20 bg-[#0c0e12]/95 backdrop-blur-md border-b border-zinc-900 w-full shadow-[0_10px_30px_rgba(0,0,0,0.9)] flex flex-col pt-[env(safe-area-inset-top)]">
         {/* Row 1: BRAND NAVIGATION HEADER */}
         <div className="px-5 py-3 flex items-center justify-between border-b border-[#1b1e25] bg-black">
           <div className="flex items-center gap-2">
@@ -2040,7 +2063,7 @@ export default function LabelDashboardViewV2({
                             ) : (
                               <Globe className="w-4 h-4 text-orange-500" />
                             )}
-                            <input type="file" accept="image/*" className="hidden" onChange={(e) => { handleImageUpload(e); setV2RoleMenuOpen(false); }} />
+                            <input type="file" accept="image/*" className="sr-only" onChange={(e) => { handleImageUpload(e); setV2RoleMenuOpen(false); }} />
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-[7px] uppercase font-bold text-orange-400">
                               Edit
                             </div>
@@ -2170,7 +2193,6 @@ export default function LabelDashboardViewV2({
                                     setUserProfile(updated);
                                     try { localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated)); } catch (_) {}
                                     window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
-                                    triggerNotification?.(`⚡ Switched to ${portal.name}.`);
                                   }}
                                   className={`w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 ${portal.hoverBorderClass} text-zinc-400 hover:text-white transition-all cursor-pointer group`}
                                 >
@@ -2378,7 +2400,7 @@ export default function LabelDashboardViewV2({
                   <div className="absolute top-4 right-4 flex items-center gap-1.5 z-20">
                     <label className="bg-zinc-950/60 hover:bg-zinc-850 border border-zinc-800 hover:border-[#f97316] text-[#f97316]/90 hover:text-white p-2 rounded-xl transition-all cursor-pointer flex items-center justify-center shadow-md shadow-black">
                       <Upload className="w-4 h-4" />
-                      <input type="file" accept="image/*" className="hidden" onChange={handleCoverImageUpload} />
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleCoverImageUpload} />
                     </label>
                     <button
                       type="button"
@@ -2407,7 +2429,7 @@ export default function LabelDashboardViewV2({
                           <Globe className="w-12 h-12 text-[#f97316] group-hover:scale-110 transition-transform duration-300" />
                         )}
                         {/* Invisible file input */}
-                        <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                        <input type="file" accept="image/*" className="sr-only" onChange={handleImageUpload} />
                         <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <span className="text-[8px] font-mono font-bold text-white uppercase bg-black/80 px-1 py-0.5 rounded border border-[#f97316]/30">Edit</span>
                         </div>
@@ -2511,7 +2533,7 @@ export default function LabelDashboardViewV2({
                     <label className="bg-zinc-950/60 hover:bg-zinc-850 border border-zinc-800 hover:border-[#f97316] text-[#f97316]/90 hover:text-white p-2.5 rounded-xl transition-all cursor-pointer shadow-md shadow-black flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-wider uppercase">
                       <Upload className="w-4 h-4" />
                       <span>CHANGE BANNER</span>
-                      <input type="file" accept="image/*" className="hidden" onChange={handleCoverImageUpload} />
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleCoverImageUpload} />
                     </label>
 
                     <button 
@@ -2540,7 +2562,7 @@ export default function LabelDashboardViewV2({
                           <Globe className="w-16 h-16 text-[#f97316] group-hover:scale-110 transition-transform duration-300" />
                         )}
                         {/* Real file upload input triggers on label click */}
-                        <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                        <input type="file" accept="image/*" className="sr-only" onChange={handleImageUpload} />
                         <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <span className="text-[8px] font-mono font-bold text-white uppercase bg-black/80 px-1.5 py-1 rounded border border-[#f97316]/30">Upload</span>
                         </div>
@@ -5750,7 +5772,7 @@ export default function LabelDashboardViewV2({
                       id="label-avatar-uploader"
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={handleImageUpload} 
                     />
                   </div>
@@ -5802,7 +5824,7 @@ export default function LabelDashboardViewV2({
                       id="label-cover-uploader"
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={handleCoverImageUpload} 
                     />
                   </div>

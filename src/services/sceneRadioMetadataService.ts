@@ -13,12 +13,15 @@
 
 import { FRONTEND_FALLBACK_PLAYLISTS } from '../data/socialFeedMockData';
 import { getRawSupabase } from './clientService';
+import { ensureUUID } from './schemaResilienceService';
+import { authFetch } from '../utils/apiConfig';
 
 export interface RadioTrackMeta {
   videoId: string;
   title: string;
   author: string;
   thumbnailUrl: string;
+  audioUrl?: string;
 }
 
 const LOCAL_STORAGE_KEY_PREFIX = 'nexus_radio_cache_';
@@ -82,11 +85,30 @@ export async function fetchDirectVideoOEmbed(videoId: string): Promise<RadioTrac
     return cached;
   }
 
-  // 1. Try YouTube official oEmbed
+  // 1. Try server proxy route /api/oembed (avoids browser 401/403/CORS network errors)
   try {
-    const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+    const res = await authFetch(`/api/oembed?videoId=${encodeURIComponent(videoId)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.title && !data.title.startsWith('Track ') && data.title !== 'Scene Track') {
+        const { title, author } = parseArtistAndTitle(data.title, data.author || 'Scene Artist');
+        const track: RadioTrackMeta = {
+          videoId,
+          title: title || data.title,
+          author: author || data.author || 'Scene Artist',
+          thumbnailUrl: data.thumbnailUrl || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+        };
+        MEMORY_CACHE.set(videoId, track);
+        return track;
+      }
+    }
+  } catch (_) {}
+
+  // 2. Try noembed.com fallback
+  try {
+    const url = `https://noembed.com/embed?url=https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
@@ -105,45 +127,23 @@ export async function fetchDirectVideoOEmbed(videoId: string): Promise<RadioTrac
         return track;
       }
     }
-  } catch {
-    // try fallback
-  }
+  } catch (_) {}
 
-  // 2. Try noembed.com fallback (CORS enabled proxy)
-  try {
-    const url = `https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.title) {
-        const { title, author } = parseArtistAndTitle(data.title, data.author_name || 'Scene Artist');
-        const track: RadioTrackMeta = {
-          videoId,
-          title: title || data.title,
-          author: author || data.author_name || 'Scene Artist',
-          thumbnailUrl: data.thumbnail_url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
-        };
-        MEMORY_CACHE.set(videoId, track);
-        return track;
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
+  return {
+    videoId,
+    title: 'Scene Track',
+    author: 'Scene Artist',
+    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+  };
 }
 
 // Fetch entire playlist tracks using multi-tier fallback
 export async function getPlaylistTracksResilient(playlistId: string): Promise<RadioTrackMeta[]> {
   if (!playlistId) return [];
 
-  // Tier 1: Check LocalStorage / Cached Tracks for this playlist
+  const expectedMinCount = (FRONTEND_FALLBACK_PLAYLISTS[playlistId] || []).length;
+
+  // Tier 1: Check LocalStorage / Cached Tracks for this playlist (must be at least expectedMinCount or >= 30)
   let localList: RadioTrackMeta[] = [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + playlistId);
@@ -154,50 +154,24 @@ export async function getPlaylistTracksResilient(playlistId: string): Promise<Ra
     // ignore
   }
 
-  if (localList.length >= 10 && localList.some(t => t.title && !t.title.startsWith('Track '))) {
+  if (localList.length >= Math.max(expectedMinCount, 10) && localList.some(t => t.title && !t.title.startsWith('Track '))) {
     localList.forEach(t => {
       if (t.videoId) MEMORY_CACHE.set(t.videoId, t);
     });
     return localList;
   }
 
-  // Tier 2: Query direct Supabase database cache (nexus_notifications table)
-  try {
-    const supabase = getRawSupabase();
-    if (supabase) {
-      const { data, error } = await supabase
-        .from('nexus_notifications')
-        .select('data')
-        .eq('id', `playlist_cache_${playlistId}`)
-        .maybeSingle();
-
-      if (!error && data && Array.isArray(data.data) && data.data.length > 0) {
-        const dbTracks: RadioTrackMeta[] = data.data;
-        // Save to local cache
-        try {
-          localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + playlistId, JSON.stringify(dbTracks));
-        } catch {}
-        dbTracks.forEach(t => {
-          if (t.videoId) MEMORY_CACHE.set(t.videoId, t);
-        });
-        return dbTracks;
-      }
-    }
-  } catch (dbErr) {
-    console.warn('[RADIO METADATA SERVICE] Supabase direct cache lookup note:', dbErr);
-  }
-
-  // Tier 3: Try local backend route /api/playlist/:playlistId (if running on web preview / Cloud Run)
+  // Tier 2: Try local backend route /api/playlist/:playlistId (if running on web preview / Cloud Run)
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500); // 2.5s timeout so APK does not hang
 
-    const response = await fetch(`/api/playlist/${playlistId}`, { signal: controller.signal });
+    const response = await authFetch(`/api/playlist/${playlistId}`, { signal: controller.signal });
     clearTimeout(timeout);
 
     if (response.ok) {
       const json = await response.json();
-      if (json && Array.isArray(json.videos) && json.videos.length > 0) {
+      if (json && Array.isArray(json.videos) && json.videos.length >= Math.max(expectedMinCount, 1)) {
         const serverTracks: RadioTrackMeta[] = json.videos;
         try {
           localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + playlistId, JSON.stringify(serverTracks));
@@ -212,10 +186,14 @@ export async function getPlaylistTracksResilient(playlistId: string): Promise<Ra
     // On APK, /api/playlist/... fails immediately, perfectly fine
   }
 
-  // Tier 4: Fallback to seed catalog
+  // Tier 3: Fallback to seed catalog
   const fallbackList: RadioTrackMeta[] = FRONTEND_FALLBACK_PLAYLISTS[playlistId] || [
     { videoId: 's7oZ4xV_f_k', title: 'Metal Scene Radio', author: 'Scene Radio', thumbnailUrl: 'https://img.youtube.com/vi/s7oZ4xV_f_k/hqdefault.jpg' }
   ];
+
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + playlistId, JSON.stringify(fallbackList));
+  } catch {}
 
   return fallbackList;
 }
@@ -306,22 +284,6 @@ export async function enrichTrackBatchDirect(
     localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + playlistId, JSON.stringify(finalList));
   } catch {}
 
-  // Asynchronously save to Supabase cache if authenticated or anon
-  try {
-    const supabase = getRawSupabase();
-    if (supabase && finalList.some(t => t.title && !t.title.startsWith('Track '))) {
-      Promise.resolve(
-        supabase
-          .from('nexus_notifications')
-          .upsert({
-            id: `playlist_cache_${playlistId}`,
-            data: finalList,
-            created_at: new Date().toISOString()
-          })
-      ).catch(() => {});
-    }
-  } catch {}
-
   return finalList;
 }
 
@@ -343,3 +305,86 @@ export function persistSingleTrackMeta(playlistId: string, track: RadioTrackMeta
     localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + playlistId, JSON.stringify(list));
   } catch {}
 }
+
+const STREAM_URL_CACHE = new Map<string, string>();
+
+/**
+ * Resolves a direct native HTML5 / Android MediaPlayer compatible audio stream URL (.m4a / .mp3)
+ * for a Scene Radio track so the native media player can play real audio in the background
+ * even when the app is minimized, screen-locked, or closed.
+ */
+export async function resolveNativeAudioStreamUrl(track: {
+  videoId?: string;
+  title?: string;
+  author?: string;
+  audioUrl?: string;
+}): Promise<string | null> {
+  if (!track) return null;
+  if (track.audioUrl && track.audioUrl.startsWith('http')) {
+    return track.audioUrl;
+  }
+
+  const cacheKey = track.videoId || `${track.author || ''}_${track.title || ''}`;
+  if (cacheKey && STREAM_URL_CACHE.has(cacheKey)) {
+    return STREAM_URL_CACHE.get(cacheKey) || null;
+  }
+
+  try {
+    if (cacheKey && typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem(`nexus_radio_stream_${cacheKey}`);
+      if (saved && saved.startsWith('http')) {
+        STREAM_URL_CACHE.set(cacheKey, saved);
+        return saved;
+      }
+    }
+  } catch {}
+
+  const rawTitle = (track.title || '').trim();
+  const rawAuthor = (track.author || '').trim();
+  if (!rawTitle || rawTitle.startsWith('Track ') || rawTitle === 'Scene Track') {
+    return null;
+  }
+
+  const parsed = parseArtistAndTitle(rawTitle, rawAuthor);
+  const cleanTitle = parsed.title
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/\b(official|video|music|audio|lyric|hd|4k|hq|live|uncut|version|remastered)\b/gi, '')
+    .trim();
+  const cleanArtist = parsed.author
+    .replace(/\b(official|records|entertainment|music|vevo|topic)\b/gi, '')
+    .replace(/[-–—]/g, ' ')
+    .trim();
+
+  const queries = [
+    `${cleanArtist} ${cleanTitle}`.trim(),
+    cleanTitle,
+    cleanArtist !== 'Scene Artist' && cleanArtist !== 'Unknown Artist' ? cleanArtist : ''
+  ].filter(q => q.length >= 2);
+
+  for (const query of queries) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=3`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = await res.json();
+        const hit = (data?.results || []).find((r: any) => typeof r?.previewUrl === 'string' && r.previewUrl.startsWith('http'));
+        if (hit && hit.previewUrl) {
+          if (cacheKey) {
+            STREAM_URL_CACHE.set(cacheKey, hit.previewUrl);
+            try {
+              window.localStorage?.setItem(`nexus_radio_stream_${cacheKey}`, hit.previewUrl);
+            } catch {}
+          }
+          return hit.previewUrl;
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+

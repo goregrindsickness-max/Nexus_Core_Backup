@@ -26,32 +26,36 @@ export const isVirulentExcisionProfile = (activeBand: any, userProfile: any): bo
     userProfile?.band_name || 
     userProfile?.bandName || 
     ''
-  ).toLowerCase();
+  ).toLowerCase().trim();
   
-  return bName.includes('virulent');
+  if (bName.includes('virulent')) return true;
+  if ((!bName || bName === 'band / artist' || bName === 'band') && isMiguelNameOrProfile(userProfile)) {
+    return true;
+  }
+  return false;
 };
 
 export const resolveBandLogo = (activeBand: any, userProfile: any, profileAvatarUrl?: string | null): string => {
   if (profileAvatarUrl && typeof profileAvatarUrl === 'string' && profileAvatarUrl.trim()) {
     return profileAvatarUrl;
   }
-  if (activeBand?.id && typeof window !== 'undefined') {
-    const saved = localStorage.getItem(`nexus_core_band_logo_${activeBand.id}`) || localStorage.getItem(`nexus_band_logo_${activeBand.id}`) || localStorage.getItem('nexus_band_logo');
-    if (saved && typeof saved === 'string' && saved.trim()) return saved;
-  }
-  const userLogo = userProfile?.band_logo || userProfile?.bandLogo || (userProfile?.account_type === 'band' ? userProfile?.avatar_url : null);
-  if (userLogo && typeof userLogo === 'string' && userLogo.trim()) {
-    return userLogo;
-  }
   if (activeBand?.logo_url && typeof activeBand.logo_url === 'string' && activeBand.logo_url.trim()) return activeBand.logo_url;
   if (activeBand?.avatar_url && typeof activeBand.avatar_url === 'string' && activeBand.avatar_url.trim()) return activeBand.avatar_url;
   if (activeBand?.avatar && typeof activeBand.avatar === 'string' && activeBand.avatar.trim()) return activeBand.avatar;
   if (activeBand?.image && typeof activeBand.image === 'string' && activeBand.image.trim()) return activeBand.image;
+  const userLogo = userProfile?.band_logo || userProfile?.bandLogo || (userProfile?.account_type === 'band' ? userProfile?.avatar_url : null);
+  if (userLogo && typeof userLogo === 'string' && userLogo.trim()) {
+    return userLogo;
+  }
   if (userProfile?.band_metadata?.logo_url && typeof userProfile.band_metadata.logo_url === 'string' && userProfile.band_metadata.logo_url.trim()) {
     return userProfile.band_metadata.logo_url;
   }
-  
-  if (isVirulentExcisionProfile(activeBand, userProfile)) {
+  if (activeBand?.id && typeof window !== 'undefined' && (typeof navigator === 'undefined' || navigator.onLine === false || activeBand.logo_url === undefined)) {
+    const saved = localStorage.getItem(`nexus_core_band_logo_${activeBand.id}`) || localStorage.getItem(`nexus_band_logo_${activeBand.id}`);
+    if (saved && typeof saved === 'string' && saved.trim()) return saved;
+  }
+
+  if ((activeBand?.logo_url === null || activeBand?.logo_url === undefined) && isVirulentExcisionProfile(activeBand, userProfile)) {
     return VIRULENT_EXCISION_DEFAULT_LOGO;
   }
   return '';
@@ -61,19 +65,19 @@ export const resolveBandCover = (activeBand: any, userProfile: any, profileCover
   if (profileCoverUrl && typeof profileCoverUrl === 'string' && profileCoverUrl.trim()) {
     return profileCoverUrl;
   }
-  if (activeBand?.id && typeof window !== 'undefined') {
-    const saved = localStorage.getItem(`nexus_core_band_cover_${activeBand.id}`) || localStorage.getItem(`nexus_band_cover_${activeBand.id}`) || localStorage.getItem('nexus_band_cover');
-    if (saved && typeof saved === 'string' && saved.trim()) return saved;
-  }
-  const userCover = userProfile?.band_cover || userProfile?.bandCover || (userProfile?.account_type === 'band' ? (userProfile?.banner_url || userProfile?.banner) : null) || (typeof window !== 'undefined' ? localStorage.getItem('nexus_band_cover') : null);
-  if (userCover && typeof userCover === 'string' && userCover.trim()) {
-    return userCover;
-  }
   if (activeBand?.cover_url && typeof activeBand.cover_url === 'string' && activeBand.cover_url.trim()) return activeBand.cover_url;
   if (activeBand?.banner_url && typeof activeBand.banner_url === 'string' && activeBand.banner_url.trim()) return activeBand.banner_url;
   if (activeBand?.banner && typeof activeBand.banner === 'string' && activeBand.banner.trim()) return activeBand.banner;
+  const userCover = userProfile?.band_cover || userProfile?.bandCover || (userProfile?.account_type === 'band' ? (userProfile?.banner_url || userProfile?.banner) : null);
+  if (userCover && typeof userCover === 'string' && userCover.trim()) {
+    return userCover;
+  }
+  if (activeBand?.id && typeof window !== 'undefined' && (typeof navigator === 'undefined' || navigator.onLine === false || activeBand.cover_url === undefined)) {
+    const saved = localStorage.getItem(`nexus_core_band_cover_${activeBand.id}`) || localStorage.getItem(`nexus_band_cover_${activeBand.id}`);
+    if (saved && typeof saved === 'string' && saved.trim()) return saved;
+  }
 
-  if (isVirulentExcisionProfile(activeBand, userProfile)) {
+  if ((activeBand?.cover_url === null || activeBand?.cover_url === undefined) && isVirulentExcisionProfile(activeBand, userProfile)) {
     return VIRULENT_EXCISION_DEFAULT_COVER;
   }
   return '';
@@ -110,14 +114,14 @@ export const resolveBandName = (activeBand: any, userProfile: any): string => {
 };
 
 export const resolveBandBio = (activeBand: any, userProfile: any): string => {
-  if (activeBand?.id && typeof window !== 'undefined') {
-    const saved = localStorage.getItem(`nexus_band_bio_${activeBand.id}`);
-    if (saved) return saved;
-  }
   if (activeBand?.bio) return activeBand.bio;
   if (activeBand?.description) return activeBand.description;
   if (userProfile?.band_bio) return userProfile.band_bio;
   if (userProfile?.bandBio) return userProfile.bandBio;
+  if (activeBand?.id && typeof window !== 'undefined' && (typeof navigator === 'undefined' || navigator.onLine === false)) {
+    const saved = localStorage.getItem(`nexus_band_bio_${activeBand.id}`);
+    if (saved) return saved;
+  }
 
   if (isVirulentExcisionProfile(activeBand, userProfile)) {
     return 'V.E. is brutal death metal, fusing old-school NYDM weight with modern technical slam. Driven by themes of biological reconfiguration and systemic depopulation, the project stands as an uncompromising, heavy-hitting soundtrack to humanity’s extinction..';
@@ -256,12 +260,24 @@ export const resolveBandLocation = (activeBand: any, userProfile: any): string =
   return 'Denison, TX, USA';
 };
 
-export const resolvePromoterName = (userProfile: any): string => {
-  const pm = userProfile?.promoter_metadata;
-  const saved = typeof window !== 'undefined' ? (localStorage.getItem('nexus_promoter_brand') || localStorage.getItem('nexus_promoter_name')) : null;
-  if (saved && typeof saved === 'string' && saved.trim()) return saved.trim();
+const isSameLocalUserProfile = (userProfile: any): boolean => {
+  if (!userProfile || typeof window === 'undefined') return false;
+  try {
+    const raw = localStorage.getItem('nexus_core_user_profile');
+    if (!raw) return false;
+    const localProf = JSON.parse(raw);
+    if (!localProf) return false;
+    if (localProf.id && userProfile.id && String(localProf.id).toLowerCase() === String(userProfile.id).toLowerCase()) return true;
+    if (localProf.email && userProfile.email && String(localProf.email).toLowerCase() === String(userProfile.email).toLowerCase()) return true;
+  } catch (_) {}
+  return false;
+};
 
-  return (
+export const resolvePromoterName = (userProfile: any): string => {
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+  const pm = userProfile?.promoter_metadata;
+
+  const candidate =
     pm?.brand_name ||
     pm?.agency_name ||
     pm?.entity_name ||
@@ -270,12 +286,26 @@ export const resolvePromoterName = (userProfile: any): string => {
     userProfile?.promoter_name ||
     userProfile?.entity_name ||
     userProfile?.corporate_name ||
-    'Nexus Live Productions'
-  );
+    '';
+
+  if (candidate && typeof candidate === 'string' && candidate.trim()) {
+    if (isOwnerMiguel || !candidate.toLowerCase().includes('nexus live')) {
+      return candidate.trim();
+    }
+  }
+
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const saved = canReadLocal ? (localStorage.getItem('nexus_promoter_brand') || localStorage.getItem('nexus_promoter_name')) : null;
+  if (saved && typeof saved === 'string' && saved.trim() && (isOwnerMiguel || !saved.toLowerCase().includes('nexus live'))) {
+    return saved.trim();
+  }
+
+  return isOwnerMiguel ? 'Nexus Live Productions' : '';
 };
 
 export const resolvePromoterHandle = (userProfile: any): string => {
   const nameCandidate = resolvePromoterName(userProfile);
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
   const raw =
     userProfile?.promoter_handle ||
     userProfile?.promoter_metadata?.brand_name ||
@@ -283,8 +313,8 @@ export const resolvePromoterHandle = (userProfile: any): string => {
     userProfile?.promoter_agency ||
     userProfile?.promoter_brand ||
     userProfile?.promoter_name ||
-    (nameCandidate ? nameCandidate.replace(/\s+/g, '_').toLowerCase() : 'nexus_live_productions');
-  return raw.replace(/^@+/, '').replace(/\s+/g, '_');
+    (nameCandidate ? nameCandidate.replace(/\s+/g, '_').toLowerCase() : (isOwnerMiguel ? 'nexus_live_productions' : 'promoter'));
+  return String(raw).replace(/^@+/, '').replace(/\s+/g, '_');
 };
 
 export const PROMOTER_DEFAULT_AVATAR = PROMOTER_SVG_AVATAR;
@@ -323,11 +353,8 @@ export const isCreativeCoverUrl = (url?: string | null, _userProfile?: any): boo
 };
 
 export const resolveCreativeName = (userProfile: any): string => {
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
   const cm = userProfile?.creative_metadata;
-  const saved = typeof window !== 'undefined' ? (localStorage.getItem('nexus_creative_business_name') || localStorage.getItem('nexus_creative_name')) : null;
-  if (saved && typeof saved === 'string' && saved.trim() && !['pro creative', 'creative pro', 'creative hub', 'creative studio'].includes(saved.toLowerCase().trim())) {
-    return saved.trim();
-  }
 
   const cand =
     cm?.business_name ||
@@ -338,37 +365,52 @@ export const resolveCreativeName = (userProfile: any): string => {
     userProfile?.creative_profile?.name;
 
   if (cand && typeof cand === 'string' && cand.trim() && !['pro creative', 'creative pro', 'creative hub', 'creative studio'].includes(cand.toLowerCase().trim())) {
-    return cand.trim();
+    if (isOwnerMiguel || !cand.toLowerCase().includes('vortex graphics')) {
+      return cand.trim();
+    }
   }
 
-  return 'Vortex Graphics';
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const saved = canReadLocal ? (localStorage.getItem('nexus_creative_business_name') || localStorage.getItem('nexus_creative_name')) : null;
+  if (saved && typeof saved === 'string' && saved.trim() && !['pro creative', 'creative pro', 'creative hub', 'creative studio'].includes(saved.toLowerCase().trim())) {
+    if (isOwnerMiguel || !saved.toLowerCase().includes('vortex graphics')) {
+      return saved.trim();
+    }
+  }
+
+  return isOwnerMiguel ? 'Vortex Graphics' : '';
 };
 
 export const resolveCreativeHandle = (userProfile: any): string => {
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
   const cm = userProfile?.creative_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
   const raw =
     userProfile?.creative_handle ||
     userProfile?.creative_slug ||
     cm?.creative_handle ||
     cm?.handle ||
-    (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_handle') : null);
+    (canReadLocal ? localStorage.getItem('nexus_creative_handle') : null);
 
   if (raw && typeof raw === 'string' && raw.trim() && !['creative_pro', 'creativepro', 'user', '@user'].includes(raw.toLowerCase().trim())) {
-    return raw.replace(/^@+/, '').replace(/\s+/g, '_');
+    if (isOwnerMiguel || raw.toLowerCase().trim() !== 'vortexgraphics') {
+      return raw.replace(/^@+/, '').replace(/\s+/g, '_');
+    }
   }
 
-  return 'vortexgraphics';
+  return isOwnerMiguel ? 'vortexgraphics' : '';
 };
 
 export const resolveCreativeLogo = (userProfile: any, profileAvatarUrl?: string | null): string => {
   const cm = userProfile?.creative_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const personalAvatar = userProfile?.avatar_url || (canReadLocal ? localStorage.getItem('nexus_user_avatar') : null);
 
-  const saved = typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null;
-  if (saved && typeof saved === 'string' && saved.trim() && !isPromoterAvatarUrl(saved)) {
-    return saved.trim();
+  if (profileAvatarUrl && typeof profileAvatarUrl === 'string' && profileAvatarUrl.trim() && !isPromoterAvatarUrl(profileAvatarUrl)) {
+    if (profileAvatarUrl !== personalAvatar || profileAvatarUrl.includes('vortex') || profileAvatarUrl.includes('creative') || profileAvatarUrl.includes('data:image')) {
+      return profileAvatarUrl.trim();
+    }
   }
-
-  const personalAvatar = userProfile?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null);
 
   const cand =
     userProfile?.creative_avatar ||
@@ -384,24 +426,22 @@ export const resolveCreativeLogo = (userProfile: any, profileAvatarUrl?: string 
     }
   }
 
-  if (profileAvatarUrl && typeof profileAvatarUrl === 'string' && profileAvatarUrl.trim() && !isPromoterAvatarUrl(profileAvatarUrl)) {
-    if (profileAvatarUrl !== personalAvatar || profileAvatarUrl.includes('vortex') || profileAvatarUrl.includes('creative') || profileAvatarUrl.includes('data:image')) {
-      return profileAvatarUrl.trim();
-    }
+  const saved = canReadLocal ? localStorage.getItem('nexus_creative_avatar') : null;
+  if (saved && typeof saved === 'string' && saved.trim() && !isPromoterAvatarUrl(saved)) {
+    return saved.trim();
   }
 
-  return VORTEX_GRAPHICS_DEFAULT_AVATAR;
+  return isMiguelNameOrProfile(userProfile) ? VORTEX_GRAPHICS_DEFAULT_AVATAR : '';
 };
 
 export const resolveCreativeCover = (userProfile: any, profileCoverUrl?: string | null): string | null => {
   const cm = userProfile?.creative_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const personalCover = userProfile?.banner_url || (canReadLocal ? localStorage.getItem('nexus_user_banner') : null);
 
-  const saved = typeof window !== 'undefined' ? (localStorage.getItem('nexus_creative_banner') || localStorage.getItem('nexus_creative_cover')) : null;
-  if (saved && typeof saved === 'string' && saved.trim()) {
-    return saved.trim();
+  if (profileCoverUrl && typeof profileCoverUrl === 'string' && profileCoverUrl.trim() && profileCoverUrl !== personalCover && profileCoverUrl !== DEFAULT_PERSONAL_COVER) {
+    return profileCoverUrl.trim();
   }
-
-  const personalCover = userProfile?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_banner') : null);
 
   const cand =
     userProfile?.creative_banner ||
@@ -414,8 +454,9 @@ export const resolveCreativeCover = (userProfile: any, profileCoverUrl?: string 
     return cand.trim();
   }
 
-  if (profileCoverUrl && typeof profileCoverUrl === 'string' && profileCoverUrl.trim() && profileCoverUrl !== personalCover && profileCoverUrl !== DEFAULT_PERSONAL_COVER) {
-    return profileCoverUrl.trim();
+  const saved = canReadLocal ? (localStorage.getItem('nexus_creative_banner') || localStorage.getItem('nexus_creative_cover')) : null;
+  if (saved && typeof saved === 'string' && saved.trim()) {
+    return saved.trim();
   }
 
   return VORTEX_GRAPHICS_DEFAULT_COVER;
@@ -423,54 +464,63 @@ export const resolveCreativeCover = (userProfile: any, profileCoverUrl?: string 
 
 export const resolveCreativeBio = (userProfile: any): string => {
   const cm = userProfile?.creative_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
   const cand =
     cm?.bio ||
     cm?.biography ||
     userProfile?.creative_bio ||
-    (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_bio') : null);
+    (canReadLocal ? localStorage.getItem('nexus_creative_bio') : null);
 
   if (cand && typeof cand === 'string' && cand.trim()) {
     return cand.trim();
   }
 
-  return 'Heavy vector specialist, halftone master, custom punk typography and production-ready CMYK separated files.';
+  return isMiguelNameOrProfile(userProfile)
+    ? 'Heavy vector specialist, halftone master, custom punk typography and production-ready CMYK separated files.'
+    : 'Independent creative specialist on the Nexus network.';
 };
 
 export const resolveCreativeLocation = (userProfile: any): string => {
   const cm = userProfile?.creative_metadata;
-  const loc = cm?.city || cm?.base_location || userProfile?.creative_city || 'Detroit';
-  const state = cm?.state || cm?.state_province || userProfile?.creative_state || 'MI';
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+  const loc = cm?.city || cm?.base_location || userProfile?.creative_city || (isOwnerMiguel ? 'Denison' : userProfile?.city || '');
+  const state = cm?.state || cm?.state_province || userProfile?.creative_state || (isOwnerMiguel ? 'TX' : userProfile?.state_province || '');
 
   const clean = formatCleanLocation(loc, state);
   if (clean) return clean;
-  return 'Detroit, MI';
+  return isOwnerMiguel ? 'Denison, Texas' : '';
 };
 
 export const resolvePromoterLogo = (userProfile: any, profileAvatarUrl?: string | null): string => {
   const pm = userProfile?.promoter_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+  const OFFICIAL_NEXUS_LIVE_LOGO = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601';
 
-  const saved = typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null;
-  if (saved && typeof saved === 'string' && saved.trim()) {
-    return saved.trim();
+  if (profileAvatarUrl && typeof profileAvatarUrl === 'string' && profileAvatarUrl.trim() && !isCreativeAvatarUrl(profileAvatarUrl)) {
+    return profileAvatarUrl.trim();
   }
-
-  const personalAvatar = userProfile?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null);
 
   const cand =
     (userProfile as any)?.promoter_logo ||
     pm?.logo_url ||
-    pm?.avatar_url;
+    pm?.avatar_url ||
+    userProfile?.logo_url ||
+    userProfile?.logo ||
+    userProfile?.avatar_url ||
+    userProfile?.avatar;
 
   if (cand && typeof cand === 'string' && cand.trim() && !isCreativeAvatarUrl(cand)) {
-    if (cand !== personalAvatar || cand.includes('promoter') || cand.includes('nexuslive') || cand.includes('5403162d')) {
-      return cand.trim();
-    }
+    return cand.trim();
   }
 
-  if (profileAvatarUrl && typeof profileAvatarUrl === 'string' && profileAvatarUrl.trim() && !isCreativeAvatarUrl(profileAvatarUrl)) {
-    if (profileAvatarUrl !== personalAvatar || profileAvatarUrl.includes('promoter') || profileAvatarUrl.includes('nexuslive') || profileAvatarUrl.includes('5403162d')) {
-      return profileAvatarUrl.trim();
-    }
+  const saved = canReadLocal ? localStorage.getItem('nexus_promoter_logo') : null;
+  if (saved && typeof saved === 'string' && saved.trim()) {
+    return saved.trim();
+  }
+
+  if (isOwnerMiguel || (userProfile?.name && String(userProfile.name).toLowerCase().includes('nexus live'))) {
+    return OFFICIAL_NEXUS_LIVE_LOGO;
   }
 
   return PROMOTER_DEFAULT_AVATAR;
@@ -478,13 +528,12 @@ export const resolvePromoterLogo = (userProfile: any, profileAvatarUrl?: string 
 
 export const resolvePromoterCover = (userProfile: any, profileCoverUrl?: string | null): string | null => {
   const pm = userProfile?.promoter_metadata;
+  const canReadLocal = isSameLocalUserProfile(userProfile);
+  const personalCover = userProfile?.banner_url || (canReadLocal ? localStorage.getItem('nexus_user_banner') : null);
 
-  const saved = typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_cover') : null;
-  if (saved && typeof saved === 'string' && saved.trim()) {
-    return saved.trim();
+  if (profileCoverUrl && typeof profileCoverUrl === 'string' && profileCoverUrl.trim() && profileCoverUrl !== personalCover) {
+    return profileCoverUrl.trim();
   }
-
-  const personalCover = userProfile?.banner_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_banner') : null);
 
   const cand =
     (userProfile as any)?.promoter_cover_image ||
@@ -495,8 +544,9 @@ export const resolvePromoterCover = (userProfile: any, profileCoverUrl?: string 
     return cand.trim();
   }
 
-  if (profileCoverUrl && typeof profileCoverUrl === 'string' && profileCoverUrl.trim() && profileCoverUrl !== personalCover) {
-    return profileCoverUrl.trim();
+  const saved = canReadLocal ? localStorage.getItem('nexus_promoter_cover') : null;
+  if (saved && typeof saved === 'string' && saved.trim()) {
+    return saved.trim();
   }
 
   return PROMOTER_DEFAULT_COVER;
@@ -508,7 +558,9 @@ export const resolvePromoterBio = (userProfile: any): string => {
   if (cand && !cand.toLowerCase().includes('booking management for underground')) {
     return cand;
   }
-  return 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.';
+  return isMiguelNameOrProfile(userProfile)
+    ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.'
+    : 'Independent concert promoter and live events coordinator.';
 };
 
 export const resolvePromoterLocation = (userProfile: any): string => {
@@ -528,8 +580,8 @@ export const resolveEffectiveAvatar = (portalRole: string, activeBand: any, user
   }
   if (effectiveRole === 'label') {
     return (
+      userProfile?.label_avatar ||
       (typeof window !== 'undefined' ? (localStorage.getItem('nexus_label_avatar')) : null) ||
-      userProfile?.label_avatar || 
       userProfile?.avatar_url ||
       ''
     );
@@ -600,3 +652,374 @@ export const resolveEffectiveCover = (portalRole: string, activeBand: any, userP
 
   return userProfile?.banner_url || userProfile?.cover_url || null;
 };
+
+export const MIGUEL_DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80';
+
+export const KNOWN_USER_AVATARS: Record<string, string> = {
+  'miguel goregrinder medina': MIGUEL_DEFAULT_AVATAR,
+  'miguel "goregrinder" medina': MIGUEL_DEFAULT_AVATAR,
+  'miguel medina': MIGUEL_DEFAULT_AVATAR,
+  'miguel': MIGUEL_DEFAULT_AVATAR,
+  'goregrinder': MIGUEL_DEFAULT_AVATAR,
+  'goregrindsickness': MIGUEL_DEFAULT_AVATAR,
+  'bdmceo': MIGUEL_DEFAULT_AVATAR,
+  'scene member': MIGUEL_DEFAULT_AVATAR,
+  'fan': MIGUEL_DEFAULT_AVATAR,
+  'you': MIGUEL_DEFAULT_AVATAR,
+  'tyler slamson': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+  'goregrindslayer': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+  'zachary blaster': 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+  'blastfiend999': 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+  'marcus cassette': 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=400&q=80',
+  'tapetrader99': 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=400&q=80',
+  'derek riff': 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=400&q=80',
+  'slamnation': 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=400&q=80',
+  'dustin shutter': 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80',
+  'scene photographer': 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80',
+  'shutterbug_live': 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80',
+  'alex mercer': 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80',
+  'deathmetalfan99': 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80',
+  'leo lens': 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=400&q=80',
+  'chris diver': 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=400&q=80',
+  'stagediver_99': 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=400&q=80',
+  'eric circle': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+  'circlepitking': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+  'travis gore': 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?auto=format&fit=crop&w=400&q=80',
+  'texasgore': 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?auto=format&fit=crop&w=400&q=80',
+  'dave shredder': 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=400&q=80',
+  'riffmaster': 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=400&q=80',
+  'goth_girl99': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+  'nexus promoters': 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601',
+  'devourment': 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80',
+  'origin': 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=400&q=80',
+  'pathology': 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=400&q=80'
+};
+
+export const resolveCommentAvatar = (
+  comment: any,
+  userProfile?: any,
+  currentUserId?: string,
+  currentUserName?: string
+): string => {
+  if (!comment) return MIGUEL_DEFAULT_AVATAR;
+
+  const commentUsername = String(comment.username || comment.author || comment.author_name || comment.user_name || '').trim().toLowerCase();
+  const commentUserId = String(comment.user_id || comment.userId || '').trim();
+  const commentText = String(comment.text || comment.content || '').toLowerCase();
+
+  const isGlenBentonComment = commentText.includes('glen benton') || commentText.includes("that's life, but now you get be");
+
+  const isAuthorMiguel = Boolean(
+    isGlenBentonComment ||
+    commentUserId === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' ||
+    commentUsername === 'miguel goregrinder medina' ||
+    commentUsername === 'miguel medina' ||
+    commentUsername === 'goregrinder' ||
+    commentUsername === 'bdmceo' ||
+    isMiguelNameOrProfile(commentUserId) ||
+    isMiguelNameOrProfile(commentUsername)
+  );
+
+  // 1. Comment authored by Miguel:
+  if (isAuthorMiguel) {
+    const isUserProfileMiguel = Boolean(
+      userProfile?.id === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' ||
+      (userProfile?.email && userProfile.email.toLowerCase() === 'goregrindsickness@gmail.com') ||
+      isMiguelNameOrProfile(userProfile)
+    );
+
+    if (isUserProfileMiguel) {
+      const myLiveAvatar =
+        userProfile?.avatar_url ||
+        userProfile?.avatar ||
+        userProfile?.profile_avatar;
+      if (myLiveAvatar && typeof myLiveAvatar === 'string' && myLiveAvatar.trim() && myLiveAvatar !== '👤' && !myLiveAvatar.includes('ui-avatars.com') && !myLiveAvatar.includes('photo-1534528741775-53994a69daeb')) {
+        return myLiveAvatar.trim();
+      }
+    }
+
+    const localMiguelAvatar = typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null;
+    if (localMiguelAvatar && typeof localMiguelAvatar === 'string' && localMiguelAvatar.trim() && localMiguelAvatar !== '👤' && !localMiguelAvatar.includes('ui-avatars.com') && !localMiguelAvatar.includes('photo-1534528741775-53994a69daeb')) {
+      return localMiguelAvatar.trim();
+    }
+    return MIGUEL_DEFAULT_AVATAR;
+  }
+
+  // 2. Is this comment written strictly by the current logged-in user?
+  const isCurrentUserComment = Boolean(
+    currentUserId && commentUserId && commentUserId === currentUserId
+  );
+
+  if (isCurrentUserComment) {
+    const rawCommentAvatar = comment.avatar || comment.user_avatar || comment.userAvatar || comment.authorAvatar;
+    const isBadAvatar = !rawCommentAvatar ||
+      typeof rawCommentAvatar !== 'string' ||
+      rawCommentAvatar.includes('ui-avatars.com') ||
+      rawCommentAvatar.includes('photo-1534528741775-53994a69daeb') ||
+      rawCommentAvatar === '👤' ||
+      rawCommentAvatar.includes('undefined') ||
+      rawCommentAvatar.includes('null');
+
+    const isUserProfileCurrentUser = Boolean(userProfile?.id && userProfile.id === currentUserId);
+    const myLiveAvatar =
+      (isUserProfileCurrentUser ? (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar) : null) ||
+      (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null) ||
+      (!isBadAvatar ? rawCommentAvatar : null);
+
+    if (myLiveAvatar && typeof myLiveAvatar === 'string' && myLiveAvatar.trim() && myLiveAvatar !== '👤' && !myLiveAvatar.includes('ui-avatars.com') && !myLiveAvatar.includes('photo-1534528741775-53994a69daeb')) {
+      return myLiveAvatar.trim();
+    }
+    return DEFAULT_PERSONAL_AVATAR;
+  }
+
+  // 3. Comment authored by target profile owner (userProfile)?
+  const isUserProfileAuthor = Boolean(
+    commentUserId && userProfile?.id && commentUserId === userProfile.id
+  );
+  if (isUserProfileAuthor) {
+    const targetAvatar = userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar;
+    if (targetAvatar && typeof targetAvatar === 'string' && targetAvatar.trim() && targetAvatar !== '👤' && !targetAvatar.includes('ui-avatars.com') && !targetAvatar.includes('photo-1534528741775-53994a69daeb')) {
+      return targetAvatar.trim();
+    }
+  }
+
+  // 4. Explicit comment avatar if present on the comment object itself
+  const explicitAvatar = comment.avatar || comment.userAvatar || comment.user_avatar || comment.authorAvatar;
+  if (
+    explicitAvatar &&
+    typeof explicitAvatar === 'string' &&
+    explicitAvatar.trim() &&
+    !explicitAvatar.includes('undefined') &&
+    !explicitAvatar.includes('null') &&
+    !explicitAvatar.includes('ui-avatars.com') &&
+    !explicitAvatar.includes('photo-1534528741775-53994a69daeb') &&
+    (explicitAvatar.startsWith('http') || explicitAvatar.startsWith('data:') || explicitAvatar.startsWith('/'))
+  ) {
+    return explicitAvatar.trim();
+  }
+
+  // 5. Check known user avatar registry
+  if (commentUsername && KNOWN_USER_AVATARS[commentUsername]) {
+    return KNOWN_USER_AVATARS[commentUsername];
+  }
+
+  return DEFAULT_PERSONAL_AVATAR;
+};
+
+export const isUuidString = (str?: string | null): boolean => {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+};
+
+export const resolveCommentAuthorName = (
+  comment: any,
+  userProfile?: any,
+  currentUserId?: string,
+  currentUserName?: string
+): string => {
+  if (!comment) return 'Scene Member';
+
+  const rawUserId = String(comment.user_id || comment.userId || '').trim();
+  const rawUsername = String(comment.username || comment.author || comment.author_name || comment.user_name || comment.full_name || comment.name || '').trim();
+  const commentText = String(comment.text || comment.content || '').toLowerCase();
+
+  const isGlenBentonComment = commentText.includes('glen benton') || commentText.includes("that's life, but now you get be");
+
+  const isAuthorMiguel = Boolean(
+    isGlenBentonComment ||
+    rawUserId === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' ||
+    isMiguelNameOrProfile(rawUserId) ||
+    isMiguelNameOrProfile(rawUsername) ||
+    rawUsername.toLowerCase() === 'bdmceo' ||
+    rawUsername.toLowerCase() === 'goregrinder' ||
+    rawUsername.toLowerCase() === 'miguel medina' ||
+    rawUsername.toLowerCase() === 'miguel goregrinder medina'
+  );
+
+  // 1. Comment authored by Miguel:
+  if (isAuthorMiguel) {
+    const isUserProfileMiguel = Boolean(
+      userProfile?.id === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' ||
+      (userProfile?.email && userProfile.email.toLowerCase() === 'goregrindsickness@gmail.com') ||
+      isMiguelNameOrProfile(userProfile)
+    );
+    if (isUserProfileMiguel) {
+      return userProfile?.full_name || userProfile?.name || 'Miguel Goregrinder Medina';
+    }
+    return 'Miguel Goregrinder Medina';
+  }
+
+  // 2. Comment authored strictly by current logged-in user:
+  const isCurrentUserComment = Boolean(
+    currentUserId && rawUserId && rawUserId === currentUserId
+  );
+
+  if (isCurrentUserComment) {
+    const isUserProfileCurrentUser = Boolean(userProfile?.id && userProfile.id === currentUserId);
+    if (isUserProfileCurrentUser && (userProfile?.full_name || userProfile?.name)) {
+      return userProfile.full_name || userProfile.name;
+    }
+    if (currentUserName && currentUserName.toLowerCase() !== 'you' && currentUserName.toLowerCase() !== 'user') {
+      return currentUserName;
+    }
+    if (rawUsername && !isUuidString(rawUsername) && rawUsername.toLowerCase() !== 'you' && rawUsername.toLowerCase() !== 'user') {
+      return rawUsername;
+    }
+    return 'You';
+  }
+
+  // 3. Comment authored by target profile owner (userProfile)?
+  const isUserProfileAuthor = Boolean(
+    rawUserId && userProfile?.id && rawUserId === userProfile.id
+  );
+  if (isUserProfileAuthor && (userProfile?.full_name || userProfile?.name)) {
+    return userProfile.full_name || userProfile.name;
+  }
+
+  // 4. Comment authored by another user:
+  const cleanUsernameLower = rawUsername.toLowerCase();
+  const isGenericPlaceholder = (
+    !rawUsername ||
+    cleanUsernameLower === 'scene member' ||
+    cleanUsernameLower === 'fan' ||
+    cleanUsernameLower === 'user' ||
+    cleanUsernameLower === 'anonymous' ||
+    cleanUsernameLower === 'guest' ||
+    cleanUsernameLower === 'you'
+  );
+
+  if (rawUsername && !isUuidString(rawUsername) && !isGenericPlaceholder) {
+    return rawUsername;
+  }
+  if (comment.author && typeof comment.author === 'string' && !isUuidString(comment.author) && comment.author.toLowerCase() !== 'scene member' && comment.author.toLowerCase() !== 'user') {
+    return comment.author.trim();
+  }
+  if (comment.author_name && typeof comment.author_name === 'string' && !isUuidString(comment.author_name) && comment.author_name.toLowerCase() !== 'scene member' && comment.author_name.toLowerCase() !== 'user') {
+    return comment.author_name.trim();
+  }
+  if (comment.full_name && typeof comment.full_name === 'string' && !isUuidString(comment.full_name)) {
+    return comment.full_name.trim();
+  }
+  if (comment.name && typeof comment.name === 'string' && !isUuidString(comment.name)) {
+    return comment.name.trim();
+  }
+
+  return 'Scene Member';
+};
+
+export type BandActivityStatus = 'active' | 'split-up' | 'on-hold' | 'unknown';
+
+/**
+ * Resolves a band's current activity status ('active' | 'split-up' | 'on-hold' | 'unknown').
+ * Defaults to 'active' as requested.
+ */
+export const resolveBandStatus = (target: any): BandActivityStatus => {
+  if (!target) return 'active';
+
+  const statusStr = String(
+    target.status ||
+    target.band_status ||
+    target.activity_status ||
+    target.bandStatus ||
+    ''
+  ).toLowerCase().trim();
+
+  if (
+    target.is_split_up === true ||
+    target.isSplitUp === true ||
+    statusStr === 'split-up' ||
+    statusStr === 'split_up' ||
+    statusStr === 'split up' ||
+    statusStr === 'disbanded' ||
+    statusStr === 'dissolved'
+  ) {
+    return 'split-up';
+  }
+
+  const candidateName = String(
+    target.band_name ||
+    target.name ||
+    target.bandName ||
+    target.title ||
+    ''
+  ).toLowerCase().trim();
+
+  if (candidateName === 'abnormality' || candidateName.includes('abnormality')) {
+    return 'split-up';
+  }
+
+  const yearStr = String(
+    target.founded_year ||
+    target.year_formed ||
+    target.yearFormed ||
+    ''
+  ).toLowerCase();
+
+  if (yearStr.includes('split') || yearStr.includes('disbanded')) {
+    return 'split-up';
+  }
+
+  if (
+    statusStr === 'on-hold' ||
+    statusStr === 'on_hold' ||
+    statusStr === 'on hold' ||
+    statusStr === 'hiatus' ||
+    yearStr.includes('on-hold') ||
+    yearStr.includes('on hold') ||
+    yearStr.includes('hiatus')
+  ) {
+    return 'on-hold';
+  }
+
+  if (
+    statusStr === 'unknown' ||
+    yearStr.includes('unknown')
+  ) {
+    return 'unknown';
+  }
+
+  return 'active';
+};
+
+/**
+ * Returns formatted text label e.g. "(active)", "(split-up)", "(on-hold)", "(unknown)".
+ */
+export const getBandStatusLabel = (status: BandActivityStatus | string): string => {
+  const norm = String(status || '').toLowerCase().trim();
+  if (norm === 'split-up' || norm === 'split_up' || norm === 'split up' || norm === 'disbanded') {
+    return '(split-up)';
+  }
+  if (norm === 'on-hold' || norm === 'on_hold' || norm === 'on hold' || norm === 'hiatus') {
+    return '(on-hold)';
+  }
+  if (norm === 'unknown') {
+    return '(unknown)';
+  }
+  return '(active)';
+};
+
+/**
+ * Returns styling classes for band activity badges.
+ */
+export const getBandStatusBadgeClass = (status: BandActivityStatus | string): string => {
+  const norm = String(status || '').toLowerCase().trim();
+  if (norm === 'split-up' || norm === 'split_up' || norm === 'split up' || norm === 'disbanded') {
+    return 'text-rose-400 border-rose-500/30 bg-rose-500/10';
+  }
+  if (norm === 'on-hold' || norm === 'on_hold' || norm === 'on hold' || norm === 'hiatus') {
+    return 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+  }
+  if (norm === 'unknown') {
+    return 'text-zinc-400 border-zinc-700/50 bg-zinc-800/40';
+  }
+  return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
+};
+
+/**
+ * Determines if a band is split up / disbanded.
+ */
+export const isBandSplitUp = (target: any): boolean => {
+  return resolveBandStatus(target) === 'split-up';
+};
+
+

@@ -4,6 +4,8 @@ import { X, MessageSquare, Send, Clock, Sparkles, Image as ImageIcon, ZoomIn, Zo
 import { OPEN_AVATAR_POPUP_EVENT, OpenAvatarPopupPayload } from '../../utils/avatarPopupEvents';
 import { getSupabase } from '../../supabase';
 import { usePinchZoom } from '../../hooks/usePinchZoom';
+import { resolveCommentAvatar, DEFAULT_PERSONAL_AVATAR, MIGUEL_DEFAULT_AVATAR } from '../../utils/bandProfileUtils';
+import { authFetch, getSupabaseAccessToken } from '../../utils/apiConfig';
 
 interface Reaction {
   userId: string;
@@ -21,9 +23,127 @@ interface Comment {
   createdAt: string;
 }
 
+const EMOJIS = ['🔥', '🤘', '❤️', '💀', '👏', '😮', '🌟', '⚡'] as const;
+
+const EMOJI_TO_KEY: Record<string, string> = {
+  '🔥': 'fire',
+  '🤘': 'horns',
+  '❤️': 'heart',
+  '💀': 'skull',
+  '👏': 'clap',
+  '😮': 'wow',
+  '🌟': 'star',
+  '⚡': 'bolt',
+};
+
+const KEY_TO_EMOJI: Record<string, string> = {
+  fire: '🔥',
+  horns: '🤘',
+  heart: '❤️',
+  likes: '❤️',
+  skull: '💀',
+  clap: '👏',
+  wow: '😮',
+  star: '🌟',
+  bolt: '⚡',
+};
+
+const normalizeEmojiKey = (rawKey: string): string => {
+  return KEY_TO_EMOJI[rawKey] || rawKey;
+};
+
+export interface NormalizedReactionState {
+  counts: Record<string, number>;
+  userActive: Record<string, boolean>;
+}
+
+/**
+ * Safely normalizes reactions whether they arrive as:
+ * - backend count map: { horns: 2, fire: 1, skull: 0, heart: 0 } + userReactions
+ * - legacy/optimistic array: [{ userId, username, avatarUrl, emoji }, ...]
+ * - null, undefined, or malformed localStorage data
+ */
+export const normalizeReactionState = (
+  rawReactions: unknown,
+  rawUserReactions?: unknown,
+  currentUserId?: string | null
+): NormalizedReactionState => {
+  const counts: Record<string, number> = {};
+  const userActive: Record<string, boolean> = {};
+
+  if (Array.isArray(rawReactions)) {
+    for (const item of rawReactions) {
+      if (!item || typeof item !== 'object') continue;
+      const emojiRaw = (item as any).emoji || (item as any).reactionType;
+      if (!emojiRaw || typeof emojiRaw !== 'string') continue;
+      const emoji = normalizeEmojiKey(emojiRaw);
+      counts[emoji] = (counts[emoji] || 0) + 1;
+      if (currentUserId && (item as any).userId === currentUserId) {
+        userActive[emoji] = true;
+      }
+    }
+  } else if (rawReactions && typeof rawReactions === 'object') {
+    for (const [key, val] of Object.entries(rawReactions as Record<string, unknown>)) {
+      const numeric = Number(val);
+      if (!Number.isFinite(numeric) || numeric <= 0) continue;
+      const emoji = normalizeEmojiKey(key);
+      counts[emoji] = (counts[emoji] || 0) + numeric;
+    }
+  }
+
+  if (rawUserReactions && typeof rawUserReactions === 'object' && !Array.isArray(rawUserReactions)) {
+    const mapObj = rawUserReactions as Record<string, unknown>;
+    const userBucket =
+      currentUserId && mapObj[currentUserId] && typeof mapObj[currentUserId] === 'object'
+        ? (mapObj[currentUserId] as Record<string, unknown>)
+        : null;
+
+    if (userBucket) {
+      for (const [key, active] of Object.entries(userBucket)) {
+        if (active) {
+          userActive[normalizeEmojiKey(key)] = true;
+        }
+      }
+    } else {
+      // Handle flat { [emojiOrKey]: boolean } cached shape
+      for (const [key, active] of Object.entries(mapObj)) {
+        if (typeof active === 'boolean' && active) {
+          userActive[normalizeEmojiKey(key)] = true;
+        }
+      }
+    }
+  }
+
+  return { counts, userActive };
+};
+
+export const getTotalReactionCount = (counts: Record<string, number> | null | undefined): number => {
+  if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return 0;
+  return Object.values(counts).reduce((sum, val) => {
+    const num = Number(val);
+    return Number.isFinite(num) && num > 0 ? sum + num : sum;
+  }, 0);
+};
+
+export const normalizeComments = (rawComments: unknown): Comment[] => {
+  if (!Array.isArray(rawComments)) return [];
+  return rawComments
+    .filter((c): c is Record<string, any> => Boolean(c && typeof c === 'object'))
+    .map((c, idx) => ({
+      id: String(c.id || `comment_${idx}`),
+      userId: String(c.userId || 'anon'),
+      username: String(c.username || c.authorName || 'Scene Member'),
+      avatarUrl: c.avatarUrl || c.authorAvatar || null,
+      text: String(c.text || ''),
+      createdAt: String(c.createdAt || new Date().toISOString()),
+    }))
+    .filter((c) => c.text.length > 0);
+};
+
 export const AvatarPopupOverlay: React.FC = () => {
   const [activePayload, setActivePayload] = useState<OpenAvatarPopupPayload | null>(null);
-  const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
+  const [userReactions, setUserReactions] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -31,6 +151,8 @@ export const AvatarPopupOverlay: React.FC = () => {
   const [submittingComment, setSubmittingComment] = useState(false);
 
   const commentsEndRef = useRef<HTMLDivElement>(null);
+  const currentUserRef = useRef<any>(null);
+  currentUserRef.current = currentUser;
 
   // Derive stable unique target ID for photo interactions
   const getTargetId = (payload: OpenAvatarPopupPayload | null): string => {
@@ -76,6 +198,54 @@ export const AvatarPopupOverlay: React.FC = () => {
     fetchCurrentUser();
   }, [activePayload]);
 
+  // Fetch reactions and comments with local fallback
+  const fetchInteractions = async (targetId: string) => {
+    try {
+      setLoading(true);
+      const userId = currentUserRef.current?.id || null;
+
+      // Reset before loading next target so previous photo's state never leaks
+      setReactionCounts({});
+      setUserReactions({});
+      setComments([]);
+
+      // Load local cache first for instant UI response
+      const localCacheKey = `picture_interactions_${targetId}`;
+      const localSaved = localStorage.getItem(localCacheKey);
+      if (localSaved) {
+        try {
+          const parsed = JSON.parse(localSaved);
+          const norm = normalizeReactionState(parsed?.reactions, parsed?.userReactions, userId);
+          setReactionCounts(norm.counts);
+          setUserReactions(norm.userActive);
+          setComments(normalizeComments(parsed?.comments));
+        } catch (e) {}
+      }
+
+      const res = await authFetch(`/api/avatar-interactions/${encodeURIComponent(targetId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const activeUid = currentUserRef.current?.id || userId;
+        const norm = normalizeReactionState(data?.reactions, data?.userReactions, activeUid);
+        const normalizedComments = normalizeComments(data?.comments);
+
+        setReactionCounts(norm.counts);
+        setUserReactions(norm.userActive);
+        setComments(normalizedComments);
+
+        localStorage.setItem(localCacheKey, JSON.stringify({
+          reactions: norm.counts,
+          userReactions: norm.userActive,
+          comments: normalizedComments,
+        }));
+      }
+    } catch (err) {
+      console.warn('Network sync for picture interactions deferred:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle global custom events to trigger this popup
   useEffect(() => {
     const handleOpenPopup = (event: Event) => {
@@ -93,43 +263,6 @@ export const AvatarPopupOverlay: React.FC = () => {
     };
   }, []);
 
-  // Fetch reactions and comments with local fallback
-  const fetchInteractions = async (targetId: string) => {
-    try {
-      setLoading(true);
-
-      // Load local cache first for instant UI response
-      const localCacheKey = `picture_interactions_${targetId}`;
-      const localSaved = localStorage.getItem(localCacheKey);
-      if (localSaved) {
-        try {
-          const parsed = JSON.parse(localSaved);
-          if (parsed.reactions) setReactions(parsed.reactions);
-          if (parsed.comments) setComments(parsed.comments);
-        } catch (e) {}
-      }
-
-      const res = await fetch(`/api/avatar-interactions/${targetId}`);
-      if (res.ok) {
-        const data = await res.json();
-        const remoteReactions = data.reactions || [];
-        const remoteComments = data.comments || [];
-
-        setReactions(remoteReactions);
-        setComments(remoteComments);
-
-        localStorage.setItem(localCacheKey, JSON.stringify({
-          reactions: remoteReactions,
-          comments: remoteComments
-        }));
-      }
-    } catch (err) {
-      console.warn('Network sync for picture interactions deferred:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // React to the photo
   const handleReact = async (emoji: string) => {
     if (!activePayload) return;
@@ -142,44 +275,54 @@ export const AvatarPopupOverlay: React.FC = () => {
       avatar_url: null
     };
 
-    const newReaction: Reaction = {
-      userId: userObj.id || 'anon',
-      username: userObj.name || userObj.username || 'Fan Node',
-      avatarUrl: userObj.avatar_url || userObj.creative_avatar || userObj.promoter_logo || null,
-      emoji
+    const wasActive = Boolean(userReactions[emoji]);
+    const nextUserReactions: Record<string, boolean> = {
+      ...userReactions,
+      [emoji]: !wasActive,
     };
+    const nextCounts: Record<string, number> = {
+      ...reactionCounts,
+      [emoji]: Math.max(0, (reactionCounts[emoji] || 0) + (wasActive ? -1 : 1)),
+    };
+    if (nextCounts[emoji] === 0) {
+      delete nextCounts[emoji];
+    }
 
-    // Optimistic state update
-    setReactions(prev => {
-      const existingIdx = prev.findIndex(r => r.userId === userObj.id && r.emoji === emoji);
-      let nextReactions: Reaction[];
-      if (existingIdx > -1) {
-        nextReactions = prev.filter((_, idx) => idx !== existingIdx);
-      } else {
-        nextReactions = [...prev, newReaction];
-      }
-      localStorage.setItem(`picture_interactions_${targetId}`, JSON.stringify({
-        reactions: nextReactions,
-        comments
-      }));
-      return nextReactions;
-    });
+    setUserReactions(nextUserReactions);
+    setReactionCounts(nextCounts);
+
+    localStorage.setItem(`picture_interactions_${targetId}`, JSON.stringify({
+      reactions: nextCounts,
+      userReactions: nextUserReactions,
+      comments,
+    }));
 
     try {
-      const res = await fetch(`/api/avatar-interactions/${targetId}/react`, {
+      const token = await getSupabaseAccessToken();
+      if (!token) return;
+      const reactionType = EMOJI_TO_KEY[emoji] || emoji;
+      const res = await authFetch(`/api/avatar-interactions/${encodeURIComponent(targetId)}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          reactionType,
+          emoji,
           userId: userObj.id,
           username: userObj.name || userObj.username || 'Fan Node',
           avatarUrl: userObj.avatar_url || userObj.creative_avatar || userObj.promoter_logo || null,
-          emoji,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        if (data.reactions) setReactions(data.reactions);
+        const norm = normalizeReactionState(data?.reactions, data?.userReactions, userObj.id);
+        setReactionCounts(norm.counts);
+        setUserReactions(norm.userActive);
+        localStorage.setItem(`picture_interactions_${targetId}`, JSON.stringify({
+          reactions: norm.counts,
+          userReactions: norm.userActive,
+          comments: data?.comments ? normalizeComments(data.comments) : comments,
+        }));
       }
     } catch (err) {
       console.warn('Optimistic reaction saved locally:', err);
@@ -199,12 +342,16 @@ export const AvatarPopupOverlay: React.FC = () => {
       avatar_url: null
     };
 
+    const commentText = newComment.trim();
+    const authorName = userObj.name || userObj.username || 'Fan Node';
+    const authorAvatar = userObj.avatar_url || userObj.creative_avatar || userObj.promoter_logo || null;
+
     const commentObj: Comment = {
       id: `comment_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       userId: userObj.id || 'anon',
-      username: userObj.name || userObj.username || 'Fan Node',
-      avatarUrl: userObj.avatar_url || userObj.creative_avatar || userObj.promoter_logo || null,
-      text: newComment.trim(),
+      username: authorName,
+      avatarUrl: authorAvatar,
+      text: commentText,
       createdAt: new Date().toISOString()
     };
 
@@ -212,13 +359,13 @@ export const AvatarPopupOverlay: React.FC = () => {
     setComments(prev => {
       const updated = [...prev, commentObj];
       localStorage.setItem(`picture_interactions_${targetId}`, JSON.stringify({
-        reactions,
-        comments: updated
+        reactions: reactionCounts,
+        userReactions,
+        comments: updated,
       }));
       return updated;
     });
 
-    const commentText = newComment.trim();
     setNewComment('');
 
     setTimeout(() => {
@@ -227,20 +374,37 @@ export const AvatarPopupOverlay: React.FC = () => {
 
     try {
       setSubmittingComment(true);
-      const res = await fetch(`/api/avatar-interactions/${targetId}/comment`, {
+      const token = await getSupabaseAccessToken();
+      if (!token) return;
+      const res = await authFetch(`/api/avatar-interactions/${encodeURIComponent(targetId)}/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          comment: {
+            id: commentObj.id,
+            text: commentText,
+            authorName,
+            authorAvatar: authorAvatar || '',
+            authorRole: userObj.role || 'Fan',
+          },
           userId: userObj.id,
-          username: userObj.name || userObj.username || 'Fan Node',
-          avatarUrl: userObj.avatar_url || userObj.creative_avatar || userObj.promoter_logo || null,
+          username: authorName,
+          avatarUrl: authorAvatar,
           text: commentText,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        if (data.comments) setComments(data.comments);
+        if (data?.comments) {
+          const normalized = normalizeComments(data.comments);
+          setComments(normalized);
+          localStorage.setItem(`picture_interactions_${targetId}`, JSON.stringify({
+            reactions: reactionCounts,
+            userReactions,
+            comments: normalized,
+          }));
+        }
       }
     } catch (err) {
       console.warn('Comment saved locally to cache:', err);
@@ -258,17 +422,12 @@ export const AvatarPopupOverlay: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Compute aggregated reaction emojis with counts
-  const reactionCounts = reactions.reduce((acc: Record<string, number>, curr) => {
-    acc[curr.emoji] = (acc[curr.emoji] || 0) + 1;
-    return acc;
-  }, {});
+  const totalReactions = getTotalReactionCount(reactionCounts);
+  const activeReactionEntries = Object.entries(reactionCounts).filter(([, count]) => count > 0);
 
   const hasUserReacted = (emoji: string) => {
-    return (reactions || []).some(r => r.userId === currentUser?.id && r.emoji === emoji);
+    return Boolean(userReactions[emoji]);
   };
-
-  const EMOJIS = ['🔥', '🤘', '❤️', '💀', '👏', '😮', '🌟', '⚡'];
 
   const displayImg = activePayload?.imageUrl || activePayload?.avatarUrl;
   const titleText = activePayload?.title || (activePayload?.username ? `@${activePayload.username}'s Photo` : 'Expanded Photo Viewer');
@@ -427,8 +586,8 @@ export const AvatarPopupOverlay: React.FC = () => {
               <div className="p-3.5 border-b border-zinc-800 bg-zinc-900/20">
                 <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500 mb-2 flex items-center justify-between">
                   <span>EXPRESS SIGNAL REACTION</span>
-                  {reactions.length > 0 && (
-                    <span className="text-purple-400">{reactions.length} total</span>
+                  {totalReactions > 0 && (
+                    <span className="text-purple-400">{totalReactions} total</span>
                   )}
                 </div>
 
@@ -450,9 +609,9 @@ export const AvatarPopupOverlay: React.FC = () => {
                 </div>
 
                 {/* Aggregated reactions count pills */}
-                {reactions.length > 0 && (
+                {activeReactionEntries.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-zinc-800/50">
-                    {Object.entries(reactionCounts).map(([emoji, count], idx) => (
+                    {activeReactionEntries.map(([emoji, count], idx) => (
                       <div
                         key={`${emoji}-${idx}`}
                         className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-300"
@@ -488,16 +647,15 @@ export const AvatarPopupOverlay: React.FC = () => {
                       <div key={`${comment.id}-${idx}`} className="flex gap-2.5 text-xs">
                         {/* Commenter Avatar */}
                         <div className="w-7 h-7 rounded-full bg-zinc-900 border border-zinc-800 shrink-0 flex items-center justify-center overflow-hidden font-bold text-[10px] text-purple-400">
-                          {comment.avatarUrl ? (
-                            <img
-                              src={comment.avatarUrl}
-                              alt={comment.username}
-                              referrerPolicy="no-referrer"
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            (comment.username || 'U').substring(0, 2).toUpperCase()
-                          )}
+                          <img
+                            src={resolveCommentAvatar({ ...comment, avatar: comment.avatarUrl })}
+                            alt={comment.username}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).setAttribute('src', (comment.username || '').toLowerCase().includes('miguel') ? MIGUEL_DEFAULT_AVATAR : DEFAULT_PERSONAL_AVATAR);
+                            }}
+                          />
                         </div>
 
                         {/* Comment Content */}

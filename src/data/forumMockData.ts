@@ -1,235 +1,244 @@
-// Forum mock threads data for Nexus Underground Social Feed
+// Extreme Metal pre-seeded forum threads for ForumsView (automatically retired once 10+ real community posts exist)
 
 export const initialForumThreads = [
   {
     id: 't1',
     title: "Close to a World Below's album art is a masterpiece. Who is the artist?",
-    content: "The surreal apocalyptic aesthetic fits the dissonant death metal sound perfectly. Is it Andreas Marschall?",
+    content:
+      "I've spent hours staring at the vinyl sleeve of Immolation's Close to a World Below. Does anyone know who painted that apocalyptic underworld cover and what medium they used?",
     category: 'Album Art',
     genre: 'Death Metal',
-    author: 'StarGazer',
-    image: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80',
+    primaryGenre: 'Extreme Metal',
+    author: '@StarGazer',
     timeAgo: '2h ago',
     votes: 148,
     userVote: null,
     comments: [
       {
-        id: 'fc1',
-        author: 'CosmicVoid',
-        text: "It's actually painted by Andreas Marschall! Incredible choice by Immolation.",
+        id: 'c1',
+        author: '@MorbidBrush',
+        text: 'Andreas Marschall! He also did classic covers for Blind Guardian, Obituary, and Grave Digger.',
         timeAgo: '1h ago',
-        replies: [
-          { id: 'fr1', author: 'StarGazer', text: "That is awesome! No wonder it felt so familiar." }
-        ]
-      }
-    ]
+        replies: [],
+      },
+      {
+        id: 'c2',
+        author: '@RiffLord',
+        text: 'Peak late-90s / early-2000s painted death metal art. Nothing digital comes close.',
+        timeAgo: '45m ago',
+        replies: [],
+      },
+    ],
   },
   {
     id: 't2',
-    title: 'Immolation - Close to a World Below: Decades Later',
-    content: 'Can we talk about how well this legendary record has aged? The crushing riffs, the dark atmospheres, and Ross Dolan\'s tone.',
+    title: 'Immolation - Close to a World Below: Decades later',
+    content:
+      'Revisited this record front to back last night. The dissonant pinch harmonics and cavernous drums on "Father, You\'re Not a Father" still sound completely untouchable.',
     category: 'Album Reviews',
     genre: 'Death Metal',
-    author: 'OnyxRiff',
-    timeAgo: '4h ago',
-    votes: 95,
+    primaryGenre: 'Extreme Metal',
+    author: '@CavernDweller',
+    timeAgo: '5h ago',
+    votes: 112,
     userVote: null,
     comments: [
       {
-        id: 'fc2',
-        author: 'PummelingBass',
-        text: 'Totally agree. It pioneered a resurgence of high-speed technical death metal. Every track is an absolute anthem.',
+        id: 'c3',
+        author: '@VignaTone',
+        text: 'Bob Vigna\'s riff phrasing sounds like a collapsing cathedral. 10/10 record.',
         timeAgo: '3h ago',
-        replies: []
-      }
-    ]
+        replies: [],
+      },
+    ],
   },
   {
     id: 't3',
     title: 'Maryland Deathfest 2026 predictions and wishlist',
-    content: "Who are we hoping to see on the bill next year? I'm hoping for a Cryptopsy/Immolation co-headline set!",
+    content:
+      'Who are you hoping headlines Rams Head and Edison Lot next year? Hoping for some rare European OSDM reunions and early-era grind sets.',
     category: 'Show & Fest',
     genre: 'Death Metal',
-    author: 'FestivalGoon',
-    image: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '1d ago',
-    votes: 204,
+    primaryGenre: 'Extreme Metal',
+    author: '@PitVeteran',
+    timeAgo: '9h ago',
+    votes: 94,
     userVote: null,
-    comments: []
+    comments: [],
   },
   {
     id: 't4',
     title: 'What gear did Cryptopsy use on None So Vile for that extreme speed?',
-    content: "Is it standard Marshall amps or custom distortion chains? Jon Levasseur's guitar tone cut right through Flo Mounier's gravity blasts.",
+    content:
+      'Flo Mounier\'s kick triggers and Jon Levasseur\'s sweeping leads on Phobophile still break brains. Anyone have a rundown of the studio amps and cymbals used?',
     category: 'Gear & Rig',
-    genre: 'Death Metal',
-    author: 'GuitarNerd_666',
-    image: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '2d ago',
-    votes: 64,
-    userVote: null,
-    comments: []
-  },
-  {
-    id: 't5',
-    title: 'Cosmic Black Metal: Paysage d\'Hiver vs. Alcest vs. Darkspace',
-    content: "I'm fascinated by black metal that reaches into the cold starry abyss instead of just dark forests. Which act hits hardest for you?",
-    category: 'Album Reviews',
-    genre: 'Black Metal',
-    author: 'AstraVoid',
-    image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '5h ago',
-    votes: 78,
+    genre: 'Brutal Death Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@BlastBeatTech',
+    timeAgo: '12h ago',
+    votes: 129,
     userVote: null,
     comments: [
       {
-        id: 'fc3',
-        author: 'SpectralGlow',
-        text: 'Darkspace is the absolute pinnacle of cosmic dread. Paysage d\'Hiver is more like blizzard isolation.',
-        timeAgo: '3h ago',
-        replies: []
-      }
-    ]
+        id: 'c4',
+        author: '@SlamVault',
+        text: 'Ampeg VH-140C solid state tightness is the secret weapon of 90s BDM.',
+        timeAgo: '6h ago',
+        replies: [],
+      },
+    ],
+  },
+  {
+    id: 't5',
+    title: "Cosmic Black Metal: Paysage d'Hiver vs. Alcest vs. Darkspace",
+    content:
+      'Looking for freezing, hypnotic atmospheric black metal records that feel like drifting through deep space or buried under blizzard static.',
+    category: 'Recommendations',
+    genre: 'Black Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@AstraVoid',
+    timeAgo: '14h ago',
+    votes: 87,
+    userVote: null,
+    comments: [],
   },
   {
     id: 't6',
     title: 'The vintage 4-track raw tape sound of early Norwegian Black Metal',
-    content: 'Is there any modern plug-in or analog deck that actually replicates that Transilvanian Hunger cassette tape saturation?',
+    content:
+      'Why do Portastudio cassette recordings capture more cold hostility than modern 24-bit quantized mixes? Let\'s break down ribbon saturation and room mics.',
     category: 'Gear & Rig',
     genre: 'Black Metal',
-    author: 'GravenSoul',
-    timeAgo: '1d ago',
-    votes: 42,
+    primaryGenre: 'Extreme Metal',
+    author: '@FrostBite',
+    timeAgo: '18h ago',
+    votes: 76,
     userVote: null,
-    comments: []
+    comments: [],
   },
   {
     id: 't7',
     title: 'Is Electric Wizard\'s "Dopethrone" the heaviest record ever recorded?',
-    content: 'That guitar tone sounds like molten sludge. I\'ve heard rumors they used maxed-out Boss FZ-2 Hyper Fuzz pedals into vintage Sound City heads.',
-    category: 'Gear & Rig',
+    content:
+      'Boss FZ-2 Hyper Fuzz pushed into vintage Sound City heads in B standard. When Funeralopolis drops, the room physically shakes.',
+    category: 'Album Reviews',
     genre: 'Doom/Sludge',
-    author: 'SludgeWorship',
-    image: 'https://images.unsplash.com/photo-1526478806334-5fd488fcaabc?w=600&auto=format&fit=crop&q=80',
-    timeAgo: '3h ago',
-    votes: 115,
+    primaryGenre: 'Rock/Heavy Metal',
+    author: '@SludgeWorship',
+    timeAgo: '1d ago',
+    votes: 105,
     userVote: null,
-    comments: [
-      {
-        id: 'fc4',
-        author: 'FuzzLord',
-        text: 'Yes! It is indeed the FZ-2 on Mode II (scooped boost) pushing those power tubes into pure obliteration.',
-        timeAgo: '1h ago',
-        replies: []
-      }
-    ]
+    comments: [],
   },
   {
     id: 't8',
-    title: 'Bell Witch live is a colossal, crushing, slow-motion experience',
-    content: 'Just saw them perform Mirror Reaper in its entirety last night. Only two musicians on stage, but filling the entire venue with sonic weight.',
+    title: 'Suffocation tearing through Effigy of the Forgotten live — unmatched tight picking',
+    content:
+      'Watch that right-hand palm muting precision live on stage. Decades later nobody matches the sheer slam and East Coast brutality of Effigy.',
     category: 'Show & Fest',
-    genre: 'Doom/Sludge',
-    author: 'MournfulChord',
-    timeAgo: '2d ago',
-    votes: 93,
+    genre: 'Brutal Death Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@CatacombPit',
+    youtubeId: '_qmXMVIaCBc',
+    timeAgo: '1d ago',
+    votes: 92,
     userVote: null,
-    comments: []
+    comments: [
+      {
+        id: 'c8',
+        author: '@GraveRiff',
+        text: 'Terrance Hobbs riffs still dismantle every room they play.',
+        timeAgo: '16h ago',
+        replies: [],
+      },
+    ],
   },
   {
     id: 't9',
-    title: 'Knocked Loose & Gel tour is absolutely unhinged live',
-    content: 'Saw the opening night in Chicago. The crowd response during the breakdown in "Deep in the Willow" nearly demolished the floorboards.',
+    title: 'Last night in the basement pit — zero barricade grindcore & death metal chaos',
+    content:
+      'Packed shoulder to shoulder under red stage lights with walls of feedback and 90-second blast tracks from start to finish. Underground small-room gigs never miss.',
     category: 'Show & Fest',
-    genre: 'Hardcore Punk',
-    author: 'PitWarrior_99',
-    timeAgo: '1h ago',
-    votes: 210,
+    genre: 'Grindcore',
+    primaryGenre: 'Extreme Metal',
+    author: '@GrindVault',
+    image: '/assets/forum/underground_pit_show.jpg',
+    timeAgo: '2d ago',
+    votes: 84,
     userVote: null,
-    comments: [
-      {
-        id: 'fc5',
-        author: 'FastTempo',
-        text: 'Gel was incredible too! Best modern hardcore band by a mile. Raw energy.',
-        timeAgo: '30m ago',
-        replies: []
-      }
-    ]
+    comments: [],
   },
   {
     id: 't10',
-    title: 'D-Beat drum patterns: Favorite crust punk bands keeping it raw?',
-    content: 'Discharge created a monster. Who is doing D-beat best today? Framtid? Physique? Destruct?',
-    category: 'Recommendations',
-    genre: 'Hardcore Punk',
-    author: 'CrustyCactus',
-    timeAgo: '3d ago',
-    votes: 56,
+    title: "Napalm Death's Scum vs. Terrorizer's World Downfall: purest grindcore blast blueprint",
+    content:
+      'Both records rewired extreme drumming and chainsaw punk speed forever. Spinning Scum front to back again—which side crushes harder?',
+    category: 'Album Reviews',
+    genre: 'Grindcore',
+    primaryGenre: 'Extreme Metal',
+    author: '@BlastFurnace',
+    youtubeId: 'T1guyOBl880',
+    timeAgo: '2d ago',
+    votes: 78,
     userVote: null,
-    comments: []
+    comments: [],
   },
   {
     id: 't11',
-    title: 'The ultimate shoegaze guitar: Jazzmaster vs. Jaguar for tremolo arm glide',
-    content: 'Is there a consensus on which body shape/bridge works best for that classic Kevin Shields reverse-reverb glide guitar technique?',
+    title: 'Basement rig check: Peavey 5150 into a beat-up 4x12 + Boss HM-2 chainsaw grind',
+    content:
+      'Dimed all knobs on the Japanese HM-2 straight into the lead channel on concrete. Nothing beats a loud tube head pushing real air during rehearsal.',
     category: 'Gear & Rig',
-    genre: 'Post-Rock / Shoegaze',
-    author: 'ReverbDrenched',
-    timeAgo: '6h ago',
-    votes: 84,
+    genre: 'Death Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@ChainsawBuzz',
+    image: '/assets/forum/death_metal_rig.jpg',
+    timeAgo: '3d ago',
+    votes: 73,
     userVote: null,
-    comments: [
-      {
-        id: 'fc6',
-        author: 'GlideDreamer',
-        text: 'Jazzmaster all day! The longer scale length gives a slightly different tension that keeps lower tunings stable while gliding.',
-        timeAgo: '4h ago',
-        replies: []
-      }
-    ]
+    comments: [],
   },
   {
     id: 't12',
-    title: 'This Will Destroy You - Self Titled: 15 year anniversary appreciation',
-    content: 'The transition from "The World is Our ___" into "The Villa" still gives me goosebumps every single time.',
+    title: 'First-press Black Metal vinyl & xeroxed cassette demos on the table tonight',
+    content:
+      'Dug out the early 90s tape dubs, rough monochrome J-cards, and scuffed gatefold pressings. Physical underground formats hold a different kind of ritual weight.',
     category: 'Album Art',
-    genre: 'Post-Rock / Shoegaze',
-    author: 'DelayRepeat',
-    timeAgo: '1d ago',
-    votes: 119,
+    genre: 'Black Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@NocturnalWax',
+    image: '/assets/forum/extreme_metal_vinyl_tapes.jpg',
+    timeAgo: '3d ago',
+    votes: 69,
     userVote: null,
-    comments: []
+    comments: [],
   },
   {
     id: 't13',
-    title: 'Mortiis dungeon synth - classic medieval ambient masterpieces',
-    content: 'For fans of classic extreme metal side-projects, Mortiis is the absolute king of dungeon synth. Era 1 records are magical.',
-    category: 'Album Reviews',
-    genre: 'Synth & Ambient',
-    author: 'ModularChaos',
-    timeAgo: '12h ago',
-    votes: 132,
+    title: "Carcass 'Symphonies of Sickness' vs. Repulsion 'Horrified': filthiest goregrind essential?",
+    content:
+      'Looking for nasty, rotting mid-tempo groove mixed with blisteringly fast D-beat/grind blasts. Drop your go-to goregrind & deathgrind recs.',
+    category: 'Recommendations',
+    genre: 'Goregrind',
+    primaryGenre: 'Extreme Metal',
+    author: '@MorgueStench',
+    timeAgo: '4d ago',
+    votes: 62,
     userVote: null,
-    comments: [
-      {
-        id: 'fc7',
-        author: 'Oscillator_7',
-        text: 'Absolutely! The Eurorack modular structures are incredibly well-paced. Perfect late night synth soundscape.',
-        timeAgo: '10h ago',
-        replies: []
-      }
-    ]
+    comments: [],
   },
   {
     id: 't14',
-    title: 'Dark Ambient starter pack: Where to begin after Lustmord?',
-    content: "I love the cavernous, dread-inducing soundscapes. Which labels or artists should I dig into next? Cryo Chamber? Cold Meat Industry?",
+    title: 'Raw 2nd-wave Black Metal tremolos: Darkthrone, Gorgoroth & Bathory essentials',
+    content:
+      'Nothing matches ice-cold minor tremolo picking over blown-out crash cymbals. What tracks are mandatory for a late-night black metal rotation?',
     category: 'Recommendations',
-    genre: 'Synth & Ambient',
-    author: 'DreadDrone',
-    timeAgo: '2d ago',
-    votes: 61,
+    genre: 'Black Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@WinterPyre',
+    timeAgo: '4d ago',
+    votes: 65,
     userVote: null,
-    comments: []
-  }
+    comments: [],
+  },
 ];

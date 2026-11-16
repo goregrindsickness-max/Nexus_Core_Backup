@@ -6,19 +6,24 @@ interface SocialThemeShellProps {
   handleDoubleTapToggle?: (e: React.MouseEvent<HTMLDivElement>) => void;
   dataTheme: string;
   gridStyle: React.CSSProperties;
+  activeTab?: string;
 }
 
 export const SocialThemeShell: React.FC<SocialThemeShellProps> = ({
   children,
   containerRef,
   dataTheme,
-  gridStyle
+  gridStyle,
+  activeTab
 }) => {
+  const isMessagesTab = activeTab === 'messages';
   return (
       <div 
         ref={containerRef}
         data-theme={dataTheme}
-        className="min-h-screen w-full bg-[#030303] text-zinc-200 font-sans overflow-x-clip pl-0 pb-6 sm:pb-8"
+        className={`w-full bg-[#030303] text-zinc-200 font-sans overflow-x-clip pl-0 ${
+          isMessagesTab ? 'h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden pb-0' : 'min-h-[100dvh] pb-[max(1.5rem,env(safe-area-inset-bottom))]'
+        }`}
         style={gridStyle}
       >
       <style>{`

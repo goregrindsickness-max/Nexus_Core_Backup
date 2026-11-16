@@ -1,8 +1,16 @@
 import { normalizeRegisteredWorkspaces } from '../types';
-import { executeWithSchemaResilience } from './schemaResilienceService';
+import { executeWithSchemaResilience, registerSchemaSanitizers } from './schemaResilienceService';
 import { isMiguelNameOrProfile } from '../components/social/utils/profileUtils';
-import { isCommunityBandRecord } from '../lib/seedBandsData';
+import { isCommunityBandRecord } from '../lib/communityBands';
 import { isPromoterAvatarUrl, isPromoterCoverUrl, DEFAULT_PERSONAL_AVATAR, DEFAULT_PERSONAL_COVER } from '../utils/bandProfileUtils';
+import { cacheProfileImage, cacheProfileMetadata, hydrateProfileWithCache } from './profileImageCacheService';
+import {
+  normalizeBirthdayMonth,
+  normalizeBirthdayDay,
+  loadBirthdayPrefsFromStorage,
+  saveBirthdayPrefsToStorage,
+  resolveBirthdayUserKey,
+} from '../utils/birthdayUtils';
 
 export const PROFILES_COLUMNS = [
   'id',
@@ -45,6 +53,9 @@ export const PROFILES_COLUMNS = [
   'top_song_url',
   'update_ticker',
   'photo_folders',
+  'birthday_month',
+  'birthday_day',
+  'show_birthday_shoutout',
 ];
 
 /**
@@ -99,6 +110,36 @@ export function normalizeLoadedProfile(data: any): any {
     normalized.rosterTicker = tickerVal;
   }
 
+  // Initial birthday hydration (re-verified after custom fields/handle resolution below)
+  const initialStoredBdayPrefs = loadBirthdayPrefsFromStorage(normalized);
+  const rawBdayMonth =
+    data.birthday_month ??
+    data.user_metadata?.birthday_month ??
+    data.promoter_metadata?.birthday_month ??
+    data.band_metadata?.birthday_month ??
+    data.creative_metadata?.birthday_month ??
+    data.label_metadata?.birthday_month ??
+    initialStoredBdayPrefs.birthday_month;
+  const normBdayMonth = normalizeBirthdayMonth(rawBdayMonth);
+  const rawBdayDay =
+    data.birthday_day ??
+    data.user_metadata?.birthday_day ??
+    data.promoter_metadata?.birthday_day ??
+    data.band_metadata?.birthday_day ??
+    data.creative_metadata?.birthday_day ??
+    data.label_metadata?.birthday_day ??
+    initialStoredBdayPrefs.birthday_day;
+  const normBdayDay = normalizeBirthdayDay(rawBdayDay, normBdayMonth);
+  normalized.birthday_month = normBdayMonth;
+  normalized.birthday_day = normBdayDay;
+  if (typeof data.show_birthday_shoutout === 'boolean') {
+    normalized.show_birthday_shoutout = data.show_birthday_shoutout;
+  } else if (typeof data.user_metadata?.show_birthday_shoutout === 'boolean') {
+    normalized.show_birthday_shoutout = data.user_metadata.show_birthday_shoutout;
+  } else {
+    normalized.show_birthday_shoutout = initialStoredBdayPrefs.show_birthday_shoutout;
+  }
+
   // Normalize genre_tags and genres for consistent micro-genre arrays from top-level columns
   const rawGenreSource = data.genre_tags || data.genres;
   if (rawGenreSource) {
@@ -138,18 +179,38 @@ export function normalizeLoadedProfile(data: any): any {
     }
   }
 
-  // Ensure promoter_metadata is synthesized and fully populated ONLY for actual promoter profiles or Miguel
+  // Ensure promoter_metadata is synthesized and fully populated ONLY for verified promoter profiles or Miguel
   const isOwnerMiguel = isMiguelNameOrProfile(normalized);
+  const rawPromoterMeta = normalized.promoter_metadata && typeof normalized.promoter_metadata === 'object' ? normalized.promoter_metadata : null;
+  const cleanNonNexusLive = (val: any): string => {
+    if (!val || typeof val !== 'string') return '';
+    const trimmed = val.trim();
+    if (!trimmed) return '';
+    if (!isOwnerMiguel && trimmed.toLowerCase().includes('nexus live')) return '';
+    return trimmed;
+  };
+  const pmBrand = cleanNonNexusLive(rawPromoterMeta?.brand_name || rawPromoterMeta?.agency_name || rawPromoterMeta?.entity_name || rawPromoterMeta?.business_name);
+  const topPromoterName = cleanNonNexusLive(normalized.promoter_agency || normalized.promoter_brand || normalized.promoter_name);
+  const isFanAccountType = normalized.account_type === 'fan' || normalized.account_type === 'fan_only';
+  const hasIndependentPromoterId = Boolean(
+    normalized.promoter_id &&
+    normalized.promoter_id !== normalized.id &&
+    (isOwnerMiguel || !String(normalized.promoter_name || normalized.promoter_agency || rawPromoterMeta?.brand_name || '').toLowerCase().includes('nexus live'))
+  );
+  const hasPromoterWsEntry = Array.isArray(normalized.registered_workspaces) && normalized.registered_workspaces.some((w: any) => {
+    const type = typeof w === 'string' ? w : (w?.type || w?.key || '');
+    return String(type).toLowerCase() === 'promoter';
+  });
+
   const isPromoterUser = Boolean(
     isOwnerMiguel ||
     normalized.account_type === 'promoter' ||
     normalized.active_workspace === 'promoter' ||
-    (normalized.promoter_id && normalized.promoter_id !== normalized.id) ||
-    (Array.isArray(normalized.registered_workspaces) && normalized.registered_workspaces.some((w: any) => {
-      const type = typeof w === 'string' ? w : (w?.type || w?.key || '');
-      return String(type).toLowerCase() === 'promoter';
-    })) ||
-    (normalized.promoter_metadata && (normalized.promoter_metadata.is_registered === true || normalized.promoter_metadata.brand_name))
+    hasIndependentPromoterId ||
+    Boolean(pmBrand) ||
+    Boolean(topPromoterName) ||
+    (rawPromoterMeta?.is_registered === true && !isFanAccountType) ||
+    (hasPromoterWsEntry && !isFanAccountType && (Boolean(pmBrand) || Boolean(topPromoterName) || rawPromoterMeta?.is_registered === true))
   );
 
   if (isPromoterUser) {
@@ -157,16 +218,16 @@ export function normalizeLoadedProfile(data: any): any {
       normalized.promoter_metadata = {};
     }
     const pm = normalized.promoter_metadata;
-    pm.brand_name = pm.brand_name || pm.agency_name || pm.entity_name || normalized.promoter_agency || normalized.promoter_brand || normalized.promoter_name || normalized.entity_name || normalized.corporate_name || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations');
-    pm.agency_name = pm.agency_name || pm.brand_name;
-    pm.business_name = pm.business_name || pm.brand_name || pm.agency_name;
+    pm.brand_name = cleanNonNexusLive(pm.brand_name) || cleanNonNexusLive(pm.agency_name) || cleanNonNexusLive(pm.entity_name) || topPromoterName || (isOwnerMiguel ? 'Nexus Live Productions' : 'Promoter Operations');
+    pm.agency_name = cleanNonNexusLive(pm.agency_name) || pm.brand_name;
+    pm.business_name = cleanNonNexusLive(pm.business_name) || pm.brand_name || pm.agency_name;
     pm.city = pm.city || normalized.promoter_city || normalized.city;
     pm.state = pm.state || normalized.promoter_state || normalized.state_province || normalized.state;
     pm.logo_url = pm.logo_url || pm.avatar_url || normalized.promoter_logo || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601' : '');
     pm.banner_url = pm.banner_url || pm.cover_url || normalized.promoter_cover_image || (isOwnerMiguel ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635' : '');
     pm.bio = pm.bio || normalized.promoter_bio || (isOwnerMiguel ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.');
 
-    // Backfill namespaced promoter properties so promoter components never fall back to empty or stale local storage
+    // Backfill namespaced promoter properties ONLY for verified promoter users
     normalized.promoter_id = normalized.promoter_id || pm.id || (normalized.id && normalized.id !== 'guest' ? normalized.id : undefined);
     normalized.promoter_name = pm.brand_name;
     normalized.promoter_agency = pm.agency_name;
@@ -178,12 +239,22 @@ export function normalizeLoadedProfile(data: any): any {
     normalized.promoter_state = pm.state || normalized.promoter_state;
     normalized.promoter_booking_email = pm.booking_email || normalized.promoter_booking_email || normalized.email;
   } else {
-    // Non-promoter: do not synthesize promoter identity or badges
+    // Non-promoter / unconfirmed / polluted fan row: do not retain or synthesize promoter identity
     delete normalized.promoter_agency;
     delete normalized.promoter_brand;
     delete normalized.promoter_name;
-    if (!normalized.promoter_id || normalized.promoter_id === normalized.id) {
+    delete normalized.promoter_logo;
+    delete normalized.promoter_cover_image;
+    delete normalized.promoter_bio;
+    delete normalized.promoter_metadata;
+    if (!normalized.promoter_id || normalized.promoter_id === normalized.id || !isOwnerMiguel) {
       delete normalized.promoter_id;
+    }
+    if (Array.isArray(normalized.registered_workspaces)) {
+      normalized.registered_workspaces = normalized.registered_workspaces.filter((w: any) => {
+        const type = typeof w === 'string' ? w : (w?.type || w?.key || '');
+        return String(type).toLowerCase().trim() !== 'promoter';
+      });
     }
   }
 
@@ -232,6 +303,25 @@ export function normalizeLoadedProfile(data: any): any {
         normalized[key] = metadataVal;
       }
     }
+  }
+
+  // Re-verify birthday fields now that console_handle and metadata fields are populated
+  if (normalized.birthday_month === null || normalized.birthday_day === null) {
+    const postHandleStoredBday = loadBirthdayPrefsFromStorage(normalized);
+    if (postHandleStoredBday.birthday_month !== null && postHandleStoredBday.birthday_day !== null) {
+      normalized.birthday_month = postHandleStoredBday.birthday_month;
+      normalized.birthday_day = postHandleStoredBday.birthday_day;
+      if (typeof data.show_birthday_shoutout !== 'boolean') {
+        normalized.show_birthday_shoutout = postHandleStoredBday.show_birthday_shoutout;
+      }
+    }
+  } else {
+    // If database returned valid birthday_month & birthday_day, mirror to local storage for instant access
+    saveBirthdayPrefsToStorage(normalized, {
+      birthday_month: normalized.birthday_month,
+      birthday_day: normalized.birthday_day,
+      show_birthday_shoutout: normalized.show_birthday_shoutout !== false,
+    });
   }
 
   // Explicit top-level creative resolution
@@ -307,6 +397,8 @@ export function sanitizeProfilePayload(rawPayload: any): any {
   for (const col of PROFILES_COLUMNS) {
     if (rawPayload[col] !== undefined && rawPayload[col] !== null) {
       cleanProfilePayload[col] = rawPayload[col];
+    } else if ((col === 'birthday_month' || col === 'birthday_day') && rawPayload[col] === null) {
+      cleanProfilePayload[col] = null;
     }
   }
 
@@ -671,8 +763,20 @@ export function extractGlobalProfilePayload(rawPayload: any, userId?: string): R
     payload.update_ticker = rawPayload.update_ticker || rawPayload.rosterTicker;
   }
 
+  if (rawPayload.birthday_month !== undefined) {
+    payload.birthday_month = normalizeBirthdayMonth(rawPayload.birthday_month);
+  }
+  if (rawPayload.birthday_day !== undefined) {
+    payload.birthday_day = normalizeBirthdayDay(rawPayload.birthday_day, rawPayload.birthday_month);
+  }
+  if (typeof rawPayload.show_birthday_shoutout === 'boolean') {
+    payload.show_birthday_shoutout = rawPayload.show_birthday_shoutout;
+  }
+
   return sanitizeProfileUpsertPayload(payload);
 }
+
+registerSchemaSanitizers({ sanitizeProfilePayload });
 
 /**
  * Sanitizes a profile upsert payload (object or array of objects) by filtering keys against
@@ -933,8 +1037,54 @@ export async function executeSanitizedProfileUpsert(
     sanitizedPayload?.name ||
     (Array.isArray(sanitizedPayload) ? sanitizedPayload[0]?.name : null);
 
-  if (userId && (newAvatarUrl || newBannerUrl) && supabaseClient) {
-    autoArchiveProfileAssets(supabaseClient, userId, newAvatarUrl, newBannerUrl, userProfileName).catch(() => {});
+  if (userId && sanitizedPayload) {
+    const payloadToCache = Array.isArray(sanitizedPayload) ? sanitizedPayload[0] : sanitizedPayload;
+    if (payloadToCache) {
+      if (
+        payloadToCache.birthday_month !== undefined ||
+        payloadToCache.birthday_day !== undefined ||
+        payloadToCache.show_birthday_shoutout !== undefined
+      ) {
+        saveBirthdayPrefsToStorage(
+          { ...rawPayload, ...payloadToCache, id: userId },
+          {
+            birthday_month: payloadToCache.birthday_month,
+            birthday_day: payloadToCache.birthday_day,
+            show_birthday_shoutout: payloadToCache.show_birthday_shoutout,
+          }
+        );
+        if (supabaseClient?.auth?.updateUser) {
+          supabaseClient.auth
+            .updateUser({
+              data: {
+                birthday_month: payloadToCache.birthday_month ?? null,
+                birthday_day: payloadToCache.birthday_day ?? null,
+                show_birthday_shoutout: payloadToCache.show_birthday_shoutout !== false,
+              },
+            })
+            .catch(() => {});
+        }
+      }
+      cacheProfileMetadata(userId, payloadToCache).catch(() => {});
+      const handle = payloadToCache.console_handle || payloadToCache.username;
+      if (handle) {
+        cacheProfileMetadata(handle, payloadToCache).catch(() => {});
+      }
+    }
+  }
+
+  if (userId && (newAvatarUrl || newBannerUrl)) {
+    if (newAvatarUrl) {
+      cacheProfileImage(newAvatarUrl, newAvatarUrl).catch(() => {});
+      cacheProfileImage(`profile_avatar_${userId}`, newAvatarUrl).catch(() => {});
+    }
+    if (newBannerUrl) {
+      cacheProfileImage(newBannerUrl, newBannerUrl).catch(() => {});
+      cacheProfileImage(`profile_banner_${userId}`, newBannerUrl).catch(() => {});
+    }
+    if (supabaseClient) {
+      autoArchiveProfileAssets(supabaseClient, userId, newAvatarUrl, newBannerUrl, userProfileName).catch(() => {});
+    }
   }
 
   // If updating a single user profile record, attempt targeted UPDATE first to protect un-passed fields

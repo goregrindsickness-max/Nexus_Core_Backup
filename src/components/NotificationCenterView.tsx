@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { getSupabase } from '../supabase';
 import { DbNotification, UserProfile } from '../types';
 import { pushManager } from '../lib/pushNotifications';
+import { syncGlobalUnreadBadge, testAppBadge } from '../utils/appBadgeService';
 import { 
   Bell, 
   X, 
@@ -156,47 +157,48 @@ export default function NotificationCenterView({
             if (!matchesUser) return;
           }
 
+          let wasDuplicate = false;
           setNotifications(prev => {
             const exists = (prev || []).some(n => n.id === newNotif.id);
-            if (exists) return prev;
+            if (exists) {
+              wasDuplicate = true;
+              return prev;
+            }
 
-            // Deep duplicate check by message and category within 5 seconds window
+            // Deep duplicate check by message and category within 15 seconds window
             const newNotifTime = new Date(newNotif.created_at || Date.now()).getTime();
             const isDuplicate = (prev || []).some(n => 
               n.category === newNotif.category && 
               n.message === newNotif.message && 
-              Math.abs(new Date(n.created_at || Date.now()).getTime() - newNotifTime) < 5000
+              Math.abs(new Date(n.created_at || Date.now()).getTime() - newNotifTime) < 15000
             );
-            if (isDuplicate) return prev;
+            if (isDuplicate) {
+              wasDuplicate = true;
+              return prev;
+            }
 
             const updated = [newNotif, ...prev];
             localStorage.setItem('nexus_core_notifications', JSON.stringify(updated));
             return updated;
           });
 
-          // Play incoming notification chime sound
-          playBeep(880, 'triangle', 0.15);
+          if (wasDuplicate) return;
 
-          // Dispatch OS / Browser Push Notification
-          pushManager.notify({
-            title: `⚡ Nexus Alert [${newNotif.category}]`,
-            body: newNotif.message,
-            category: newNotif.category?.toLowerCase() || 'system',
-            priority: newNotif.requires_push ? 'P0' : 'P1',
-            targetTab: 'social',
-            data: {
-              notificationId: newNotif.id,
-              category: newNotif.category,
-            },
-          });
-
+          // Only dispatch OS / Browser Push Notification & audio chime for high-priority alerts that explicitly require push
           if (newNotif.requires_push) {
+            playBeep(880, 'triangle', 0.15);
+            pushManager.notify({
+              title: `⚡ Nexus Alert [${newNotif.category}]`,
+              body: newNotif.message,
+              category: newNotif.category?.toLowerCase() || 'system',
+              priority: 'P0',
+              targetTab: 'social',
+              data: {
+                notificationId: newNotif.id,
+                category: newNotif.category,
+              },
+            });
             setLiveBanner(newNotif);
-          } else {
-            const currentTrigger = triggerNotificationRef.current;
-            if (currentTrigger) {
-              currentTrigger(`New Alert: ${newNotif.message}`);
-            }
           }
         }
       )
@@ -217,9 +219,6 @@ export default function NotificationCenterView({
     playBeep(440, 'sine', 0.05);
     onMarkAsRead(notif.id);
     onNavigateToInventory();
-    if (triggerNotification) {
-      triggerNotification("Routing to Inventory discrepancy sheets...");
-    }
   };
 
   // 100% foolproof display-level deduplication layer
@@ -255,13 +254,17 @@ export default function NotificationCenterView({
     return deduplicatedNotifications.filter(n => !n.is_read).length;
   }, [deduplicatedNotifications]);
 
+  useEffect(() => {
+    syncGlobalUnreadBadge();
+  }, [unreadCount]);
+
   // Handle Mark All as Read
   const handleMarkAllAsRead = () => {
     playBeep(520, 'sine', 0.1);
     deduplicatedNotifications.forEach(n => {
       if (!n.is_read) onMarkAsRead(n.id);
     });
-    if (triggerNotification) triggerNotification("All alerts logged as read.");
+    setTimeout(syncGlobalUnreadBadge, 50);
   };
 
   // Handle clear/delete all
@@ -270,7 +273,7 @@ export default function NotificationCenterView({
     if (window.confirm("Are you sure you want to clear all notifications from local list?")) {
       setNotifications([]);
       localStorage.setItem('nexus_core_notifications', JSON.stringify([]));
-      if (triggerNotification) triggerNotification("Cleared notification console.");
+      setTimeout(syncGlobalUnreadBadge, 50);
     }
   };
 
@@ -752,7 +755,6 @@ export default function NotificationCenterView({
                                       onClick={() => {
                                         playBeep(800, 'sine', 0.05);
                                         onMarkAsRead(notif.id);
-                                        if (triggerNotification) triggerNotification("Logged notification as read.");
                                       }}
                                       className="text-[10px] bg-zinc-800/80 hover:bg-zinc-800 text-zinc-300 hover:text-white px-3 py-1.5 rounded-lg uppercase transition-all flex items-center gap-1 cursor-pointer border border-zinc-700"
                                     >

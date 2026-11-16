@@ -15,11 +15,7 @@ import {
   Clock,
   Flame,
   ShieldAlert,
-  Megaphone,
-  Radio,
-  Volume2,
-  Zap,
-  Check
+  Megaphone
 } from 'lucide-react';
 import { pushManager, PushPermissionStatus, isIframeEnvironment } from '../../../lib/pushNotifications';
 
@@ -56,8 +52,6 @@ export const RightNotificationsDrawer: React.FC<RightNotificationsDrawerProps> =
 }) => {
   const [permissionStatus, setPermissionStatus] = useState<PushPermissionStatus>('default');
   const [isRequesting, setIsRequesting] = useState(false);
-  const [isTestingPush, setIsTestingPush] = useState(false);
-  const [testPushSuccess, setTestPushSuccess] = useState(false);
   const inIframe = isIframeEnvironment();
 
   useEffect(() => {
@@ -120,21 +114,6 @@ export const RightNotificationsDrawer: React.FC<RightNotificationsDrawerProps> =
     }
   };
 
-  const handleTestNotification = async () => {
-    setIsTestingPush(true);
-    try {
-      await pushManager.sendTestAlert('routing_beacon');
-      const updated = await pushManager.refreshPermissionStatus();
-      setPermissionStatus(updated);
-      setTestPushSuccess(true);
-      setTimeout(() => setTestPushSuccess(false), 2500);
-    } catch (err) {
-      console.warn('Test push notification failed:', err);
-    } finally {
-      setIsTestingPush(false);
-    }
-  };
-
   if (!rightDrawerOpen) return null;
 
   const filteredNotifs = notifications.filter((n) => {
@@ -192,13 +171,13 @@ export const RightNotificationsDrawer: React.FC<RightNotificationsDrawerProps> =
         onClick={() => setRightDrawerOpen(false)}
       />
 
-      <div className="relative w-[85%] sm:w-96 max-w-sm bg-[#050608] border-l border-zinc-900 h-full flex flex-col animate-in slide-in-from-right duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] bg-[radial-gradient(#1c1d24_1px,transparent_1px)] [background-size:16px_16px]">
+      <div className="relative w-[85%] sm:w-96 max-w-sm bg-[#050608] border-l border-zinc-900 h-[100dvh] max-h-[100dvh] pb-[env(safe-area-inset-bottom)] flex flex-col animate-in slide-in-from-right duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] bg-[radial-gradient(#1c1d24_1px,transparent_1px)] [background-size:16px_16px]">
         {/* Top Right Aura Glow */}
         <div className="absolute top-0 right-0 w-72 h-72 bg-rose-950/20 rounded-full blur-[90px] pointer-events-none z-0" />
         <div className="absolute bottom-10 left-0 w-60 h-60 bg-purple-950/15 rounded-full blur-[80px] pointer-events-none z-0" />
 
         {/* Drawer Header */}
-        <div className="relative p-4 border-b border-zinc-900/80 flex justify-between items-center bg-[#08090d]/90 backdrop-blur z-10">
+        <div className="relative p-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-zinc-900/80 flex justify-between items-center bg-[#08090d]/90 backdrop-blur z-10">
           <div className="flex flex-col">
             <h2 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
               <Bell className="w-4 h-4 text-rose-500 animate-pulse" /> Alerts & Notices
@@ -220,58 +199,16 @@ export const RightNotificationsDrawer: React.FC<RightNotificationsDrawerProps> =
         {/* Filter Bar & Quick Actions */}
         <div className="p-3 border-b border-zinc-900/60 bg-[#06070a]/80 backdrop-blur z-10 flex flex-col gap-2.5">
           {/* Allow Device Notifications Button */}
-          {permissionStatus !== 'granted' ? (
-            <div className="flex flex-col gap-1.5">
-              <button
-                id="allow-device-notifications-btn"
-                onClick={handleAllowNotifications}
-                disabled={isRequesting}
-                className="w-full py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-[0.99] text-white font-mono font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer border border-rose-500/30 disabled:opacity-60"
-              >
-                <Bell className="w-3.5 h-3.5 fill-current" />
-                {isRequesting ? 'Authorizing...' : 'Allow Device Notifications'}
-              </button>
-              <div className="flex items-center justify-between px-1 text-[11px] font-mono text-zinc-400">
-                <span>Preview notification engine:</span>
-                <button
-                  id="test-device-notification-btn"
-                  onClick={handleTestNotification}
-                  disabled={isTestingPush}
-                  className="text-[10px] text-zinc-400 hover:text-rose-400 underline cursor-pointer"
-                >
-                  {testPushSuccess ? '✓ Alert Sent' : isTestingPush ? 'Sending...' : 'Test Alert Now'}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="w-full py-1.5 px-3 rounded-lg bg-zinc-900/80 border border-emerald-500/30 flex items-center justify-between text-xs font-mono text-zinc-300">
-              <span className="flex items-center gap-1.5 text-emerald-400 font-bold text-[11px]">
-                <Check className="w-3.5 h-3.5" /> Device Notifications Active
-              </span>
-              <button
-                id="test-device-notification-btn"
-                onClick={handleTestNotification}
-                disabled={isTestingPush}
-                className={`text-[10px] px-2.5 py-0.5 rounded transition-all font-mono font-bold cursor-pointer flex items-center gap-1 ${
-                  testPushSuccess
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm'
-                    : isTestingPush
-                    ? 'bg-zinc-800 text-zinc-400 cursor-wait'
-                    : 'text-zinc-300 hover:text-white bg-zinc-800/90 hover:bg-zinc-700/90 border border-zinc-700/70'
-                }`}
-                title="Send test alert to device status bar"
-              >
-                {testPushSuccess ? (
-                  <>
-                    <Check className="w-2.5 h-2.5" /> Sent!
-                  </>
-                ) : isTestingPush ? (
-                  'Sending...'
-                ) : (
-                  'Test Alert'
-                )}
-              </button>
-            </div>
+          {permissionStatus !== 'granted' && (
+            <button
+              id="allow-device-notifications-btn"
+              onClick={handleAllowNotifications}
+              disabled={isRequesting}
+              className="w-full py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-[0.99] text-white font-mono font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer border border-rose-500/30 disabled:opacity-60"
+            >
+              <Bell className="w-3.5 h-3.5 fill-current" />
+              {isRequesting ? 'Authorizing...' : 'Allow Device Notifications'}
+            </button>
           )}
 
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">

@@ -5,10 +5,14 @@ import { markChatAsRead, handleMarkAllAsRead } from '../../lib/chat';
 import { extractUUID } from '../../utils/socialFeedUtils';
 import { useUserPresence, presenceManager, formatPresenceStatus } from '../../lib/presence';
 import { pushManager } from '../../lib/pushNotifications';
+import { setActiveDmThreadId, setFloatingChatHeadOpen } from '../../lib/pushClient';
+import { authFetch, getSupabaseAccessToken } from '../../utils/apiConfig';
+import { getDisplayPreviewForMessage, parseChatMessagePayload } from '../../utils/groupMessagingUtils';
 import { 
   X, 
   Send, 
   Minimize2, 
+  Maximize2,
   MessageSquare, 
   ChevronLeft, 
   Search, 
@@ -135,10 +139,22 @@ export const FloatingChatHead: React.FC = () => {
   // Live real-time presence for the currently targeted user
   const { presence: targetPresence, formatted: targetFormatted, isOnline: isTargetOnline } = useUserPresence(targetUser);
 
-  // Position state (clamped to screen)
+  // Position state (clamped to screen & persisted in localStorage)
   const [position, setPosition] = useState(() => {
     if (typeof window !== 'undefined') {
-      const x = Math.max(16, window.innerWidth - 84);
+      try {
+        const savedPos = localStorage.getItem('nexus_chat_head_position');
+        if (savedPos) {
+          const parsed = JSON.parse(savedPos);
+          if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+            return {
+              x: Math.max(12, Math.min(window.innerWidth - 74, parsed.x)),
+              y: Math.max(68, Math.min(window.innerHeight - 90, parsed.y)),
+            };
+          }
+        }
+      } catch (_) {}
+      const x = Math.max(16, window.innerWidth - 76);
       const y = Math.max(80, window.innerHeight - 140);
       return { x, y };
     }
@@ -149,8 +165,27 @@ export const FloatingChatHead: React.FC = () => {
   const [isOverDismiss, setIsOverDismiss] = useState(false);
   const dragStartPos = useRef({ x: 0, y: 0, startLeft: 0, startTop: 0 });
   const hasMovedRef = useRef(false);
-  const hasInitializedOpen = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  const targetUserRef = useRef(targetUser);
+  targetUserRef.current = targetUser;
+
+  // Keep pushClient aware of whether FloatingChatHead is open and which thread is actively viewed
+  useEffect(() => {
+    const activelyOpen = isOpen && !isDismissed;
+    setFloatingChatHeadOpen(activelyOpen);
+    if (activelyOpen && viewMode === 'chat' && targetUser?.id) {
+      setActiveDmThreadId(targetUser.id);
+    } else if (!activelyOpen) {
+      setActiveDmThreadId(null);
+    }
+    return () => {
+      setFloatingChatHeadOpen(false);
+    };
+  }, [isOpen, isDismissed, viewMode, targetUser?.id]);
 
   // Auto-scroll to bottom of messages
   const scrollToBottom = () => {
@@ -175,7 +210,10 @@ export const FloatingChatHead: React.FC = () => {
 
     if (typeof localStorage !== 'undefined') {
       try {
-        const sbKey = Object.keys(localStorage).find(k => k.includes('sb-') && k.includes('-auth-token'));
+        const sbKey =
+          localStorage.getItem('nexus_core_auth_token')
+            ? 'nexus_core_auth_token'
+            : Object.keys(localStorage).find(k => k.includes('sb-') && k.includes('-auth-token'));
         if (sbKey) {
           const parsed = JSON.parse(localStorage.getItem(sbKey) || '{}');
           if (parsed?.user?.id) return parsed.user.id;
@@ -244,8 +282,11 @@ export const FloatingChatHead: React.FC = () => {
             loadedList = raw.map((c: any) => {
               const unread = c.unread || 0;
               unreadCount += unread;
-              const lastMsg = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1].text : 'No messages yet';
-              const lastTime = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1].time : '';
+              const rawLast = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
+              const lastMsg = rawLast
+                ? getDisplayPreviewForMessage({ message: rawLast.text || rawLast.message || '' }).preview
+                : 'No messages yet';
+              const lastTime = rawLast?.time || '';
               return {
                 id: c.id,
                 name: c.name || 'Anonymous User',
@@ -316,12 +357,13 @@ export const FloatingChatHead: React.FC = () => {
                   (m: any) => m.sender_id === pid && (m.is_read === false || m.is_read === null)
                 ).length;
 
+                const displayMeta = lastM ? getDisplayPreviewForMessage(lastM) : null;
                 newItems.push({
                   id: pid,
                   name: prof?.full_name || prof?.console_handle || 'Direct Signal',
                   avatar: prof?.avatar_url || null,
                   role: prof?.account_type || 'User',
-                  lastMessage: lastM ? (lastM.message || lastM.content || 'No messages yet') : '',
+                  lastMessage: displayMeta ? displayMeta.preview : '',
                   time: lastM ? new Date(lastM.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
                   unread: unreadInThread,
                 });
@@ -416,7 +458,19 @@ export const FloatingChatHead: React.FC = () => {
       if (isOverDismiss) {
         handleDismissChatHead();
         setIsOverDismiss(false);
+        return;
       }
+
+      // Snap horizontally to the nearest screen edge so the bubble stays docked cleanly
+      setPosition((prev) => {
+        const midpoint = window.innerWidth / 2;
+        const snappedX = prev.x + 28 < midpoint ? 16 : Math.max(16, window.innerWidth - 72);
+        const nextPos = { x: snappedX, y: prev.y };
+        try {
+          localStorage.setItem('nexus_chat_head_position', JSON.stringify(nextPos));
+        } catch (_) {}
+        return nextPos;
+      });
     };
 
     if (isDragging) {
@@ -428,7 +482,7 @@ export const FloatingChatHead: React.FC = () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [isDragging, isOverDismiss]);
+  }, [isDragging, isOverDismiss, handleDismissChatHead]);
 
   // Mark all chats & notifications as read
   const handleMarkAllRead = useCallback(async () => {
@@ -575,10 +629,6 @@ export const FloatingChatHead: React.FC = () => {
             p_profile_id: currentUserId,
           });
         }
-        // Always run security-definer mark_all_chats_and_notifications_read to guarantee updates in DB
-        await supabase.rpc('mark_all_chats_and_notifications_read', {
-          p_profile_id: currentUserId,
-        });
       } catch (e) {}
     }
 
@@ -602,12 +652,38 @@ export const FloatingChatHead: React.FC = () => {
     }
   }, [targetUser, handleMarkThreadRead]);
 
-  // Global listeners for nexus_open_chat & nexus_open_chat_thread
+  // Expand current thread into the full-page InboxTerminal view and minimize the floating head
+  const handleExpandToFullInbox = useCallback(() => {
+    setIsOpen(false);
+    window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: 'social' }));
+    if (targetUser?.id) {
+      window.dispatchEvent(
+        new CustomEvent('nexus_open_inbox_thread', {
+          detail: {
+            profile_id: targetUser.id,
+            name: targetUser.name,
+            username: targetUser.name,
+            avatar_url: targetUser.avatar_url,
+            feedTab: 'messages',
+          },
+        })
+      );
+    } else {
+      window.dispatchEvent(new CustomEvent('nexus_navigate_feed_tab', { detail: 'messages' }));
+    }
+  }, [targetUser]);
+
+  // Global listeners for nexus_open_chat & nexus_open_chat_thread & auto-minimize when full Inbox opens
   useEffect(() => {
     const handleTrigger = (e: any) => {
       const detail = e.detail || {};
       const targetId = detail.profile_id || detail.id || detail.targetId || detail.partner_id || detail.user_id;
-      const targetName = detail.name || detail.full_name || detail.username || detail.display_name || 'Direct Signal';
+      const rawName = String(detail.name || detail.full_name || detail.username || detail.display_name || 'Direct Signal')
+        .replace(/^💬\s*Direct Message from\s+/i, '')
+        .replace(/^💬\s*New Direct Message/i, '')
+        .replace(/^💬\s*/i, '')
+        .trim();
+      const targetName = rawName || 'Direct Signal';
       const targetAvatar = detail.avatar_url || detail.avatar || detail.image || detail.thumbnail || null;
       const initialText = detail.message || detail.initialMessage || detail.text || '';
 
@@ -629,20 +705,27 @@ export const FloatingChatHead: React.FC = () => {
         setViewMode('chat');
         handleMarkThreadRead(targetId);
       } else {
-        // Toggle or open general floating head
         setIsDismissed(false);
         setIsOpen(true);
       }
     };
 
+    const handleMinimizeOnInbox = () => {
+      setIsOpen(false);
+    };
+
     window.addEventListener('nexus_open_chat' as any, handleTrigger as EventListener);
     window.addEventListener('nexus_open_chat_thread' as any, handleTrigger as EventListener);
     window.addEventListener('nexus_toggle_floating_chat' as any, handleTrigger as EventListener);
+    window.addEventListener('nexus_open_inbox_thread' as any, handleMinimizeOnInbox as EventListener);
+    window.addEventListener('nexus_inbox_mounted' as any, handleMinimizeOnInbox as EventListener);
 
     return () => {
       window.removeEventListener('nexus_open_chat' as any, handleTrigger as EventListener);
       window.removeEventListener('nexus_open_chat_thread' as any, handleTrigger as EventListener);
       window.removeEventListener('nexus_toggle_floating_chat' as any, handleTrigger as EventListener);
+      window.removeEventListener('nexus_open_inbox_thread' as any, handleMinimizeOnInbox as EventListener);
+      window.removeEventListener('nexus_inbox_mounted' as any, handleMinimizeOnInbox as EventListener);
     };
   }, [handleMarkThreadRead]);
 
@@ -679,46 +762,54 @@ export const FloatingChatHead: React.FC = () => {
               }
             } catch (err) {}
 
-            if (typeof localStorage !== 'undefined') {
-              localStorage.removeItem('nexus_chat_head_dismissed');
+            // Only auto-show bubble if the user hasn't explicitly dismissed it
+            const isExplicitlyDismissed =
+              typeof localStorage !== 'undefined' &&
+              localStorage.getItem('nexus_chat_head_dismissed') === 'true';
+            if (!isExplicitlyDismissed) {
+              setIsDismissed(false);
             }
-            setIsDismissed(false);
 
-            setTargetUser((prev) => {
-              if (prev && prev.id === newMsg.sender_id) return prev;
-              return {
-                id: newMsg.sender_id,
-                name: senderName,
-                avatar_url: avatarUrl,
-              };
-            });
+            const activelyViewingThisSender =
+              isOpenRef.current &&
+              viewModeRef.current === 'chat' &&
+              targetUserRef.current?.id === newMsg.sender_id;
 
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === newMsg.id)) return prev;
-              return [...prev, {
-                id: newMsg.id,
-                sender_id: newMsg.sender_id,
-                receiver_id: newMsg.receiver_id || newMsg.recipient_id,
-                message: newMsg.message || newMsg.content || '',
-                created_at: newMsg.created_at || new Date().toISOString(),
-                is_read: newMsg.is_read
-              }];
-            });
-
-            setTotalUnreadCount((c) => c + 1);
-
-            // Trigger OS / Browser real-time notification
-            pushManager.notify({
-              title: `💬 New Message from ${senderName}`,
-              body: newMsg.message || newMsg.content || 'Sent you a direct transmission.',
-              category: 'messages',
-              priority: 'P1',
-              targetTab: 'social',
-              data: {
-                senderId: newMsg.sender_id,
-                name: senderName,
-              },
-            });
+            if (activelyViewingThisSender) {
+              // Append directly to the open conversation and mark as read
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === newMsg.id)) return prev;
+                return [
+                  ...prev,
+                  {
+                    id: newMsg.id,
+                    sender_id: newMsg.sender_id,
+                    receiver_id: newMsg.receiver_id || newMsg.recipient_id,
+                    message: newMsg.message || newMsg.content || '',
+                    created_at: newMsg.created_at || new Date().toISOString(),
+                    is_read: true,
+                  },
+                ];
+              });
+              handleMarkThreadRead(newMsg.sender_id);
+            } else {
+              // If minimized or no target user yet, point bubble preview to the latest sender without hijacking an open chat
+              if (!isOpenRef.current) {
+                setTargetUser({
+                  id: newMsg.sender_id,
+                  name: senderName,
+                  avatar_url: avatarUrl,
+                });
+              } else if (!targetUserRef.current) {
+                setTargetUser({
+                  id: newMsg.sender_id,
+                  name: senderName,
+                  avatar_url: avatarUrl,
+                });
+              }
+              setTotalUnreadCount((c) => c + 1);
+              loadConversations();
+            }
           }
         }
       )
@@ -727,7 +818,7 @@ export const FloatingChatHead: React.FC = () => {
     return () => {
       supabase.removeChannel(globalChannel);
     };
-  }, [currentUserId]);
+  }, [currentUserId, handleMarkThreadRead, loadConversations]);
 
   // Fetch conversation history when targetUser changes
   useEffect(() => {
@@ -912,12 +1003,47 @@ export const FloatingChatHead: React.FC = () => {
       } catch (e) {}
     }
 
-    // 2. Supabase DB Insert
-    if (supabase) {
+    // 2. Supabase DB Insert & Background Web Push Dispatch
+    let senderDisplayName = 'Nexus Contact';
+    if (typeof localStorage !== 'undefined') {
       try {
-        const insertSender = currentUserProfileId || senderId;
-        const insertReceiver = resolvedRecipientId;
+        const stored = localStorage.getItem('nexus_core_user_profile') || localStorage.getItem('nexus_user');
+        if (stored) {
+          const p = JSON.parse(stored);
+          senderDisplayName = p?.full_name || p?.name || p?.console_handle || senderDisplayName;
+        }
+      } catch (_) {}
+    }
 
+    const insertSender = currentUserProfileId || senderId;
+    const insertReceiver = resolvedRecipientId;
+    const validPushEmail = recipientEmail && !recipientEmail.endsWith('@nexus.network') ? recipientEmail : undefined;
+
+    let serverDispatched = false;
+    if (insertReceiver && insertReceiver !== insertSender) {
+      try {
+        const accessToken = await getSupabaseAccessToken();
+        if (accessToken) {
+          const apiRes = await authFetch('/api/social/dm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              recipientId: insertReceiver,
+              recipientEmail: validPushEmail,
+              message: text,
+              senderId: insertSender,
+              senderName: senderDisplayName,
+            }),
+          });
+          if (apiRes.ok) {
+            serverDispatched = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!serverDispatched && supabase) {
+      try {
         await supabase.from('nexus_chats').insert([{
           sender_id: insertSender,
           receiver_id: insertReceiver,
@@ -935,8 +1061,9 @@ export const FloatingChatHead: React.FC = () => {
             .insert([{
               id: newNotifId,
               user_id: receiverUUID,
+              actor_id: extractUUID(insertSender) || null,
               title: '💬 NEW MESSAGE',
-              message: `New message: "${text.substring(0, 60)}"`,
+              message: `New message from ${senderDisplayName}: "${text.substring(0, 60)}"`,
               category: 'CHAT',
               type: 'chat_message',
               is_read: false,
@@ -944,6 +1071,25 @@ export const FloatingChatHead: React.FC = () => {
             }]);
         }
       } catch (err) {}
+    }
+
+    if (!serverDispatched && insertReceiver && insertReceiver !== insertSender) {
+      pushManager.sendPushToServer({
+        userId: insertReceiver,
+        userEmail: validPushEmail,
+        excludeUserId: insertSender,
+        excludeUserEmail: currentUserEmail || undefined,
+        title: `💬 Direct Message from ${senderDisplayName}`,
+        body: text.substring(0, 120),
+        category: 'direct_messages',
+        targetTab: 'messages',
+        priority: 'P1',
+        tag: `nexus-dm-${insertSender}`,
+        data: {
+          senderId: insertSender,
+          senderName: senderDisplayName,
+        }
+      }).catch(pErr => console.warn('[FloatingChatHead] Push send notice:', pErr));
     }
 
     window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
@@ -1141,13 +1287,20 @@ export const FloatingChatHead: React.FC = () => {
           {totalUnreadCount > 0 && (
             <button
               onClick={handleMarkAllRead}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] font-mono font-medium text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer mr-1"
+              className="flex items-center gap-1 px-2 py-1 text-[11px] font-mono font-medium text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer mr-0.5"
               title="Mark All Conversations As Read"
             >
               <CheckCheck size={14} />
               <span className="hidden sm:inline">Mark Read</span>
             </button>
           )}
+          <button
+            onClick={handleExpandToFullInbox}
+            className="p-1.5 text-zinc-400 hover:text-cyan-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer"
+            title="Open in Full Inbox"
+          >
+            <Maximize2 size={15} />
+          </button>
           <button
             onClick={() => setIsOpen(false)}
             className="p-1.5 text-zinc-400 hover:text-orange-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer"
@@ -1183,6 +1336,9 @@ export const FloatingChatHead: React.FC = () => {
             ) : (
               messages.map((msg, idx) => {
                 const isMe = msg.sender_id === currentUserId || msg.sender_id === 'me' || (msg as any).sender === 'user';
+                const parsed = parseChatMessagePayload(msg);
+                const displayPreview = getDisplayPreviewForMessage(msg);
+                const cleanText = parsed.text || displayPreview.preview || msg.message;
                 return (
                   <div key={msg.id ? `msg-${msg.id}-${idx}` : `msg-${idx}`} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                     <div
@@ -1192,7 +1348,29 @@ export const FloatingChatHead: React.FC = () => {
                           : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-bl-xs'
                       }`}
                     >
-                      {msg.message}
+                      {parsed.replyTo && (
+                        <div
+                          className={`mb-1.5 px-2 py-1 rounded border-l-2 text-[10px] truncate ${
+                            isMe
+                              ? 'bg-black/20 border-black/60 text-black/80'
+                              : 'bg-zinc-950/80 border-orange-500/70 text-zinc-400'
+                          }`}
+                        >
+                          <span className="font-extrabold">{parsed.replyTo.senderName}: </span>
+                          <span>{parsed.replyTo.excerpt}</span>
+                        </div>
+                      )}
+                      {parsed.audioCard && (
+                        <div className={`mb-1 text-[10px] font-extrabold uppercase tracking-wider ${isMe ? 'text-black/80' : 'text-cyan-400'}`}>
+                          🎵 {parsed.audioCard.kind === 'voice' ? 'Voice Note' : 'Audio Demo'}: {parsed.audioCard.title}
+                        </div>
+                      )}
+                      {parsed.offerCard && (
+                        <div className={`mb-1 text-[10px] font-extrabold uppercase tracking-wider ${isMe ? 'text-black/80' : 'text-amber-400'}`}>
+                          ⚡ {parsed.offerCard.title || 'Tour Offer'}{parsed.offerCard.venue ? ` • ${parsed.offerCard.venue}` : ''}{parsed.offerCard.guarantee ? ` (${parsed.offerCard.guarantee})` : ''}
+                        </div>
+                      )}
+                      <div>{cleanText}</div>
                     </div>
                     {msg.created_at && (
                       <span className="text-[9px] font-mono text-zinc-600 px-1 mt-0.5">

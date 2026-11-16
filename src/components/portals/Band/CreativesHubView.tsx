@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME } from "../../../utils/followSyncService";
 import {
   Briefcase,
   UserPlus,
@@ -481,23 +482,35 @@ export default function CreativesHubView({
     }
   });
 
-  const toggleFollowTalent = (id: string, name: string) => {
-    setFollowedTalents((prev) => {
-      const isFollowing = prev.includes(id);
-      const updated = isFollowing
-        ? prev.filter((fid) => fid !== id)
-        : [...prev, id];
-      localStorage.setItem(
-        "nexus_followed_creatives",
-        JSON.stringify(updated),
-      );
-      if (triggerNotification) {
-        if (isFollowing) {
-          triggerNotification(`Unfollowed ${name}`);
-        } else {
-          triggerNotification(`✓ Following ${name}! Updates will appear in your feed.`);
+  // Sync follow state globally across components
+  useEffect(() => {
+    const handleGlobalFollowUpdate = () => {
+      try {
+        const saved = localStorage.getItem("nexus_followed_creatives");
+        if (saved) {
+          setFollowedTalents(JSON.parse(saved));
         }
-      }
+      } catch (_) {}
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+      window.addEventListener("storage", handleGlobalFollowUpdate);
+      return () => {
+        window.removeEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+        window.removeEventListener("storage", handleGlobalFollowUpdate);
+      };
+    }
+  }, []);
+
+  const toggleFollowTalent = (id: string, name: string) => {
+    const isFollowing = followedTalents.includes(id) || isProfileFollowedGlobally({ id, name, creative_name: name });
+    const nextState = !isFollowing;
+
+    saveFollowStateGlobally({ id, name, creative_name: name, type: "creative" }, nextState);
+
+    setFollowedTalents((prev) => {
+      const updated = nextState ? [...prev.filter(fid => fid !== id), id] : prev.filter(fid => fid !== id);
+      localStorage.setItem("nexus_followed_creatives", JSON.stringify(updated));
       return updated;
     });
   };
@@ -2622,12 +2635,9 @@ export default function CreativesHubView({
                                   <h4 className="text-white text-[11px] font-black uppercase truncate text-[#A855F7] drop-shadow-md">
                                     {item?.talent?.name || 'Creative Artist'}
                                   </h4>
-                                  <p
-                                    className="text-[10px] text-zinc-300 truncate mt-0.5"
-                                    dangerouslySetInnerHTML={{
-                                      __html: item?.talent?.skills || [][0],
-                                    }}
-                                  />
+                                  <p className="text-[10px] text-zinc-300 truncate mt-0.5">
+                                    {item?.talent?.skills || ''}
+                                  </p>
                                   {((item as any).genre ||
                                     (item as any).microGenre) && (
                                     <div className="flex flex-wrap gap-1 mt-1 pl-0.5">
@@ -4067,11 +4077,6 @@ export default function CreativesHubView({
                                 ? 5
                                 : 10,
                           );
-                          if (triggerNotification) {
-                            triggerNotification(
-                              `Preset adjusted: "${tier.name}" preloaded!`,
-                            );
-                          }
                         }}
                         className={`border p-3 rounded-xl flex flex-col justify-between transition-all cursor-pointer group select-none text-left ${
                           isSelected
@@ -4924,11 +4929,6 @@ export default function CreativesHubView({
                             setSelectedDrawerTalent(null);
                             setIsPlayingAudio(false);
                             openHireModal(selectedDrawerTalent, tier.id);
-                            if (triggerNotification) {
-                              triggerNotification(
-                                `Preset selected: "${tier.name}" bounds preloaded!`,
-                              );
-                            }
                           }}
                           className="border border-zinc-900 bg-zinc-950/60 hover:border-violet-500/50 p-3 rounded-xl flex flex-col justify-between transition-all cursor-pointer group hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden"
                         >

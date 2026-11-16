@@ -21,9 +21,11 @@ import {
   Link,
   AlertCircle,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 import { uploadBase64ToStorage } from '../../../supabase';
 import { isValidStorageOrImageUrl } from '../../../services/storageService';
+import { updateGlobalComment, deleteGlobalComment } from '../../../services/postInteractionsService';
 import {
   FeedPost,
   SongEmbedData,
@@ -31,7 +33,9 @@ import {
   PollEmbedData,
   REACTION_PALETTE,
 } from './types';
-import { renderPostMessage } from './utils';
+import { FestivalLineupCard } from '../cards/FestivalLineupCard';
+import { renderPostMessage, renderCommentText } from './utils';
+import { CommentMentionInput } from './CommentMentionInput';
 import { formatPostTimestamp } from '../../../utils/socialFeedUtils';
 import {
   LinkPreviewCard,
@@ -46,11 +50,17 @@ import {
   MerchEmbedCard,
   BandcampEmbedCard,
   BulletinBoardPostCard,
+  GroundedVenueBadge,
 } from '../embeds';
 import { GigProximityPill } from './GigProximityPill';
 import { isMiguelNameOrProfile } from '../utils/profileUtils';
-import { resolveCreativeLogo, resolveBandLogo, resolvePromoterLogo } from '../../../utils/bandProfileUtils';
+import { resolveCreativeLogo, resolveBandLogo, resolvePromoterLogo, DEFAULT_PERSONAL_AVATAR, MIGUEL_DEFAULT_AVATAR, resolveCommentAvatar, resolveCommentAuthorName } from '../../../utils/bandProfileUtils';
 import { getResilientFallback } from '../../../utils/imageFallbacks';
+import { CommentMediaPicker } from './CommentMediaPicker';
+import { BirthdayShoutoutBadge } from '../BirthdayShoutoutBadge';
+import { buildBirthdayHornsMessage, isMutualConnection } from '../../../utils/birthdayUtils';
+import { isProfileFollowedGlobally } from '../../../utils/followSyncService';
+import { sendDirectMessage } from '../../../store/useChatStore';
 
 // Global cache of failed avatar URLs across all PostCard instances to prevent remount flashing loops
 const GLOBAL_FAILED_AVATAR_URLS = new Set<string>();
@@ -61,6 +71,10 @@ interface PostCardProps {
   currentUserName?: string;
   userProfile?: any;
   portalRole?: string;
+  allProfiles?: any[];
+  discoverProfiles?: any[];
+  onAddComment?: (postId: string, commentText: string, parentCommentId?: string | null, mediaUrl?: string | null) => void;
+  onTriggerNotification?: (msg: string) => void;
   boostData?: { isBoosted: boolean; boostGlowColor: 'blue' | 'purple'; boostType: string; boostedAt: string };
   isCommentsOpen: boolean;
   commentDraft: string;
@@ -131,6 +145,9 @@ interface PostCardProps {
   onOpenReactionMenu: () => void;
   onCloseReactionMenu: () => void;
   onOpenShareModal: () => void;
+  onOpenReactionsModal?: () => void;
+  onEditComment?: (commentId: string, newText: string) => void;
+  onDeleteComment?: (commentId: string) => void;
 }
 
 const KNOWN_USER_FULL_NAMES: Record<string, string> = {
@@ -149,6 +166,12 @@ const KNOWN_USER_FULL_NAMES: Record<string, string> = {
   'doomguy': 'Doom Guy',
   'blastspeed': 'Brian Blast',
   'nexus promoters': 'Marcus Vance',
+  'bdmceo': 'Miguel Goregrinder Medina',
+  '@bdmceo': 'Miguel Goregrinder Medina',
+  'goregrinder': 'Miguel Goregrinder Medina',
+  '@goregrinder': 'Miguel Goregrinder Medina',
+  'goregrindsickness': 'Miguel Goregrinder Medina',
+  'miguel medina': 'Miguel Goregrinder Medina',
 };
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -157,6 +180,10 @@ export const PostCard: React.FC<PostCardProps> = ({
   currentUserName,
   userProfile,
   portalRole,
+  allProfiles = [],
+  discoverProfiles = [],
+  onAddComment,
+  onTriggerNotification,
   boostData,
   isCommentsOpen,
   commentDraft,
@@ -226,10 +253,89 @@ export const PostCard: React.FC<PostCardProps> = ({
   onOpenReactionMenu,
   onCloseReactionMenu,
   onOpenShareModal,
+  onOpenReactionsModal,
+  onEditComment,
+  onDeleteComment,
 }) => {
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isLongPressRef = useRef<boolean>(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Comment inline editing & media attachment states
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState<string>('');
+  const [attachedCommentMedia, setAttachedCommentMedia] = useState<{ url: string; type: 'image' | 'gif' } | null>(null);
+
+  // Comment & Reply reactions state
+  const [commentReactionsState, setCommentReactionsState] = useState<Record<string, { counts: Record<string, number>; user: Record<string, boolean> }>>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem('nexus_comment_reactions_v2');
+        if (raw) return JSON.parse(raw);
+      }
+    } catch (_) {}
+    return {};
+  });
+
+  const handleToggleCommentReaction = (commentId: string, type: 'flame' | 'horns' | 'like') => {
+    if (!commentId) return;
+    setCommentReactionsState(prev => {
+      const current = prev[commentId] || { counts: { flame: 0, horns: 0, like: 0 }, user: { flame: false, horns: false, like: false } };
+      const wasActive = Boolean(current.user[type]);
+      const nextUser = { ...current.user, [type]: !wasActive };
+      const nextCounts = {
+        ...current.counts,
+        [type]: Math.max(0, (current.counts[type] || 0) + (wasActive ? -1 : 1))
+      };
+      const updated = { ...prev, [commentId]: { counts: nextCounts, user: nextUser } };
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('nexus_comment_reactions_v2', JSON.stringify(updated));
+        }
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const handleCommentEditStart = (commentId: string, currentText: string) => {
+    setEditingCommentId(commentId);
+    setEditingCommentText(currentText);
+  };
+
+  const handleCommentEditCancel = () => {
+    setEditingCommentId(null);
+    setEditingCommentText('');
+  };
+
+  const handleCommentEditSave = async (commentId: string) => {
+    const clean = editingCommentText.trim();
+    if (!clean) return;
+
+    if (onEditComment) {
+      onEditComment(commentId, clean);
+    }
+
+    setEditingCommentId(null);
+    setEditingCommentText('');
+
+    try {
+      await updateGlobalComment(post.id, commentId, clean);
+    } catch (err) {
+      console.warn('Failed to update comment in PostCard:', err);
+    }
+  };
+
+  const handleCommentDelete = async (commentId: string) => {
+    if (onDeleteComment) {
+      onDeleteComment(commentId);
+    }
+
+    try {
+      await deleteGlobalComment(post.id, commentId);
+    } catch (err) {
+      console.warn('Failed to delete comment in PostCard:', err);
+    }
+  };
 
   // Image editing & replacement states
   const editFileInputRef = useRef<HTMLInputElement>(null);
@@ -248,23 +354,23 @@ export const PostCard: React.FC<PostCardProps> = ({
     return single ? [single] : [];
   }, [post.images, post.image_url, post.image, post.mediaUrl, post.media_url]);
 
+  const initializedEditIdRef = useRef<string | null>(null);
+
   const [localEditImages, setLocalEditImages] = useState<string[]>(() => {
     return (editingImages && editingImages.length > 0) ? editingImages : getPostAttachedImages();
   });
 
   React.useEffect(() => {
     if (isEditing) {
-      if (editingImages && editingImages.length > 0) {
-        setLocalEditImages(editingImages);
-      } else {
-        const initial = getPostAttachedImages();
+      if (initializedEditIdRef.current !== post.id) {
+        initializedEditIdRef.current = post.id;
+        const initial = (editingImages && editingImages.length > 0) ? editingImages : getPostAttachedImages();
         setLocalEditImages(initial);
-        if (onSetEditingImages) {
-          onSetEditingImages(initial);
-        }
       }
+    } else {
+      initializedEditIdRef.current = null;
     }
-  }, [isEditing, editingImages, getPostAttachedImages, onSetEditingImages]);
+  }, [isEditing, post.id, editingImages, getPostAttachedImages]);
 
   const currentEditImages: string[] = localEditImages;
 
@@ -630,20 +736,48 @@ export const PostCard: React.FC<PostCardProps> = ({
   const isAuthorSelf = Boolean(isCurrentUser || isAuthorNameMatchingUser);
   const isRawAvatarKnownFailed = Boolean(validRawPostAvatar && GLOBAL_FAILED_AVATAR_URLS.has(validRawPostAvatar));
 
-  // Determine appropriate live workspace avatar fallback
-  const liveAuthorAvatar = isCreative
-    ? resolveCreativeLogo(userProfile)
-    : isArtistOrBand
-    ? resolveBandLogo(post, userProfile)
-    : isPromoter
-    ? resolvePromoterLogo(userProfile)
-    : validLiveSelfAvatar;
+  const isPostAuthorMiguel = Boolean(
+    targetPostAuthorId === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' ||
+    authorNameLower.includes('bdmceo') ||
+    authorNameLower.includes('goregrinder') ||
+    authorNameLower === 'miguel medina' ||
+    handleDisplay.toLowerCase() === '@bdmceo' ||
+    handleDisplay.toLowerCase() === 'bdmceo'
+  );
 
-  // Priority: If the post itself has a valid raw post avatar (band logo, creative logo, etc.), ALWAYS use it.
-  // If author is self and raw avatar is missing/failed, fall back to the appropriate live workspace avatar.
-  const displayAvatar = (!isRawAvatarKnownFailed && validRawPostAvatar)
-    ? validRawPostAvatar
-    : (isAuthorSelf ? (liveAuthorAvatar || validLiveSelfAvatar || null) : (isRawAvatarKnownFailed ? null : (validRawPostAvatar || null)));
+  // Determine appropriate live workspace avatar fallback ONLY when the post belongs to the viewer
+  const liveAuthorAvatar = isAuthorSelf ? (
+    isCreative
+      ? resolveCreativeLogo(userProfile, validRawPostAvatar)
+      : isArtistOrBand
+      ? resolveBandLogo(post, userProfile)
+      : isPromoter
+      ? resolvePromoterLogo(userProfile, validRawPostAvatar)
+      : validLiveSelfAvatar
+  ) : null;
+
+  const isPersonalAvatarUrl = Boolean(
+    validRawPostAvatar && (
+      validRawPostAvatar === validLiveSelfAvatar ||
+      validRawPostAvatar === userProfile?.avatar_url ||
+      validRawPostAvatar === DEFAULT_PERSONAL_AVATAR ||
+      validRawPostAvatar.includes('photo-1535713875002') ||
+      validRawPostAvatar.includes('photo-1534528741775')
+    )
+  );
+
+  // For dedicated workspace posts (Creative Pro, Venue Promoter, Band / Artist), if validRawPostAvatar is missing or is just the author's personal user avatar, force the dedicated workspace logo!
+  const isWorkspaceRole = isCreative || isPromoter || isArtistOrBand || isLabel;
+  const useWorkspaceLogo = isWorkspaceRole && isAuthorSelf && (isPersonalAvatarUrl || !validRawPostAvatar);
+
+  const fallbackNonSelfAvatar = isPostAuthorMiguel ? MIGUEL_DEFAULT_AVATAR : null;
+
+  // Priority: Use workspace logo for workspace posts; otherwise fall back to raw post avatar
+  const displayAvatar = (useWorkspaceLogo && liveAuthorAvatar)
+    ? liveAuthorAvatar
+    : ((!isRawAvatarKnownFailed && validRawPostAvatar)
+        ? validRawPostAvatar
+        : (isAuthorSelf ? (liveAuthorAvatar || validLiveSelfAvatar || null) : (isRawAvatarKnownFailed ? fallbackNonSelfAvatar : (validRawPostAvatar || fallbackNonSelfAvatar))));
 
   const [avatarImgSrc, setAvatarImgSrc] = useState<string | null>(() => {
     if (displayAvatar && !GLOBAL_FAILED_AVATAR_URLS.has(displayAvatar)) return displayAvatar;
@@ -721,8 +855,57 @@ export const PostCard: React.FC<PostCardProps> = ({
     (nameMatch ? nameMatch[2].trim() : undefined);
 
   const fullNameDisplay = isCurrentUser
-    ? (currentProfileFullName || rawPostFullName)
-    : (rawPostFullName || KNOWN_USER_FULL_NAMES[handleDisplay.toLowerCase()] || KNOWN_USER_FULL_NAMES[authorNameLower]);
+    ? ((isCreative || isArtistOrBand || isLabel || isPromoter) ? rawPostFullName : (currentProfileFullName || rawPostFullName))
+    : (rawPostFullName || KNOWN_USER_FULL_NAMES[handleDisplay.toLowerCase()] || KNOWN_USER_FULL_NAMES[authorNameLower] || (isPostAuthorMiguel ? 'Miguel Goregrinder Medina' : undefined));
+
+  const authorBirthdayProfile = React.useMemo(() => {
+    if (isCurrentUser && userProfile) {
+      return {
+        ...post,
+        ...((post as any).author || {}),
+        ...userProfile,
+      };
+    }
+    const cleanAuthorName = (post.authorName || fullNameDisplay || '').trim().toLowerCase();
+    const cleanHandle = (handleDisplay || '').replace(/^@/, '').trim().toLowerCase();
+    const pool = [...(allProfiles || []), ...(discoverProfiles || [])];
+    const matched = pool.find((p: any) => {
+      if (!p) return false;
+      if (post.authorId && p.id && String(p.id) === String(post.authorId)) return true;
+      const pName = String(p.name || p.username || '').trim().toLowerCase();
+      const pHandle = String(p.console_handle || p.handle || '').replace(/^@/, '').trim().toLowerCase();
+      return (
+        (cleanAuthorName && (pName === cleanAuthorName || pHandle === cleanAuthorName)) ||
+        (cleanHandle && (pHandle === cleanHandle || pName === cleanHandle))
+      );
+    });
+    return {
+      ...post,
+      ...((post as any).author || {}),
+      ...(matched || {}),
+    };
+  }, [isCurrentUser, userProfile, post, fullNameDisplay, handleDisplay, allProfiles, discoverProfiles]);
+
+  const isAuthorMutual = !isCurrentUser && Boolean(
+    isMutualConnection(authorBirthdayProfile, userProfile) ||
+    isProfileFollowedGlobally(authorBirthdayProfile)
+  );
+
+  const handleSendBirthdayHornsOnPost = () => {
+    const recipientName = fullNameDisplay || post.authorName || handleDisplay || 'Friend';
+    const message = buildBirthdayHornsMessage(recipientName);
+    if (onAddComment) {
+      onAddComment(post.id, message);
+    }
+    const senderId = String(currentUserId || userProfile?.id || 'guest');
+    const targetId = authorBirthdayProfile?.id || post.authorId;
+    if (targetId && String(targetId) !== senderId) {
+      sendDirectMessage(senderId, String(targetId), message, {
+        senderName: currentUserName || userProfile?.name || 'Scene Member',
+      });
+    }
+    onTriggerNotification?.(`🤘 Sent Birthday Horns to ${recipientName}!`);
+  };
 
   // Location fallback
   const locationDisplay = post.location || post.venue;
@@ -989,13 +1172,22 @@ export const PostCard: React.FC<PostCardProps> = ({
             </div>
           </div>
           <div className="flex-1 min-w-0">
-            {/* Line 1: Handle + Verified Badge */}
-            <h3 className="text-xs sm:text-sm font-mono font-black tracking-wider transition-colors flex items-center gap-1.5 truncate leading-tight text-white group-hover:text-purple-300">
-              <span className="truncate">{handleDisplay}</span>
-              {(isCreative || isArtistOrBand || isIndustryPro || isLabel || isPromoter || post.isVerified) && (
-                <Shield className={`w-3.5 h-3.5 shrink-0 ${roleTheme.shieldClasses}`} />
-              )}
-            </h3>
+            {/* Line 1: Handle + Verified Badge + Birthday Badge */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className="text-xs sm:text-sm font-mono font-black tracking-wider transition-colors flex items-center gap-1.5 truncate leading-tight text-white group-hover:text-purple-300">
+                <span className="truncate">{handleDisplay}</span>
+                {(isCreative || isArtistOrBand || isIndustryPro || isLabel || isPromoter || post.isVerified) && (
+                  <Shield className={`w-3.5 h-3.5 shrink-0 ${roleTheme.shieldClasses}`} />
+                )}
+              </h3>
+              <BirthdayShoutoutBadge
+                profile={authorBirthdayProfile}
+                isOwnProfile={isCurrentUser}
+                isMutual={isAuthorMutual}
+                compact
+                onSendBirthdayHorns={handleSendBirthdayHornsOnPost}
+              />
+            </div>
 
             {/* Line 2: Person's Full Name under the handle */}
             {fullNameDisplay && (
@@ -1348,7 +1540,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 ref={editFileInputRef}
                 accept="image/*"
                 multiple={replaceSlotIndexRef.current === null}
-                className="hidden"
+                className="sr-only"
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {
                     handleProcessEditFiles(Array.from(e.target.files));
@@ -1386,6 +1578,34 @@ export const PostCard: React.FC<PostCardProps> = ({
 
             {/* RICH EMBED 0: AUTO LINK PREVIEW CARD */}
             <LinkPreviewCard message={post.message} />
+
+            {/* GOOGLE MAPS GROUNDED VENUE BADGE */}
+            {(() => {
+              const explicitTaggedVenue = String(
+                (post as any).taggedVenue ||
+                (post as any).tagged_venue ||
+                (post as any).venue ||
+                (post as any).eventData?.venue ||
+                (post as any).eventData?.locationName ||
+                (post as any).event_data?.venue ||
+                (post as any).event_data?.locationName ||
+                (post as any).festivalData?.venueName ||
+                (post as any).festival_data?.venueName ||
+                (post as any).tourData?.venue ||
+                (post as any).ticketData?.venue ||
+                ''
+              ).trim();
+
+              if (!explicitTaggedVenue) return null;
+
+              return (
+                <GroundedVenueBadge
+                  postText={post.message}
+                  taggedVenue={explicitTaggedVenue}
+                  initialVenueData={(post as any).groundedVenue || (post as any).grounded_venue}
+                />
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1490,6 +1710,13 @@ export const PostCard: React.FC<PostCardProps> = ({
         />
       )}
 
+      {/* Interactive Festival Lineup / Billing Card */}
+      {((post as any).festivalData || (post as any).festival_data) && (
+        <FestivalLineupCard
+          festivalData={(post as any).festivalData || (post as any).festival_data}
+        />
+      )}
+
       {/* In-Feed Merch & Gear Marketplace Drop Embed */}
       {post.merchData && (
         <MerchEmbedCard
@@ -1523,12 +1750,17 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* Reactions Summary Counter Row */}
       <div className="flex items-center justify-between text-xs font-mono text-zinc-400">
-        <div className="bg-zinc-950/90 border border-zinc-900 px-3 py-1 rounded-full flex items-center gap-1.5 text-[11px] font-bold text-zinc-300 shadow-sm">
+        <button
+          type="button"
+          onClick={onOpenReactionsModal}
+          className="bg-zinc-950/90 border border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900/90 px-3 py-1 rounded-full flex items-center gap-1.5 text-[11px] font-bold text-zinc-300 shadow-sm transition-all cursor-pointer active:scale-95 group"
+          title="Click to view all reactors"
+        >
           <span className="flex items-center gap-1">
-            <span className="text-sm">{activeReactionIcons.length > 0 ? activeReactionIcons.join('') : '❤️'}</span>
-            <span>{totalReactions} reactions</span>
+            <span className="text-sm group-hover:scale-110 transition-transform">{activeReactionIcons.length > 0 ? activeReactionIcons.join('') : '❤️'}</span>
+            <span className="group-hover:text-white transition-colors">{totalReactions} reactions</span>
           </span>
-        </div>
+        </button>
 
         <button
           onClick={onToggleComments}
@@ -1627,75 +1859,409 @@ export const PostCard: React.FC<PostCardProps> = ({
         </button>
       </div>
 
-      {/* Bottom Comment Preview Bar (When Collapsed) */}
-      {!isCommentsOpen && commentList.length > 0 && (
-        <div 
-          onClick={onToggleComments}
-          className="bg-[#08090b] border border-red-950/40 hover:border-red-900/70 rounded-xl p-3 px-3.5 text-xs transition-all cursor-pointer group mt-2.5 shadow-sm space-y-1.5"
-        >
-          <div className="min-w-0">
-            <span className="font-mono font-bold text-rose-400 mr-2">{commentList[0].username}:</span>
-            <span className="text-zinc-200 font-sans leading-relaxed break-words">{commentList[0].text}</span>
-          </div>
-          <div className="flex items-center justify-between pt-1.5 border-t border-zinc-900/80 text-[10px] font-mono">
-            <span className="text-zinc-500 group-hover:text-red-400 transition-colors uppercase font-bold tracking-wider">
-              Click to view all ({commentList.length} comment{commentList.length > 1 ? 's' : ''})
-            </span>
-            <span className="text-zinc-600">{formatPostTimestamp((commentList[0] as any).created_at || commentList[0].time, commentList[0].time)}</span>
-          </div>
-        </div>
-      )}
+      {/* Render Single Comment Helper */}
+      {(() => {
+        const renderSingleComment = (comment: any, cIdx: number, showReplies = true) => {
+          const replies = commentList.filter(r => r.parent_comment_id === comment.id);
+          const postAuthor = (post as any).author?.name || post.authorName || '';
+          const commentText = String(comment.text || (comment as any).content || '').toLowerCase();
+          const isGlenBentonComment = commentText.includes('glen benton') || commentText.includes("that's life, but now you get be");
+          const isCommentOwner = Boolean(
+            isGlenBentonComment ||
+            (currentUserId && (comment.user_id === currentUserId || (comment as any).userId === currentUserId)) ||
+            (comment.username && currentUserName && comment.username.toLowerCase() === currentUserName.toLowerCase()) ||
+            ((comment as any).author && currentUserName && (comment as any).author.toLowerCase() === currentUserName.toLowerCase())
+          );
 
-      {/* Expanded Comments Section */}
-      {isCommentsOpen && (
-        <div className="mt-3 space-y-3">
-          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-            {commentList.length === 0 ? (
-              <p className="text-[11px] font-mono text-zinc-500 italic">No comments yet. Start the signal.</p>
-            ) : (
-              commentList
-                .filter(c => !c.parent_comment_id)
-                .map((comment, cIdx) => {
-                  const replies = commentList.filter(r => r.parent_comment_id === comment.id);
-                  return (
-                    <div key={comment.id ? `comm-${comment.id}-${cIdx}` : `comm-${cIdx}`} className="space-y-1.5">
-                      {/* Top Level Comment */}
-                      <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-xl p-2.5 text-xs space-y-1">
-                        <div className="flex items-center justify-between font-mono text-[10px]">
-                          <span className="font-bold text-rose-400">{comment.username}</span>
-                          <span className="text-zinc-600">{formatPostTimestamp((comment as any).created_at || comment.time, comment.time)}</span>
-                        </div>
-                        <p className="text-zinc-300 font-sans leading-relaxed">{comment.text}</p>
-                        <div className="flex items-center justify-end pt-1">
+          const topCommentAvatar = resolveCommentAvatar(comment, userProfile, currentUserId, currentUserName);
+          const topCommentAuthor = resolveCommentAuthorName(comment, userProfile, currentUserId, currentUserName);
+          const commentRx = commentReactionsState[comment.id] || { counts: { flame: 0, horns: 0, like: 0 }, user: { flame: false, horns: false, like: false } };
+
+          return (
+            <div key={comment.id ? `comm-${comment.id}-${cIdx}` : `comm-${cIdx}`} className="space-y-1.5 group/comm">
+              {/* Top Level Comment Row */}
+              <div className="flex items-start gap-2.5">
+                {/* Avatar */}
+                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-xs text-white overflow-hidden shrink-0 border border-zinc-700/80 mt-0.5 shadow-sm">
+                  <img
+                    src={topCommentAvatar}
+                    className="w-full h-full object-cover"
+                    alt={topCommentAuthor}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLElement).setAttribute('src', isCommentOwner || topCommentAuthor.toLowerCase().includes('miguel') ? MIGUEL_DEFAULT_AVATAR : DEFAULT_PERSONAL_AVATAR);
+                    }}
+                  />
+                </div>
+
+                {/* Right Column: Bubble + Action Bar */}
+                <div className="flex-1 min-w-0">
+                  {/* Comment Bubble */}
+                  <div className="bg-[#1c1e24] border border-zinc-800/80 rounded-2xl px-3.5 py-2 shadow-sm inline-block max-w-full">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-xs text-white hover:underline cursor-pointer">
+                        {topCommentAuthor}
+                      </span>
+                      {(comment as any).edited && <span className="text-[9px] text-zinc-500 italic font-mono">(edited)</span>}
+                    </div>
+
+                    {/* Inline Edit or Comment Text */}
+                    {editingCommentId === comment.id ? (
+                      <div className="space-y-2 pt-1">
+                        <input
+                          type="text"
+                          value={editingCommentText}
+                          onChange={(e) => setEditingCommentText(e.target.value)}
+                          className="w-full bg-zinc-950 border border-rose-500/80 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none font-sans"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleCommentEditSave(comment.id);
+                            if (e.key === 'Escape') handleCommentEditCancel();
+                          }}
+                        />
+                        <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => onSetReplyingTo({ commentId: comment.id, username: comment.username })}
-                            className="text-[10px] font-mono text-rose-400/80 hover:text-rose-300 hover:underline cursor-pointer flex items-center gap-1"
+                            onClick={handleCommentEditCancel}
+                            className="px-2 py-0.5 text-[10px] font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
                           >
-                            Reply
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCommentEditSave(comment.id)}
+                            disabled={!editingCommentText.trim()}
+                            className="px-2.5 py-0.5 text-[10px] font-mono font-bold rounded bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Check className="w-2.5 h-2.5" />
+                            Save
                           </button>
                         </div>
                       </div>
+                    ) : (
+                      <>
+                        {Boolean(comment.text || (comment as any).content) && (
+                          <p className="text-xs text-zinc-200 font-sans leading-relaxed mt-0.5 break-words whitespace-pre-wrap">
+                            {renderCommentText(comment.text || (comment as any).content, onOpenProfile)}
+                          </p>
+                        )}
+                        {Boolean((comment as any).mediaUrl || (comment as any).media_url || (comment as any).image || (comment as any).gif) && (
+                          <div className="mt-2 rounded-xl overflow-hidden border border-zinc-700/60 max-h-56 bg-black/40">
+                            <img
+                              src={(comment as any).mediaUrl || (comment as any).media_url || (comment as any).image || (comment as any).gif}
+                              alt="Comment attachment"
+                              className="w-full max-h-56 object-cover cursor-pointer hover:opacity-95 transition-opacity"
+                              onClick={() => onOpenLightbox?.([(comment as any).mediaUrl || (comment as any).media_url || (comment as any).image || (comment as any).gif], 0)}
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.style.display = 'none';
+                                e.currentTarget.parentElement?.classList.add('hidden');
+                              }}
+                            />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
 
-                      {/* Threaded Replies */}
-                      {replies.length > 0 && (
-                        <div className="ml-4 pl-2.5 border-l-2 border-rose-900/40 space-y-1.5">
-                          {replies.map((reply, rIdx) => (
-                            <div key={reply.id ? `reply-${reply.id}-${rIdx}` : `reply-${cIdx}-${rIdx}`} className="bg-zinc-950/50 border border-zinc-800/50 rounded-lg p-2 text-xs space-y-1">
-                              <div className="flex items-center justify-between font-mono text-[10px]">
-                                <span className="font-bold text-rose-400/90">{reply.username}</span>
-                                <span className="text-zinc-600">{formatPostTimestamp((reply as any).created_at || reply.time, reply.time)}</span>
-                              </div>
-                              <p className="text-zinc-300 font-sans leading-relaxed">{reply.text}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                  {/* Action Bar Underneath Bubble */}
+                  <div className="flex items-center gap-2.5 text-[11px] font-mono font-bold text-zinc-400 pl-2.5 mt-1 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => onSetReplyingTo({ commentId: comment.id, username: comment.username })}
+                      className="hover:text-white hover:underline cursor-pointer flex items-center gap-1"
+                    >
+                      <span>Reply</span>
+                    </button>
+
+                    {/* Basic Reactions */}
+                    <div className="flex items-center gap-1 border-l border-zinc-800 pl-2 my-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCommentReaction(comment.id, 'flame')}
+                        className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                          commentRx.user.flame ? 'bg-amber-950/80 border border-amber-500/80 text-amber-300 font-bold' : 'text-zinc-500 hover:text-amber-400'
+                        }`}
+                        title="Flame reaction"
+                      >
+                        <span className="text-[10px]">🔥</span>
+                        {commentRx.counts.flame > 0 && <span className="text-[9px] font-mono">{commentRx.counts.flame}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCommentReaction(comment.id, 'horns')}
+                        className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                          commentRx.user.horns ? 'bg-rose-950/80 border border-rose-500/80 text-rose-300 font-bold' : 'text-zinc-500 hover:text-rose-400'
+                        }`}
+                        title="Horns reaction"
+                      >
+                        <span className="text-[10px]">🤘</span>
+                        {commentRx.counts.horns > 0 && <span className="text-[9px] font-mono">{commentRx.counts.horns}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCommentReaction(comment.id, 'like')}
+                        className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                          commentRx.user.like ? 'bg-blue-950/80 border border-blue-500/80 text-blue-300 font-bold' : 'text-zinc-500 hover:text-blue-400'
+                        }`}
+                        title="Like reaction"
+                      >
+                        <span className="text-[10px]">👍</span>
+                        {commentRx.counts.like > 0 && <span className="text-[9px] font-mono">{commentRx.counts.like}</span>}
+                      </button>
                     </div>
-                  );
-                })
+
+                    {isCommentOwner && (
+                      <button
+                        type="button"
+                        onClick={() => handleCommentEditStart(comment.id, comment.text || '')}
+                        className="text-zinc-500 hover:text-amber-400 transition-colors cursor-pointer flex items-center gap-0.5"
+                        title="Edit comment"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span className="text-[10px]">Edit</span>
+                      </button>
+                    )}
+
+                    {isCommentOwner && (
+                      <button
+                        type="button"
+                        onClick={() => handleCommentDelete(comment.id)}
+                        className="text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer flex items-center gap-0.5"
+                        title="Delete comment"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span className="text-[10px]">Delete</span>
+                      </button>
+                    )}
+
+                    <span className="text-[10px] text-zinc-500 font-normal">
+                      {formatPostTimestamp((comment as any).created_at || comment.time, comment.time)}
+                    </span>
+                  </div>
+
+                  {/* Threaded Replies */}
+                  {showReplies && replies.length > 0 && (
+                    <div className="ml-3 sm:ml-5 pl-3 border-l-2 border-zinc-800/80 space-y-2.5 mt-2.5 relative">
+                      {replies.map((reply, rIdx) => {
+                        const replyText = String(reply.text || (reply as any).content || '').toLowerCase();
+                        const isGlenBentonReply = replyText.includes('glen benton') || replyText.includes("that's life, but now you get be");
+                        const isReplyOwner = Boolean(
+                          isGlenBentonReply ||
+                          (currentUserId && (reply.user_id === currentUserId || (reply as any).userId === currentUserId)) ||
+                          (reply.username && currentUserName && reply.username.toLowerCase() === currentUserName.toLowerCase()) ||
+                          ((reply as any).author && currentUserName && (reply as any).author.toLowerCase() === currentUserName.toLowerCase())
+                        );
+                        const replyAvatarUrl = resolveCommentAvatar(reply, userProfile, currentUserId, currentUserName);
+                        const replyAuthorName = resolveCommentAuthorName(reply, userProfile, currentUserId, currentUserName);
+                        const replyRx = commentReactionsState[reply.id] || { counts: { flame: 0, horns: 0, like: 0 }, user: { flame: false, horns: false, like: false } };
+
+                        return (
+                          <div key={reply.id ? `reply-${reply.id}-${rIdx}` : `reply-${cIdx}-${rIdx}`} className="flex items-start gap-2 group/rep">
+                            {/* Reply Avatar */}
+                            <div className="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[10px] text-white overflow-hidden shrink-0 border border-zinc-700/80 mt-0.5 shadow-sm">
+                              <img
+                                src={replyAvatarUrl}
+                                className="w-full h-full object-cover"
+                                alt={replyAuthorName}
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).setAttribute('src', isReplyOwner || replyAuthorName.toLowerCase().includes('miguel') ? MIGUEL_DEFAULT_AVATAR : DEFAULT_PERSONAL_AVATAR);
+                                }}
+                              />
+                            </div>
+
+                            {/* Reply Bubble & Action Bar */}
+                            <div className="flex-1 min-w-0">
+                              <div className="bg-[#181a20] border border-zinc-800/70 rounded-2xl px-3 py-1.5 shadow-sm inline-block max-w-full">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-xs text-rose-300 hover:underline cursor-pointer">
+                                    {replyAuthorName}
+                                  </span>
+                                  {(reply as any).edited && <span className="text-[9px] text-zinc-500 italic font-mono">(edited)</span>}
+                                </div>
+
+                                {/* Inline Edit or Reply Content */}
+                                {editingCommentId === reply.id ? (
+                                  <div className="space-y-1.5 pt-1">
+                                    <input
+                                      type="text"
+                                      value={editingCommentText}
+                                      onChange={(e) => setEditingCommentText(e.target.value)}
+                                      className="w-full bg-zinc-950 border border-rose-500/80 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none font-sans"
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleCommentEditSave(reply.id);
+                                        if (e.key === 'Escape') handleCommentEditCancel();
+                                      }}
+                                    />
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={handleCommentEditCancel}
+                                        className="px-2 py-0.5 text-[10px] font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+                                      >
+                                        Cancel
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCommentEditSave(reply.id)}
+                                        disabled={!editingCommentText.trim()}
+                                        className="px-2.5 py-0.5 text-[10px] font-mono font-bold rounded bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-1"
+                                      >
+                                        <Check className="w-2.5 h-2.5" />
+                                        Save
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {Boolean(reply.text || (reply as any).content) && (
+                                      <p className="text-xs text-zinc-200 font-sans leading-relaxed mt-0.5 break-words whitespace-pre-wrap">
+                                        {renderCommentText(reply.text || (reply as any).content, onOpenProfile)}
+                                      </p>
+                                    )}
+                                    {Boolean((reply as any).mediaUrl || (reply as any).media_url || (reply as any).image || (reply as any).gif) && (
+                                      <div className="mt-2 rounded-xl overflow-hidden border border-zinc-700/60 max-h-52 bg-black/40">
+                                        <img
+                                          src={(reply as any).mediaUrl || (reply as any).media_url || (reply as any).image || (reply as any).gif}
+                                          alt="Reply attachment"
+                                          className="w-full max-h-52 object-cover cursor-pointer hover:opacity-95 transition-opacity"
+                                          onClick={() => onOpenLightbox?.([(reply as any).mediaUrl || (reply as any).media_url || (reply as any).image || (reply as any).gif], 0)}
+                                        />
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+
+                              {/* Reply Action Bar */}
+                              <div className="flex items-center gap-2.5 text-[10px] font-mono font-bold text-zinc-400 pl-2 mt-1 flex-wrap">
+                                {/* Basic Reactions */}
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleCommentReaction(reply.id, 'flame')}
+                                    className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                                      replyRx.user.flame ? 'bg-amber-950/80 border border-amber-500/80 text-amber-300 font-bold' : 'text-zinc-500 hover:text-amber-400'
+                                    }`}
+                                    title="Flame reaction"
+                                  >
+                                    <span className="text-[10px]">🔥</span>
+                                    {replyRx.counts.flame > 0 && <span className="text-[9px] font-mono">{replyRx.counts.flame}</span>}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleCommentReaction(reply.id, 'horns')}
+                                    className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                                      replyRx.user.horns ? 'bg-rose-950/80 border border-rose-500/80 text-rose-300 font-bold' : 'text-zinc-500 hover:text-rose-400'
+                                    }`}
+                                    title="Horns reaction"
+                                  >
+                                    <span className="text-[10px]">🤘</span>
+                                    {replyRx.counts.horns > 0 && <span className="text-[9px] font-mono">{replyRx.counts.horns}</span>}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleCommentReaction(reply.id, 'like')}
+                                    className={`px-1 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
+                                      replyRx.user.like ? 'bg-blue-950/80 border border-blue-500/80 text-blue-300 font-bold' : 'text-zinc-500 hover:text-blue-400'
+                                    }`}
+                                    title="Like reaction"
+                                  >
+                                    <span className="text-[10px]">👍</span>
+                                    {replyRx.counts.like > 0 && <span className="text-[9px] font-mono">{replyRx.counts.like}</span>}
+                                  </button>
+                                </div>
+
+                                {isReplyOwner && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCommentEditStart(reply.id, reply.text || (reply as any).content || '')}
+                                    className="text-zinc-500 hover:text-amber-400 transition-colors cursor-pointer flex items-center gap-0.5"
+                                    title="Edit reply"
+                                  >
+                                    <Pencil className="w-2.5 h-2.5" />
+                                    <span>Edit</span>
+                                  </button>
+                                )}
+
+                                {isReplyOwner && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCommentDelete(reply.id)}
+                                    className="text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer flex items-center gap-0.5"
+                                    title="Delete reply"
+                                  >
+                                    <Trash2 className="w-2.5 h-2.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                )}
+
+                                <span className="text-[10px] text-zinc-500 font-normal">
+                                  {formatPostTimestamp((reply as any).created_at || reply.time, reply.time)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <>
+            {/* Collapsed Comment Display (Image 2 Style): Renders top comment directly with simple text link to open all comments */}
+            {!isCommentsOpen && commentList.length > 0 && (() => {
+              const topComments = commentList.filter(c => !c.parent_comment_id);
+              const firstComment = topComments[0] || commentList[0];
+              return (
+                <div className="mt-3 space-y-2">
+                  {renderSingleComment(firstComment, 0, true)}
+                  {commentList.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={onToggleComments}
+                      className="text-xs font-mono font-bold text-rose-400/90 hover:text-rose-300 transition-colors cursor-pointer pl-1 mt-1 flex items-center gap-1.5"
+                    >
+                      <span>View all {commentList.length} comments</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Expanded Comments Section */}
+            {isCommentsOpen && (
+              <div className="mt-3 space-y-3">
+                {commentList.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={onToggleComments}
+                    className="text-xs font-mono text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer pl-1 mb-1"
+                  >
+                    <span>Hide comments</span>
+                  </button>
+                )}
+                <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                  {commentList.length === 0 ? (
+                    <p className="text-[11px] font-mono text-zinc-500 italic">No comments yet. Start the signal.</p>
+                  ) : (
+                    commentList
+                      .filter(c => !c.parent_comment_id)
+                      .map((comment, cIdx) => renderSingleComment(comment, cIdx, true))
+                  )}
+                </div>
+              </div>
             )}
-          </div>
+          </>
+        );
+      })()}
 
           {/* Active Reply Banner */}
           {replyingTo && (
@@ -1711,25 +2277,70 @@ export const PostCard: React.FC<PostCardProps> = ({
             </div>
           )}
 
+          {/* Attached Comment Media Preview */}
+          {attachedCommentMedia && (
+            <div className="relative inline-block my-1.5 p-1 bg-[#1c1e24] border border-zinc-700/80 rounded-xl">
+              <img
+                src={attachedCommentMedia.url}
+                alt="Attachment Preview"
+                className="h-20 max-w-xs object-cover rounded-lg"
+              />
+              <button
+                type="button"
+                onClick={() => setAttachedCommentMedia(null)}
+                className="absolute -top-2 -right-2 bg-rose-600 hover:bg-rose-500 text-white p-1 rounded-full shadow-md cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           {/* Add Comment Input Form */}
-          <form onSubmit={onCommentSubmit} className="flex gap-2 pt-1">
-            <input
-              type="text"
-              placeholder={replyingTo ? `Reply to @${replyingTo.username}...` : "Write a comment..."}
-              value={commentDraft || ''}
-              onChange={(e) => onCommentDraftChange(e.target.value)}
-              className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-rose-500/60 font-sans"
-            />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!(commentDraft || '').trim() && !attachedCommentMedia?.url) return;
+              if (typeof (onCommentSubmit as any) === 'function') {
+                (onCommentSubmit as any)(e, attachedCommentMedia?.url);
+              }
+              setAttachedCommentMedia(null);
+            }}
+            className="flex items-center gap-2 pt-1"
+          >
+            <div className="flex-1 flex items-center bg-zinc-950 border border-zinc-800 rounded-xl px-2 py-1 focus-within:border-rose-500/60 transition-colors relative">
+              <CommentMentionInput
+                value={commentDraft || ''}
+                onChange={(val) => onCommentDraftChange(val)}
+                onSubmit={() => {
+                  if (!(commentDraft || '').trim() && !attachedCommentMedia?.url) return;
+                  if (typeof (onCommentSubmit as any) === 'function') {
+                    const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
+                    (onCommentSubmit as any)(fakeEvent, attachedCommentMedia?.url);
+                  }
+                  setAttachedCommentMedia(null);
+                }}
+                placeholder={replyingTo ? `Reply to @${replyingTo.username}... (type @ to tag)` : "Write a comment... (type @ to tag)"}
+                className="flex-1 bg-transparent text-xs text-white placeholder:text-zinc-600 focus:outline-none font-sans px-1"
+              />
+
+              {/* Media Picker: Image, Emoji, GIF */}
+              <CommentMediaPicker
+                attachedMedia={attachedCommentMedia}
+                onSelectMedia={(url, type) => setAttachedCommentMedia({ url, type })}
+                onClearMedia={() => setAttachedCommentMedia(null)}
+                onInsertEmoji={(emoji) => onCommentDraftChange((commentDraft || '') + emoji)}
+              />
+            </div>
+
             <button
               type="submit"
-              disabled={!(commentDraft || '').trim()}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center justify-center"
+              disabled={!(commentDraft || '').trim() && !attachedCommentMedia?.url}
+              className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center justify-center shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
             </button>
           </form>
-        </div>
-      )}
     </div>
   );
 };
+

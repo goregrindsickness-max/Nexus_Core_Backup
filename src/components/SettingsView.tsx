@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { safeSetLocalStorageItem } from '../utils/safeStorage';
+import { authFetch, isClientAdmin } from '../utils/apiConfig';
 import { 
   User, 
   Mail, 
@@ -154,7 +156,7 @@ export default function SettingsView({
 
   const isRosterOwner = useMemo(() => {
     const roleLower = (userProfile?.role || '').toLowerCase();
-    if (userProfile?.email === 'admin@example.com' || !userProfile?.role || roleLower === 'manager') return true;
+    if (!userProfile?.role || roleLower === 'manager') return true;
     return roleLower.includes('owner');
   }, [userProfile]);
   
@@ -309,7 +311,7 @@ export default function SettingsView({
 
   const [editUserForm, setEditUserForm] = useState({
     name: userProfile?.name,
-    full_name: userProfile?.full_name || userProfile?.legal_name || userProfile?.legalName || userProfile?.name || 'Miguel Goregrinder Medina',
+    full_name: userProfile?.full_name || userProfile?.legal_name || userProfile?.legalName || userProfile?.name || '',
     email: userProfile?.email,
     role: userProfile?.role,
     avatar_url: userProfile?.avatar_url || '',
@@ -363,7 +365,7 @@ export default function SettingsView({
       setActiveEditTab(profileCarouselIndex === 0 ? 'user' : 'band');
       setEditUserForm({
         name: userProfile?.name,
-        full_name: userProfile?.full_name || userProfile?.legal_name || userProfile?.legalName || userProfile?.name || 'Miguel Goregrinder Medina',
+        full_name: userProfile?.full_name || userProfile?.legal_name || userProfile?.legalName || userProfile?.name || '',
         email: userProfile?.email,
         role: userProfile?.role,
         avatar_url: userProfile?.avatar_url || '',
@@ -543,8 +545,8 @@ export default function SettingsView({
       }
 
       // 2. Now safe to upsert profiles
-      const targetProfileId = profileId || 'profile_admin';
-      if (targetProfileId) {
+      const targetProfileId = profileId || userProfile?.id || '';
+      if (targetProfileId && targetProfileId !== 'profile_admin') {
         const uploadedAvatarUrl = profileAvatar || customProfilePayload?.avatar_url || null;
         const existingAvatarUrl = userProfile?.avatar_url || (userProfile as any)?.avatar || null;
         const finalAvatarUrl = uploadedAvatarUrl || existingAvatarUrl || undefined;
@@ -624,9 +626,9 @@ export default function SettingsView({
   const handleSaveProfileSettings = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     
-    const finalUserName = (editUserForm.name || '').trim() || 'Admin Profile';
+    const finalUserName = (editUserForm.name || userProfile?.name || userProfile?.full_name || '').trim() || 'Member Profile';
     const finalUserFullName = (editUserForm.full_name || '').trim() || finalUserName;
-    const finalUserEmail = (editUserForm.email || '').trim() || 'admin@example.com';
+    const finalUserEmail = (editUserForm.email || userProfile?.email || '').trim();
     const finalUserRole = (editUserForm.role || '').trim() || 'Manager';
     const finalUserAvatar = (editUserForm.avatar_url || '').trim() || undefined;
     const finalAccountType = editUserForm.account_type || 'crew';
@@ -719,7 +721,7 @@ export default function SettingsView({
       } : b));
     }
 
-    const userProfileId = userProfile?.id || 'profile_admin';
+    const userProfileId = userProfile?.id || '';
     const bandId = activeBand?.id;
 
     const updatedProfilePayload = {
@@ -931,7 +933,7 @@ export default function SettingsView({
     }
 
     try {
-      const response = await fetch('/api/emails/invite', {
+      const response = await authFetch('/api/emails/invite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -1027,8 +1029,9 @@ export default function SettingsView({
   } | null>(null);
 
   const fetchEmailLogs = async () => {
+    if (!isClientAdmin(userProfile)) return;
     try {
-      const res = await fetch('/api/emails/dispatch-logs');
+      const res = await authFetch('/api/emails/dispatch-logs');
       if (res.ok) {
         const data = await res.json();
         setLiveEmailLogs(data.logs || []);
@@ -1039,8 +1042,9 @@ export default function SettingsView({
   };
 
   const fetchEmailDiagnostics = async () => {
+    if (!isClientAdmin(userProfile)) return;
     try {
-      const res = await fetch('/api/emails/test-connectivity');
+      const res = await authFetch('/api/emails/test-connectivity');
       if (res.ok) {
         const data = await res.json();
         setDiagnosticKeyInfo(data);
@@ -1064,10 +1068,12 @@ export default function SettingsView({
     }
   };
 
-  // Run on mount or tab activation
+  // Run on mount or when userProfile resolves
   useEffect(() => {
-    fetchEmailDiagnostics();
-  }, []);
+    if (isClientAdmin(userProfile)) {
+      fetchEmailDiagnostics();
+    }
+  }, [userProfile?.id, userProfile?.email]);
 
   const handleSendDiagnosticTest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1080,7 +1086,7 @@ export default function SettingsView({
     setDiagnosticResult(null);
 
     try {
-      const response = await fetch('/api/emails/send-test', {
+      const response = await authFetch('/api/emails/send-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1147,7 +1153,6 @@ export default function SettingsView({
 
   const handleToggleNotification = (key: keyof typeof notificationSettings) => {
     setNotificationSettings(prev => ({ ...prev, [key]: !prev[key] }));
-    triggerNotification(`Notification setting updated.`);
   };
 
   // Register the FCM service worker standby for system-level notifications if permitted
@@ -1588,8 +1593,8 @@ Powered by NEXUS CORE
 
         setUserProfile(nextProfile);
         try {
-          localStorage.setItem('nexus_core_user_profile', JSON.stringify(nextProfile));
-          localStorage.setItem('nexus_user', JSON.stringify(nextProfile));
+          safeSetLocalStorageItem('nexus_core_user_profile', nextProfile);
+          safeSetLocalStorageItem('nexus_user', nextProfile);
         } catch (_) {}
         
         triggerNotification(`${portalType.toUpperCase()} Workspace Deactivated.`);
@@ -1722,8 +1727,8 @@ Powered by NEXUS CORE
 
         setUserProfile(nextProfile);
         try {
-          localStorage.setItem('nexus_core_user_profile', JSON.stringify(nextProfile));
-          localStorage.setItem('nexus_user', JSON.stringify(nextProfile));
+          safeSetLocalStorageItem('nexus_core_user_profile', nextProfile);
+          safeSetLocalStorageItem('nexus_user', nextProfile);
         } catch (_) {}
       } else {
         localStorage.removeItem('nexus_core_user_profile');
@@ -1953,7 +1958,11 @@ Powered by NEXUS CORE
               setCropperOpen(false);
               setCropperImageSrc(null);
               try {
-                const userProfileId = userProfile?.id || 'profile_admin';
+                const userProfileId = userProfile?.id || '';
+                if (!userProfileId) {
+                  triggerNotification('Please sign in before uploading profile images.');
+                  return;
+                }
                 if (croppingTarget === 'profile') {
                   const uploadRes = await uploadBase64ToStorage(croppedBase64, 'avatars', userProfileId, 'profile-avatar');
                   const publicUrl = uploadRes || croppedBase64;
@@ -1972,8 +1981,8 @@ Powered by NEXUS CORE
                   
                   syncProfileAndBandToSupabase(
                     userProfileId,
-                    userProfile?.name || 'Admin Profile',
-                    userProfile?.email || 'admin@example.com',
+                    userProfile?.name || userProfile?.full_name || 'Member Profile',
+                    userProfile?.email || '',
                     userProfile?.role || 'Manager',
                     publicUrl,
                     activeBand?.id,
@@ -1992,8 +2001,8 @@ Powered by NEXUS CORE
                   
                   syncProfileAndBandToSupabase(
                     userProfileId,
-                    userProfile?.name || 'Admin Profile',
-                    userProfile?.email || 'admin@example.com',
+                    userProfile?.name || userProfile?.full_name || 'Member Profile',
+                    userProfile?.email || '',
                     userProfile?.role || 'Manager',
                     userProfile?.avatar_url || null,
                     activeBand?.id,
@@ -2418,7 +2427,7 @@ ALTER TABLE public.nexus_posts ADD COLUMN IF NOT EXISTS data JSONB;`}
                     <label className="text-[9px] font-mono text-zinc-550 uppercase tracking-widest">Base Currency Unit</label>
                     <select
                       value={currency}
-                      onChange={e => { setCurrency(e.target.value); triggerNotification(`Currency changed to ${e.target.value}`); }}
+                      onChange={e => setCurrency(e.target.value)}
                       className="w-full bg-[#111319]/60 border border-zinc-850 text-white rounded-xl px-3.5 py-2.5 font-mono text-xs focus:outline-none focus:border-emerald-500"
                     >
                       <option value="USD ($)">USD ($) - US Dollar</option>
@@ -2432,7 +2441,7 @@ ALTER TABLE public.nexus_posts ADD COLUMN IF NOT EXISTS data JSONB;`}
                     <label className="text-[9px] font-mono text-zinc-555 uppercase tracking-widest">Global Timezone Reference</label>
                     <select
                       value={timezone}
-                      onChange={e => { setTimezone(e.target.value); triggerNotification(`Timezone changed to ${e.target.value}`); }}
+                      onChange={e => setTimezone(e.target.value)}
                       className="w-full bg-[#111319]/60 border border-zinc-850 text-white rounded-xl px-3.5 py-2.5 font-mono text-xs focus:outline-none focus:border-emerald-500"
                     >
                       <option value="GMT-5 (EST)">GMT-5 (EST) - Eastern Standard Time</option>

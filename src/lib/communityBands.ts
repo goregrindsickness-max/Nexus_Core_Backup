@@ -1,20 +1,12 @@
 // Nexus Band Community & Verification Management
 // Manages community archives, name collision checks, verification status, and artist handover forks
 
-import {
-  getSupabase,
-  uploadBase64ToStorage,
-  uploadCommunityBandMedia,
-  executeWithSchemaResilience,
-  sanitizeBandPayload,
-  sanitizeMicroGenres,
-  ensureUUID,
-  generateUUID,
-  upsertReleasesBatchToDatabase,
-  fetchReleasesFromDatabase,
-  upsertBandToDatabase,
-  processOfflineQueue
-} from '../supabase';
+import { getSupabase } from '../services/clientService';
+import { uploadBase64ToStorage, uploadCommunityBandMedia } from '../services/storageService';
+import { executeWithSchemaResilience, ensureUUID, generateUUID } from '../services/schemaResilienceService';
+import { sanitizeBandPayload, sanitizeMicroGenres, upsertBandToDatabase } from '../services/bandService';
+import { upsertReleasesBatchToDatabase, fetchReleasesFromDatabase } from '../services/releasesService';
+import { processOfflineQueue } from '../services/offlineSyncService';
 import { syncBandDiscographyToPhysicalAndDigital } from '../services/discographySyncService';
 
 export type BandVerificationStatus = 'community_archive' | 'claim_pending' | 'verified_official';
@@ -33,6 +25,7 @@ export interface DiscographyTrack {
   title: string;
   duration?: string;
   stream_url?: string;
+  previewUrl?: string;
   lyrics?: string;
 }
 
@@ -40,12 +33,19 @@ export interface DiscographyRelease {
   id?: string;
   title: string;
   year: string;
+  release_date?: string;
+  releaseDate?: string;
+  release_year?: string;
   type: 'album' | 'ep' | 'single' | 'demo' | string;
   image_url?: string;
   cover_url?: string;
   cover_image?: string;
   coverUrl?: string;
   coverImage?: string;
+  image?: string;
+  cover?: string;
+  artwork?: string;
+  imageUrl?: string;
   release_info?: string;
   catalog_id?: string;
   label?: string;
@@ -71,10 +71,17 @@ export interface CommunityBandRecord {
   description?: string;
   avatar_url?: string;
   logo_url?: string;
+  image_url?: string;
+  logo?: string;
   cover_url?: string;
   banner_url?: string;
   avatar?: string;
   image?: string;
+  profile?: {
+    avatar_url?: string;
+    banner_url?: string;
+    cover_url?: string;
+  };
   spotify?: string;
   spotify_url?: string;
   bandcamp?: string;
@@ -89,17 +96,23 @@ export interface CommunityBandRecord {
   curated_by?: string; // Fan curator handle or user ID
   curator_name?: string;
   created_at: string;
+  updated_at?: string;
   verification_status: BandVerificationStatus;
   claimed_by_user_id?: string;
   claimed_at?: string;
   followers_count?: number;
   custom_slug?: string;
   slug?: string;
+  status?: string;
+  is_split_up?: boolean;
+  isSplitUp?: boolean;
 }
 
-// Initial pre-seeded community archives for iconic bands loaded from seedBandsData
-export { INITIAL_COMMUNITY_BANDS, isCommunityBandRecord } from './seedBandsData';
-import { INITIAL_COMMUNITY_BANDS, isCommunityBandRecord } from './seedBandsData';
+import { INITIAL_COMMUNITY_BANDS } from '../../server/seeds/seedBandsData';
+export { INITIAL_COMMUNITY_BANDS };
+export function isCommunityBandRecord(_idOrName?: string): boolean {
+  return false;
+}
 
 export const UNOFFICIAL_MOCK_BAND_IDS = new Set<string>([
   'exhumed',
@@ -111,7 +124,11 @@ export const UNOFFICIAL_MOCK_BAND_IDS = new Set<string>([
   'disgorge',
   'epicardiectomy',
   'morbid-angel',
-  'morbid angel'
+  'morbid angel',
+  'tyler-hansard',
+  'tyler hansard',
+  'tyler-slamson',
+  'tyler slamson'
 ]);
 
 export const UNOFFICIAL_MOCK_BAND_NAMES = new Set<string>([
@@ -121,7 +138,11 @@ export const UNOFFICIAL_MOCK_BAND_NAMES = new Set<string>([
   'jungle rot',
   'disgorge',
   'epicardiectomy',
-  'morbid angel'
+  'morbid angel',
+  'tyler hansard',
+  'tyler-hansard',
+  'tyler slamson',
+  'tyler-slamson'
 ]);
 
 export function isDeletedOrZombieBand(idOrName?: string): boolean {
@@ -183,8 +204,419 @@ export function isDeletedRelease(releaseId?: string, releaseTitle?: string, band
   return false;
 }
 
+export const KNOWN_ALBUM_RELEASE_YEARS: Record<string, string> = {
+  // Hate Eternal
+  'conqueringthethrone': '1999',
+  'kingofallkings': '2002',
+  'imonarch': '2005',
+  'furyflames': '2008',
+  'furyandflames': '2008',
+  'phoenixamongsttheashes': '2011',
+  'infernus': '2015',
+  'upondesolatesands': '2018',
+
+  // Deeds of Flesh
+  'graduallymelted': '1995',
+  'graduallymeltedep': '1995',
+  'tradingpieces': '1996',
+  'inbreedingtheanthropophagi': '1998',
+  'pathoftheweakening': '1999',
+  'pathofthetotem': '1999',
+  'markofthelegion': '2001',
+  'reducedtoashes': '2003',
+  'reducedtobegging': '2003',
+  'crownofsouls': '2005',
+  'ofwhatstocome': '2008',
+  'portalstocanaan': '2013',
+  'nucleus': '2020',
+
+  // Cannibal Corpse
+  'eatenbacktolife': '1990',
+  'butcheredatbirth': '1991',
+  'tombofthemutilated': '1992',
+  'thebleeding': '1994',
+  'vile': '1996',
+  'galleryofsuicide': '1998',
+  'bloodthirst': '1999',
+  'goreobsessed': '2002',
+  'thewretchedspawn': '2004',
+  'kill': '2006',
+  'eviscerationplague': '2009',
+  'torture': '2012',
+  'askeletaldomain': '2014',
+  'redbeforeblack': '2017',
+  'violenceunimagined': '2021',
+  'chaosporrific': '2023',
+
+  // Aeon
+  'darkwork': '2001',
+  'bleedingthefalse': '2005',
+  'risetodominate': '2007',
+  'pathoffire': '2010',
+  'aeonsblack': '2012',
+  'godendshere': '2021',
+
+  // Benediction
+  'subconsciousterror': '1990',
+  'thegrandleveller': '1991',
+  'darkistheseason': '1992',
+  'transcendtherubicon': '1993',
+  'thegrotesqueasymmetry': '1994',
+  'thedreamsyoudread': '1995',
+  'grindbastard': '1998',
+  'organisedchaos': '2001',
+  'killingmusic': '2008',
+  'scriptures': '2020',
+
+  // Hypocrisy
+  'penetralia': '1992',
+  'pleasureofmolestation': '1993',
+  'osculumobscenum': '1993',
+  'inferiordevoties': '1994',
+  'thefourthdimension': '1994',
+  'abducted': '1996',
+  'maximumabduction': '1997',
+  'thefinalchapter': '1997',
+  'hypocrisydestroyswacken': '1999',
+  'hypocrisy': '1999',
+  'intotheabyss': '2000',
+  'catch22': '2002',
+  'thearrival': '2004',
+  'virus': '2005',
+  'catch22v2008': '2008',
+  'atasteofextremedivinity': '2009',
+  'worship': '2021',
+
+  // Birdflesh
+  'borntodecide': '2002',
+  'aliveautopsy': '2004',
+  'nightoftheultimatemosh': '2008',
+  'satansgoats': '2018',
+  'extremesicknessfirstclass': '2023',
+
+  // Scour
+  'grey': '2016',
+  'greyep': '2016',
+  'red': '2017',
+  'redep': '2017',
+  'black': '2020',
+  'blackep': '2020',
+  'gold': '2024',
+
+  // Squash Bowels
+  'somethingcanbechanged': '1997',
+  'tenebris': '1999',
+  'themassdead': '2002',
+  'nomercy': '2004',
+  'lovesongs': '2005',
+  'grindvirus': '2009',
+  'grindcoholics': '2013',
+
+  // Lust of Decay
+  'infestingtheexhumed': '2002',
+  'kingdomofcorpses': '2004',
+  'entombedinsewage': '2008',
+  'puritythroughdismemberment': '2014',
+
+  // Abnormality
+  'contaminatingthemicrocosm': '2010',
+  'mechanismsofomniscience': '2016',
+  'sociopathicconstructs': '2019',
+
+  // Extermination Dismemberment
+  'butcherbasement': '2010',
+  'serialurbicide': '2013',
+  'protonemesis': '2021',
+  'protonemesissingle': '2021',
+  'dehumanizationprotocol': '2023',
+  'enslaverofthecontinents': '2024',
+  'enslaverofcontinents': '2024',
+
+  // Visceral Disgorge
+  'ingestingputridity': '2011',
+  'slotheringtheidiots': '2019',
+
+  // Suffocation
+  'humanwaste': '1991',
+  'effigyoftheforgotten': '1991',
+  'breedingthespawn': '1993',
+  'piercedfromwithin': '1995',
+  'despisethesun': '1998',
+  'soulstodeny': '2004',
+  'suffocation': '2006',
+  'bloodoath': '2009',
+  'pinnacleofbedlam': '2013',
+  'ofthedarklight': '2017',
+  'hymnsfromtheapocrypha': '2023',
+
+  // Dying Fetus
+  'purificationthroughviolence': '1996',
+  'killingonadrenaline': '1998',
+  'destroytheopposition': '2000',
+  'stopatnothing': '2003',
+  'warofattrition': '2007',
+  'reignsupreme': '2012',
+  'wrongonetofuckwith': '2017',
+  'makethembegfordeath': '2023',
+
+  // Devourment
+  'molestingthedecapitated': '1999',
+  '138': '2000',
+  'butchertheweak': '2005',
+  'unleashthecarnivore': '2009',
+  'conceivedinsewage': '2013',
+  'obscenemajesty': '2019',
+
+  // Carcass
+  'reekofputrefaction': '1988',
+  'symphoniesofsickness': '1989',
+  'necroticismdescantingtheinsalubrious': '1991',
+  'heartwork': '1993',
+  'swansong': '1996',
+  'surgicalsteel': '2013',
+  'tornarteries': '2021',
+
+  // Exhumed
+  'goremetal': '1998',
+  'anatomyisdestiny': '2003',
+  'garbagedayregurgitated': '2005',
+  'allgutsnoglory': '2011',
+  'necrocracy': '2013',
+  'deathrevenge': '2017',
+  'tothedead': '2022',
+
+  // Gorgasm
+  'bleedingprofusely': '2001',
+  'masticatetodominate': '2003',
+  'destinedtoviolate': '2014',
+
+  // Brodequin
+  'instrumentsoftorture': '2000',
+  'festivalofdeath': '2001',
+  'methodsofexecution': '2004',
+  'harbingerofwoe': '2024',
+
+  // Defeated Sanity
+  'preludetotheapocalypse': '2004',
+  'psalmofthemorbid': '2007',
+  'chapterofaccidents': '2010',
+  'passagesintodeformity': '2013',
+  'disposalofthedead': '2016',
+  'thesanguinaryimpetus': '2020',
+  'chroniclesoflunacy': '2024'
+};
+
+export function resolveAuthenticReleaseYear(r: any): string {
+  if (!r) return '';
+  const title = (r.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const knownYear = KNOWN_ALBUM_RELEASE_YEARS[title];
+  if (knownYear) return knownYear;
+  
+  const rawCandidate = r.year || r.release_date || r.releaseDate || r.release_year || r.date || '';
+  const rawStr = String(rawCandidate).trim();
+  const yearMatch = rawStr.match(/\b(19\d\d|20[0-2]\d)\b/);
+  const extractedYear = yearMatch ? yearMatch[1] : (rawStr.length === 4 ? rawStr : '');
+
+  if (extractedYear && extractedYear !== '2025' && extractedYear !== '2026') return extractedYear;
+  return '';
+}
+
+export function isValidCoverUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const u = url.trim();
+  if (!u) return false;
+  if (u.includes('m.media-amazon.com') || u.includes('amazon.com/images')) return false;
+  if (u.includes('placeholder') || u.includes('unsplash.com')) return false;
+  return u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:image/');
+}
+
+export const GORGASM_BAND_ID = 'e50f2943-6d87-41cb-b50f-29436d87a1cb';
+export const GORGASM_OFFICIAL_LOGO = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396221828_1788396221852.jpg?t=1788396221852';
+export const GORGASM_OFFICIAL_LINEUP: LineupMember[] = [
+  { id: 'gorg-1', name: 'Damian Leski', role: 'Guitar, Vocals', status: 'active', years: '1994–present' },
+  { id: 'gorg-2', name: 'Sasha Chrosciewicz', role: 'Guitar, Vocals', status: 'active', years: '2018–present' },
+  { id: 'gorg-3', name: 'John Hull', role: 'Bass, Vocals', status: 'active', years: '2022–present' },
+  { id: 'gorg-4', name: 'Tomasz Pilasiewicz', role: 'Drums', status: 'active', years: '2005–2008, 2024–present' }
+];
+
+const BROKEN_BAND_IMAGE_FRAGMENTS = [
+  'community-avatar_1787807876560',
+  'community-avatar_1788041930287',
+  'community-avatar_1787891338290',
+  'community-avatar_1787857390098',
+  'community-avatar_1787625126838',
+  'community-avatar_1787803623565',
+  'community-avatar_1787864115165',
+  'community-avatar_1787866579294',
+  'community-avatar_1787869057607'
+];
+
+export function isValidBandImageUrl(url?: string | null, allowDataUri = true): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const u = url.trim();
+  if (!u) return false;
+  const lower = u.toLowerCase();
+  if (lower === 'null' || lower === 'undefined') return false;
+  if ((lower.includes('unsplash') || lower.includes('placeholder')) && !lower.includes('public-assets')) return false;
+  if (BROKEN_BAND_IMAGE_FRAGMENTS.some(frag => lower.includes(frag))) return false;
+  if (u.startsWith('data:image/')) return allowDataUri;
+  return u.startsWith('http://') || u.startsWith('https://') || u.startsWith('/assets/');
+}
+
+export function pickBestBandImage(...urls: (string | undefined | null)[]): string {
+  for (const u of urls) {
+    if (isValidBandImageUrl(u)) return (u as string).trim();
+  }
+  return '';
+}
+
+export function resolveCanonicalBandLogo(band: any): string {
+  if (!band || typeof band !== 'object') return '';
+  return pickBestBandImage(
+    band.avatar_url,
+    band.logo_url,
+    band.image_url,
+    band.logo,
+    band.profile?.avatar_url,
+    band.avatar,
+    band.image
+  );
+}
+
+export function resolveCanonicalBandCover(band: any): string {
+  if (!band || typeof band !== 'object') return '';
+  return pickBestBandImage(
+    band.cover_url,
+    band.banner_url,
+    band.cover,
+    band.banner,
+    band.profile?.banner_url,
+    band.profile?.cover_url
+  );
+}
+
+export function isGorgasmBand(bandIdOrName?: string | null, customSlug?: string | null): boolean {
+  const idOrName = String(bandIdOrName || '').toLowerCase().trim();
+  const slug = String(customSlug || '').toLowerCase().trim();
+  return idOrName === 'gorgasm' || idOrName === GORGASM_BAND_ID || slug === 'gorgasm';
+}
+
+export function isStaleGorgasmLineup(members?: any[] | null): boolean {
+  if (!Array.isArray(members) || members.length === 0) return true;
+  return members.some(m => {
+    const n = String(m?.name || '').toLowerCase().trim();
+    return n === 'anthony voight' || n === 'ryan saylor' || n === 'kyle moeller';
+  });
+}
+
+export function generateMetalAlbumSvg(title: string, year?: string, bandName?: string): string {
+  const cleanTitle = (title || 'Catalog Release').trim();
+  const cleanYear = (year || '').trim();
+  const cleanBand = (bandName || 'Artist').trim();
+
+  let hash = 0;
+  for (let i = 0; i < cleanTitle.length; i++) {
+    hash = (hash << 5) - hash + cleanTitle.charCodeAt(i);
+    hash |= 0;
+  }
+  const hues = ['#990000', '#7a001e', '#4a0e4e', '#1a365d', '#744210', '#1a202c'];
+  const primaryColor = hues[Math.abs(hash) % hues.length];
+
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='600' viewBox='0 0 600 600'>
+    <defs>
+      <linearGradient id='bg' x1='0%' y1='0%' x2='100%' y2='100%'>
+        <stop offset='0%' stop-color='${primaryColor}'/>
+        <stop offset='60%' stop-color='#09090b'/>
+        <stop offset='100%' stop-color='#000000'/>
+      </linearGradient>
+      <radialGradient id='glow' cx='50%' cy='40%' r='60%'>
+        <stop offset='0%' stop-color='${primaryColor}' stop-opacity='0.6'/>
+        <stop offset='100%' stop-color='#000000' stop-opacity='0'/>
+      </radialGradient>
+    </defs>
+    <rect width='600' height='600' fill='url(#bg)'/>
+    <rect width='600' height='600' fill='url(#glow)'/>
+    <circle cx='300' cy='250' r='180' fill='none' stroke='${primaryColor}' stroke-width='2' opacity='0.4'/>
+    <circle cx='300' cy='250' r='140' fill='none' stroke='#ffffff' stroke-width='1.5' opacity='0.2'/>
+    <path d='M300 80 L340 210 L470 250 L340 290 L300 420 L260 290 L130 250 L260 210 Z' fill='none' stroke='${primaryColor}' stroke-width='2' opacity='0.7'/>
+    <text x='300' y='470' text-anchor='middle' fill='#ffffff' font-family='sans-serif' font-weight='900' font-size='32' letter-spacing='2'>${cleanTitle.toUpperCase()}</text>
+    <text x='300' y='515' text-anchor='middle' fill='#d4d4d8' font-family='monospace' font-weight='700' font-size='18' letter-spacing='4'>${cleanBand.toUpperCase()}${cleanYear ? ' • ' + cleanYear : ''}</text>
+  </svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+
+export function findMasterReleaseCover(title: string, bandIdOrName?: string): string {
+  if (!title || typeof title !== 'string') return '';
+  const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!cleanTitle) return '';
+
+  let resolvedName = '';
+  if (bandIdOrName) {
+    const raw = bandIdOrName.trim();
+    const matchedBand = INITIAL_COMMUNITY_BANDS.find(s => s.id === raw || (s as any).uuid === raw || (s.name || '').toLowerCase() === raw.toLowerCase() || (s.custom_slug || '') === raw.toLowerCase());
+    if (matchedBand) {
+      resolvedName = matchedBand.name || (matchedBand as any).band_name || '';
+    } else {
+      resolvedName = raw;
+    }
+  }
+
+  const cleanBand = resolvedName ? resolvedName.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+  const isUUID = cleanBand.length > 20 || /^[0-9a-f-]{30,}/i.test(cleanBand);
+
+  for (const seed of INITIAL_COMMUNITY_BANDS) {
+    if (!seed || !Array.isArray(seed.discography)) continue;
+    const seedBandClean = (seed.name || seed.band_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const seedSlugClean = (seed.custom_slug || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    if (cleanBand && !isUUID && seedBandClean && !seedBandClean.includes(cleanBand) && !cleanBand.includes(seedBandClean) && !seedSlugClean.includes(cleanBand)) {
+      continue;
+    }
+
+    for (const rel of seed.discography) {
+      if (!rel || !rel.title) continue;
+      const relTitleClean = rel.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (relTitleClean === cleanTitle || (relTitleClean.length > 3 && cleanTitle.length > 3 && (relTitleClean.includes(cleanTitle) || cleanTitle.includes(relTitleClean)))) {
+        const cover = rel.cover_url || rel.cover_image || (rel as any).coverUrl || (rel as any).coverImage || (rel as any).image_url;
+        if (cover && isValidCoverUrl(cover)) return cover;
+      }
+    }
+  }
+
+  return '';
+}
+
+export function extractReleaseCover(r: any, bandIdOrName?: string): string {
+  if (!r || typeof r !== 'object') return '';
+  const candidateKeys = [
+    'cover_url', 'cover_image', 'coverUrl', 'coverImage',
+    'image_url', 'image', 'cover', 'artwork', 'imageUrl'
+  ];
+  for (const k of candidateKeys) {
+    if (isValidCoverUrl(r[k])) {
+      return String(r[k]).trim();
+    }
+  }
+  if (r.title) {
+    const fallback = findMasterReleaseCover(r.title, bandIdOrName);
+    if (fallback) return fallback;
+    return generateMetalAlbumSvg(r.title, r.year || r.release_date, bandIdOrName);
+  }
+  return '';
+}
+
 export function deduplicateDiscography(releases: DiscographyRelease[], bandIdOrName?: string): DiscographyRelease[] {
   if (!Array.isArray(releases)) return [];
+  
+  const sorted = [...releases].sort((a, b) => {
+    const tracksA = Array.isArray(a.tracks) ? a.tracks.length : 0;
+    const tracksB = Array.isArray(b.tracks) ? b.tracks.length : 0;
+    if (tracksB !== tracksA) return tracksB - tracksA;
+    const coverA = extractReleaseCover(a, bandIdOrName) ? 1 : 0;
+    const coverB = extractReleaseCover(b, bandIdOrName) ? 1 : 0;
+    return coverB - coverA;
+  });
+
   const seen = new Map<string, DiscographyRelease>();
   
   function getNormKey(title: string, year?: string): string {
@@ -195,42 +627,66 @@ export function deduplicateDiscography(releases: DiscographyRelease[], bandIdOrN
     return clean.replace(/[^a-z0-9]/g, '');
   }
 
-  for (const r of releases) {
-    if (!r || !r.title) continue;
+  for (const r of sorted) {
+    if (!r || !r.title || String(r.title).trim() === '') continue;
     if (isDeletedRelease(r.id, r.title, bandIdOrName)) continue;
-    const normKey = getNormKey(r.title, r.year);
+    
+    const finalYear = resolveAuthenticReleaseYear(r);
+    const normKey = getNormKey(r.title, finalYear || r.year);
     if (!normKey) continue;
-    const rCover = r.cover_url || r.cover_image || r.coverUrl || r.coverImage || r.image_url || '';
+
+    const rTracksCount = Array.isArray(r.tracks) ? r.tracks.length : 0;
+    const rCover = extractReleaseCover(r, bandIdOrName);
+
     if (!seen.has(normKey)) {
+      const bestCover = rCover || findMasterReleaseCover(r.title, bandIdOrName) || generateMetalAlbumSvg(r.title, finalYear || r.year, bandIdOrName);
       seen.set(normKey, {
         ...r,
-        cover_url: rCover || r.cover_url,
-        cover_image: rCover || r.cover_image,
-        coverUrl: rCover || r.coverUrl,
-        coverImage: rCover || r.coverImage,
-        image_url: rCover || r.image_url
+        year: finalYear || r.year,
+        release_date: finalYear || (r as any).release_date || (r as any).releaseDate,
+        releaseDate: finalYear || (r as any).releaseDate || (r as any).release_date,
+        release_year: finalYear || (r as any).release_year || r.year,
+        cover_url: bestCover,
+        cover_image: bestCover,
+        coverUrl: bestCover,
+        coverImage: bestCover,
+        image_url: bestCover,
+        image: bestCover,
+        cover: bestCover,
+        artwork: bestCover,
+        imageUrl: bestCover
       });
     } else {
       const existing = seen.get(normKey)!;
-      const existingCover = existing.cover_url || existing.cover_image || existing.coverUrl || existing.coverImage || existing.image_url || '';
-      const finalCover = (rCover && !rCover.includes('unsplash') && !rCover.includes('placeholder'))
-        ? rCover
-        : (existingCover || rCover);
-      const hasBetterCover = (!existingCover || existingCover.includes('unsplash') || existingCover.includes('placeholder')) && (rCover && !rCover.includes('unsplash') && !rCover.includes('placeholder'));
-      const hasMoreTracks = (r.tracks?.length || 0) > (existing.tracks?.length || 0);
+      const existingTracksCount = Array.isArray(existing.tracks) ? existing.tracks.length : 0;
+      const existingCover = extractReleaseCover(existing, bandIdOrName);
+      const finalCover = rCover || existingCover || findMasterReleaseCover(r.title, bandIdOrName) || findMasterReleaseCover(existing.title, bandIdOrName) || (existing.cover_url && isValidCoverUrl(existing.cover_url) ? existing.cover_url : generateMetalAlbumSvg(r.title, finalYear || r.year, bandIdOrName));
       const isExistingGenericTitle = ['split', 'split-ep', 'split ep'].includes(existing.title.toLowerCase().trim());
       const isNewDescriptiveTitle = !['split', 'split-ep', 'split ep'].includes(r.title.toLowerCase().trim());
+
+      const bestYear = finalYear || resolveAuthenticReleaseYear(existing) || existing.year || r.year;
+      const mergedTracks = (rTracksCount > 0 && rTracksCount >= existingTracksCount) ? r.tracks : (existingTracksCount > 0 ? existing.tracks : (r.tracks || []));
+      const bestId = (existingTracksCount > 0 && rTracksCount === 0) ? existing.id : (r.id || existing.id);
 
       seen.set(normKey, {
         ...existing,
         ...r,
+        id: bestId,
+        year: bestYear,
+        release_date: bestYear,
+        releaseDate: bestYear,
+        release_year: bestYear,
         title: isNewDescriptiveTitle ? r.title : existing.title,
         cover_url: finalCover,
         cover_image: finalCover,
         coverUrl: finalCover,
         coverImage: finalCover,
         image_url: finalCover,
-        tracks: (r.tracks?.length || 0) >= (existing.tracks?.length || 0) ? r.tracks : existing.tracks
+        image: finalCover,
+        cover: finalCover,
+        artwork: finalCover,
+        imageUrl: finalCover,
+        tracks: mergedTracks
       });
     }
   }
@@ -287,18 +743,188 @@ export function loadBandDiscographyFromCache(bandId: string, bandName?: string):
   return [];
 }
 
+/**
+ * Clears a band's cached discography from all dedicated localStorage keys.
+ */
+export function clearBandDiscographyFromCache(bandId: string, bandName?: string): void {
+  try {
+    const cleanId = String(bandId || '').trim();
+    const cleanName = bandName ? bandName.trim().toLowerCase() : '';
+    const keys = [
+      cleanId ? `nexus_core_band_discography_${cleanId}` : null,
+      cleanId ? `nexus_core_band_discography_${ensureUUID(cleanId)}` : null,
+      cleanName ? `nexus_core_band_discography_${cleanName}` : null,
+      cleanName ? `nexus_core_band_discography_${cleanName.replace(/[^a-z0-9]/g, '-')}` : null,
+    ].filter(Boolean) as string[];
+
+    for (const k of keys) {
+      safeLocalStorage.removeItem(k);
+    }
+  } catch (e) {
+    console.warn('[communityBands] Failed to clear band discography from cache:', e);
+  }
+}
+
+export function parseBandLineup(raw: any): LineupMember[] {
+  if (!raw) return [];
+  let members: any[] = [];
+  if (Array.isArray(raw)) {
+    members = raw;
+  } else if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === '[]') return [];
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          members = parsed;
+        } else if (parsed && typeof parsed === 'object' && parsed.name) {
+          members = [parsed];
+        }
+      } catch {
+        // Fallback to comma-delimited parsing below
+      }
+    }
+    if (members.length === 0 && !trimmed.startsWith('[')) {
+      const parts = trimmed.split(/,(?![^()]*\))/).map((s) => s.trim()).filter(Boolean);
+      members = parts.map((part, idx) => {
+        const match = part.match(/^(.*?)\s*\((.*)\)$/);
+        if (match) {
+          return {
+            id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+            name: match[1].trim(),
+            role: match[2].trim() || 'Musician',
+            status: 'active' as const,
+            years: 'Present'
+          };
+        }
+        return {
+          id: `mem-${idx}-${part.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+          name: part,
+          role: 'Musician',
+          status: 'active' as const,
+          years: 'Present'
+        };
+      });
+    }
+  }
+
+  // Heal previously comma-corrupted entries where a member's role was split across elements e.g.
+  // [{ name: "John Gallagher (Lead Guitars", role: "Musician" }, { name: "Vocals)", role: "Musician" }]
+  const healedMembers: any[] = [];
+  for (let i = 0; i < members.length; i++) {
+    const cur = members[i];
+    if (!cur) continue;
+    if (typeof cur === 'object' && typeof cur.name === 'string') {
+      const rawName = cur.name.trim();
+      if (rawName.endsWith(')') && !rawName.includes('(')) {
+        // Role fragment from a split parenthesis; append to previous member's role if possible
+        const extraRole = rawName.replace(/\)+$/, '').trim();
+        if (healedMembers.length > 0 && extraRole) {
+          const prev = healedMembers[healedMembers.length - 1];
+          if (prev && typeof prev.role === 'string') {
+            prev.role = prev.role === 'Musician' ? extraRole : `${prev.role}, ${extraRole}`;
+          }
+        }
+        continue;
+      }
+      if (rawName.includes('(') && !rawName.includes(')')) {
+        const [cleanName, openRole] = rawName.split('(');
+        let combinedRole = (openRole || '').trim();
+        // Check if next item is the closing paren fragment
+        const next = members[i + 1];
+        if (next && typeof next === 'object' && typeof next.name === 'string' && next.name.trim().endsWith(')') && !next.name.includes('(')) {
+          const nextRole = next.name.trim().replace(/\)+$/, '').trim();
+          if (nextRole) combinedRole = combinedRole ? `${combinedRole}, ${nextRole}` : nextRole;
+          i++; // skip fragment
+        } else if (cur.role && cur.role !== 'Musician' && !combinedRole.toLowerCase().includes(String(cur.role).toLowerCase())) {
+          combinedRole = combinedRole ? `${combinedRole}, ${cur.role}` : String(cur.role);
+        }
+        healedMembers.push({
+          ...cur,
+          name: cleanName.trim(),
+          role: combinedRole || cur.role || 'Musician'
+        });
+        continue;
+      }
+    }
+    healedMembers.push(cur);
+  }
+
+  const normalized = healedMembers
+    .filter(Boolean)
+    .map((m, idx) => {
+      if (typeof m === 'string') {
+        const trimmedStr = m.trim();
+        if (!trimmedStr) return null;
+        const match = trimmedStr.match(/^(.*?)\s*\((.*)\)$/);
+        if (match) {
+          return {
+            id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+            name: match[1].trim(),
+            role: match[2].trim() || 'Musician',
+            status: 'active',
+            years: 'Present'
+          } as LineupMember;
+        }
+        return { id: `mem-${idx}`, name: trimmedStr, role: 'Musician', status: 'active', years: 'Present' } as LineupMember;
+      }
+      if (typeof m === 'object' && typeof m.name === 'string' && m.name.trim()) {
+        let cleanName = m.name.trim();
+        let cleanRole = (typeof m.role === 'string' && m.role.trim()) ? m.role.trim() : 'Musician';
+        const inlineMatch = cleanName.match(/^(.*?)\s*\((.*)\)$/);
+        if (inlineMatch && (cleanRole === 'Musician' || !cleanRole)) {
+          cleanName = inlineMatch[1].trim();
+          cleanRole = inlineMatch[2].trim() || 'Musician';
+        }
+        return {
+          ...m,
+          name: cleanName,
+          role: cleanRole,
+          status: m.status || 'active',
+          years: (typeof m.years === 'string' && m.years.trim()) ? m.years.trim() : 'Present'
+        } as LineupMember;
+      }
+      return null;
+    })
+    .filter((m): m is LineupMember => m !== null);
+
+  return deduplicateLineup(normalized);
+}
+
 export function deduplicateLineup(members: LineupMember[]): LineupMember[] {
   if (!Array.isArray(members)) return [];
   const seen = new Map<string, LineupMember>();
   for (const m of members) {
     if (!m || !m.name) continue;
-    const normName = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const trimmedName = m.name.trim();
+    if (trimmedName.endsWith(')') && !trimmedName.includes('(')) continue;
+    const normName = trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!normName) continue;
+
+    // Blacklist generic role-only placeholders or legacy mock members
+    if (
+      normName === 'smogen' ||
+      normName === 'smgen' ||
+      normName === 'barra' ||
+      (normName === 'elis' && !trimmedName.toLowerCase().includes('edin')) ||
+      normName === 'lead' ||
+      normName === 'member' ||
+      normName === 'vocals' ||
+      normName === 'guitars' ||
+      normName === 'drums' ||
+      normName === 'bass'
+    ) {
+      continue;
+    }
+
     if (!seen.has(normName)) {
       seen.set(normName, m);
     } else {
       const existing = seen.get(normName)!;
       if (existing.status === 'past' && m.status === 'active') {
+        seen.set(normName, m);
+      } else if (existing.role === 'Musician' && m.role && m.role !== 'Musician') {
         seen.set(normName, m);
       }
     }
@@ -306,26 +932,45 @@ export function deduplicateLineup(members: LineupMember[]): LineupMember[] {
   return Array.from(seen.values());
 }
 
+function isLineupIntentionallyCleared(bandId?: string, bandUUID?: string, cleanBandName?: string): boolean {
+  return Boolean(
+    (bandId && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${bandId}`) === 'true') ||
+    (bandUUID && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${bandUUID}`) === 'true') ||
+    (cleanBandName && safeLocalStorage.getItem(`nexus_core_band_lineup_cleared_${cleanBandName}`) === 'true')
+  );
+}
+
 const safeLocalStorage = {
   getItem: (key: string): string | null => {
     try {
-      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      if (typeof window !== 'undefined' && window?.localStorage) {
         return window.localStorage.getItem(key);
+      }
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(key);
       }
     } catch {}
     return null;
   },
   setItem: (key: string, val: string): void => {
     try {
-      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      if (typeof window !== 'undefined' && window?.localStorage) {
         window.localStorage.setItem(key, val);
+        return;
+      }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, val);
       }
     } catch {}
   },
   removeItem: (key: string): void => {
     try {
-      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      if (typeof window !== 'undefined' && window?.localStorage) {
         window.localStorage.removeItem(key);
+        return;
+      }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(key);
       }
     } catch {}
   }
@@ -333,7 +978,13 @@ const safeLocalStorage = {
 
 export function purgeDeletedAndZombieBands(): void {
   try {
+    markBandDeletedInStorage('tyler-hansard', 'tyler hansard');
+    markBandDeletedInStorage('tyler-slamson', 'tyler slamson');
     // Explicitly mark false placeholder releases as deleted
+    markReleaseDeletedInStorage('rel-ed-fake-1', 'Butcher Triple Act', 'extermination dismemberment');
+    markReleaseDeletedInStorage('rel-ed-fake-2', 'Serial Violence', 'extermination dismemberment');
+    markReleaseDeletedInStorage('rel-ed-fake-3', 'Agony Selection', 'extermination dismemberment');
+    markReleaseDeletedInStorage('rel-ed-fake-4', 'Omnivore', 'extermination dismemberment');
     markReleaseDeletedInStorage('rel-ve-1', 'Degradation of Humanity', 'virulent excision');
     markReleaseDeletedInStorage('rel-ve-2', 'The Excision of Reality', 'virulent excision');
     markReleaseDeletedInStorage('rel-ve-split-2022', 'Acts of Sadistic Cruelty: 4 Way Split', 'virulent excision');
@@ -355,6 +1006,72 @@ export function purgeDeletedAndZombieBands(): void {
     markReleaseDeletedInStorage('rel-ngb-2', 'Human Fleshmonger', 'necroticgorebeast');
     markReleaseDeletedInStorage('rel-pf-1', 'Slamaholics Vol. 1', 'peelingflesh');
     markReleaseDeletedInStorage('rel-pp-3', 'Revel in Suffering', 'putrid pile');
+    markReleaseDeletedInStorage('2b6d0a99-67bc-4d96-9c86-b27204130a48', 'Gradually Melted (Re-Issue) - EP', 'deeds of flesh');
+
+    // Ensure legitimate releases for featured community bands are never blacklisted locally
+    try {
+      const deletedReleases = getDeletedReleaseKeys();
+      let releaseBlacklistChanged = false;
+      for (const key of Array.from(deletedReleases)) {
+        const k = key.toLowerCase();
+        // Skip duplicate re-issues from whitelist
+        if (k.includes('re-issue') || k.includes('reissue') || k === '2b6d0a99-67bc-4d96-9c86-b27204130a48') {
+          continue;
+        }
+        if (
+          k.includes('birdflesh') ||
+          k.includes('cannibal') ||
+          k.includes('hate eternal') ||
+          k.includes('scour') ||
+          k.includes('squash') ||
+          k.includes('borntodecide') ||
+          k.includes('satansgoats') ||
+          k.includes('grindvirus') ||
+          k.includes('grey') ||
+          k.includes('red') ||
+          k.includes('black') ||
+          k.includes('gold') ||
+          k.includes('protonemesis') ||
+          k.includes('enslaver') ||
+          k.includes('serial urbicide') ||
+          k.includes('butcher basement') ||
+          k.includes('dehumanization protocol') ||
+          k.includes('deeds of flesh') ||
+          k.includes('trading pieces') ||
+          k.includes('inbreeding the anthropophagi') ||
+          k.includes('path of the weakening') ||
+          k.includes('mark of the legion') ||
+          k.includes('reduced to ashes') ||
+          k.includes('crown of souls') ||
+          k.includes('of what\'s to come') ||
+          k.includes('portals to canaan') ||
+          k.includes('nucleus') ||
+          (k.includes('gradually melted') && !k.includes('re-issue'))
+        ) {
+          deletedReleases.delete(key);
+          releaseBlacklistChanged = true;
+        }
+      }
+      if (releaseBlacklistChanged) {
+        safeLocalStorage.setItem(DELETED_RELEASES_STORAGE_KEY, JSON.stringify(Array.from(deletedReleases)));
+      }
+    } catch (_) {}
+
+    // Ensure protected community bands are never blacklisted locally in DELETED_STORAGE_KEY
+    try {
+      const deletedBands = getDeletedBandIds();
+      let bandBlacklistChanged = false;
+      for (const id of Array.from(deletedBands)) {
+        const clean = id.toLowerCase().trim();
+        if (PROTECTED_COMMUNITY_BANDS.has(clean) || INITIAL_COMMUNITY_BANDS.some(b => b.id === id || ensureUUID(b.id) === id || (b.name || '').toLowerCase().trim() === clean || (b.custom_slug || '').toLowerCase().trim() === clean)) {
+          deletedBands.delete(id);
+          bandBlacklistChanged = true;
+        }
+      }
+      if (bandBlacklistChanged) {
+        safeLocalStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(Array.from(deletedBands)));
+      }
+    } catch (_) {}
 
     const discKeys = [
       'nexus_core_band_discography_cbddb810-259b-4230-9968-3d402dfdb872',
@@ -365,6 +1082,13 @@ export function purgeDeletedAndZombieBands(): void {
       'nexus_core_band_discography_peelingflesh',
       'nexus_core_band_discography_putrid-pile',
       'nexus_core_band_discography_putrid pile',
+      'nexus_core_band_discography_extermination-dismemberment',
+      'nexus_core_band_discography_extermination dismemberment',
+      'nexus_core_band_discography_extermination-dismemberment-official-uuid',
+      'nexus_core_band_discography_deeds of flesh',
+      'nexus_core_band_discography_deeds-of-flesh',
+      'nexus_core_band_discography_831ed6bc-e039-45d3-84cd-0a508fa18f57',
+      'nexus_core_band_discography_dof-deeds-of-flesh-official-uuid',
       'nexus_core_releases_cache'
     ];
 
@@ -382,6 +1106,13 @@ export function purgeDeletedAndZombieBands(): void {
               return false;
             }
             if (
+              title.includes('butcher triple act') ||
+              title.includes('serial violence') ||
+              title.includes('agony selection') ||
+              (title.includes('omnivore') && (!r.tracks || r.tracks.length === 0)) ||
+              title.includes('gradually melted (re-issue)') ||
+              title.includes('gradually melted re-issue') ||
+              r.id === '2b6d0a99-67bc-4d96-9c86-b27204130a48' ||
               title.includes('degradation of humanity') || 
               title.includes('excision of reality') || 
               title.includes('acts of sadistic cruelty') ||
@@ -474,12 +1205,45 @@ export function purgeDeletedAndZombieBands(): void {
 const STORAGE_KEY = 'nexus_community_band_archives';
 const DELETED_STORAGE_KEY = 'nexus_deleted_community_bands';
 
+export const PROTECTED_COMMUNITY_BANDS = new Set<string>([
+  'cannibal corpse', 'cannibal-corpse', 'cc-cannibal-corpse-official-uuid', 'def01697-734a-43fa-8b88-66166b28f743',
+  'hate eternal', 'hate-eternal', 'he-hate-eternal-official-uuid',
+  'birdflesh', 'bf-birdflesh-official-uuid',
+  'scour', 'sc-scour-official-uuid',
+  'squash bowels', 'squash-bowels', 'sb-squash-bowels-official-uuid',
+  'deeds of flesh', 'deeds-of-flesh', 'dof-deeds-of-flesh-official-uuid',
+  'virulent excision', 'virulent-excision', 'cbddb810-259b-4230-9968-3d402dfdb872',
+  'cordyceps',
+  'cranial impalement', 'cranial-impalement',
+  'mortician',
+  'sanguisugabogg',
+  'necrophagist',
+  'dying fetus', 'dying-fetus',
+  'devourment',
+  'origin',
+  'peelingflesh',
+  'putrid pile', 'putrid-pile',
+  'lividity',
+  'suffocation',
+  'stabbing',
+  'exhumed',
+  'incinerate',
+  'kill everything', 'kill-everything',
+  'molested divinity', 'molested-divinity',
+  'mortal torment', 'mortal-torment'
+]);
+
 function getDeletedBandIds(): Set<string> {
   try {
     const raw = safeLocalStorage.getItem(DELETED_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return new Set(parsed.map(String));
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.map(String).filter(id => {
+          const clean = id.toLowerCase().trim();
+          return !PROTECTED_COMMUNITY_BANDS.has(clean);
+        }));
+      }
     }
   } catch {}
   return new Set();
@@ -487,14 +1251,18 @@ function getDeletedBandIds(): Set<string> {
 
 function markBandDeletedInStorage(id: string, name?: string): void {
   try {
+    const cleanId = String(id || '').trim().toLowerCase();
+    const cleanName = name ? String(name).trim().toLowerCase() : '';
+    if (PROTECTED_COMMUNITY_BANDS.has(cleanId) || PROTECTED_COMMUNITY_BANDS.has(cleanName)) {
+      return; // Do not allow blacklisting protected community bands
+    }
     const current = getDeletedBandIds();
-    const cleanId = String(id || '').trim();
     if (cleanId) {
       current.add(cleanId);
       current.add(ensureUUID(cleanId));
     }
-    if (name && typeof name === 'string' && name.trim()) {
-      current.add(name.toLowerCase().trim());
+    if (cleanName) {
+      current.add(cleanName);
     }
     safeLocalStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(Array.from(current)));
   } catch {}
@@ -503,6 +1271,14 @@ function markBandDeletedInStorage(id: string, name?: string): void {
 export class CommunityBandManager {
   private static instance: CommunityBandManager;
   private isListeningToRealtime = false;
+  private syncLocks = new Map<string, Promise<{ success: boolean; error?: string }>>();
+  private realtimeFetchTimer: ReturnType<typeof setTimeout> | null = null;
+  private memoryBands: CommunityBandRecord[] = [];
+  private hasAuthoritativeCloudSync = false;
+
+  public resetAuthoritativeSync(): void {
+    this.hasAuthoritativeCloudSync = false;
+  }
 
   private constructor() {
     this.initStorage();
@@ -524,17 +1300,38 @@ export class CommunityBandManager {
 
       this.isListeningToRealtime = true;
 
-      // Subscribe to live postgres_changes on the 'bands' table so all band profiles update live
+      const scheduleRealtimeRefresh = (eventType: string, sourceTable: 'bands' | 'releases', payload: any) => {
+        if (this.realtimeFetchTimer) {
+          clearTimeout(this.realtimeFetchTimer);
+        }
+        this.realtimeFetchTimer = setTimeout(async () => {
+          this.realtimeFetchTimer = null;
+          console.log(`[communityBands] Live ${sourceTable} update received:`, eventType);
+          const updated = await this.fetchFromSupabase();
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: { payload, bands: updated } }));
+            if (sourceTable === 'releases') {
+              window.dispatchEvent(new CustomEvent('nexus_community_releases_updated', { detail: { payload, bands: updated } }));
+            }
+          }
+        }, 250);
+      };
+
+      // Subscribe to live postgres_changes on both 'bands' and 'releases' tables so all band profiles and discographies update live
       client
         .channel('public:bands_community_sync')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'bands' },
-          async () => {
-            await this.fetchFromSupabase();
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('nexus_community_bands_updated'));
-            }
+          (payload) => {
+            scheduleRealtimeRefresh(payload.eventType, 'bands', payload);
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'releases' },
+          (payload) => {
+            scheduleRealtimeRefresh(payload.eventType, 'releases', payload);
           }
         )
         .subscribe();
@@ -548,115 +1345,211 @@ export class CommunityBandManager {
 
   private initStorage(): void {
     try {
-      const deletedIds = getDeletedBandIds();
-
-      const stored = safeLocalStorage.getItem(STORAGE_KEY);
-      if (!stored) {
-        // Only seed bands that have not been explicitly deleted by the user
-        const initialFiltered = INITIAL_COMMUNITY_BANDS.filter(b => 
-          !deletedIds.has(b.id) &&
-          !deletedIds.has(ensureUUID(b.id)) &&
-          !deletedIds.has((b.name || '').toLowerCase().trim())
-        );
-        safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(initialFiltered));
-      } else {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          // Purge any legacy cached mock bands that are not official Supabase records or have been deleted
-          const purged = parsed.filter(b => {
-            const bId = String(b.id || '').trim();
-            const bName = (b.name || (b as any).band_name || '').toLowerCase().trim();
-            if (deletedIds.has(bId) || deletedIds.has(ensureUUID(bId)) || deletedIds.has(bName)) return false;
-            if (UNOFFICIAL_MOCK_BAND_IDS.has(bId)) return false;
-            if (UNOFFICIAL_MOCK_BAND_NAMES.has(bName) && !bId.startsWith('db-')) return false;
-            return true;
-          });
-
-          // Merge non-deleted initial community bands into storage
-          const updated = [...purged];
-          for (const initBand of INITIAL_COMMUNITY_BANDS) {
-            const initName = (initBand.name || '').toLowerCase().trim();
-            if (deletedIds.has(initBand.id) || deletedIds.has(ensureUUID(initBand.id)) || deletedIds.has(initName)) {
-              continue;
-            }
-            const idx = updated.findIndex(b =>
-              b.id === initBand.id ||
-              ensureUUID(b.id) === ensureUUID(initBand.id) ||
-              ((b.name || (b as any).band_name || '').toLowerCase().trim() === initName)
-            );
-            if (idx === -1) {
-              updated.push(initBand);
-            } else {
-              const bIdKey = initBand.id || '';
-              const bUUIDKey = bIdKey ? ensureUUID(bIdKey) : '';
-              const savedLogo = (bIdKey ? safeLocalStorage.getItem(`nexus_core_band_logo_${bIdKey}`) : null) || 
-                                (bUUIDKey ? safeLocalStorage.getItem(`nexus_core_band_logo_${bUUIDKey}`) : null) ||
-                                safeLocalStorage.getItem(`nexus_core_band_logo_${updated[idx].id}`);
-              const savedCover = (bIdKey ? safeLocalStorage.getItem(`nexus_core_band_cover_${bIdKey}`) : null) || 
-                                 (bUUIDKey ? safeLocalStorage.getItem(`nexus_core_band_cover_${bUUIDKey}`) : null) ||
-                                 safeLocalStorage.getItem(`nexus_core_band_cover_${updated[idx].id}`);
-              
-              const bestLogo = savedLogo || 
-                (updated[idx].logo_url && updated[idx].logo_url !== initBand.logo_url && !updated[idx].logo_url.includes('unsplash') ? updated[idx].logo_url : null) ||
-                (updated[idx].avatar_url && updated[idx].avatar_url !== initBand.avatar_url && !updated[idx].avatar_url.includes('unsplash') ? updated[idx].avatar_url : null) ||
-                initBand.logo_url;
-              const bestAvatar = bestLogo;
-              const bestCover = savedCover ||
-                (updated[idx].cover_url && updated[idx].cover_url !== initBand.cover_url && !updated[idx].cover_url.includes('unsplash') ? updated[idx].cover_url : null) ||
-                (updated[idx].banner_url && updated[idx].banner_url !== initBand.banner_url && !updated[idx].banner_url.includes('unsplash') ? updated[idx].banner_url : null) ||
-                initBand.cover_url;
-              const bestBio = (updated[idx].bio && updated[idx].bio.trim() !== '') ? updated[idx].bio : (initBand.bio || '');
-              const cachedDiscography = loadBandDiscographyFromCache(initBand.id, initName);
-              const discCandidates: DiscographyRelease[][] = [
-                (updated[idx].discography && updated[idx].discography.length > 0) ? updated[idx].discography : null,
-                (cachedDiscography && cachedDiscography.length > 0) ? cachedDiscography : null,
-                (initBand.discography && initBand.discography.length > 0) ? initBand.discography : null
-              ].filter(Boolean) as DiscographyRelease[][];
-
-              const combinedDisc: DiscographyRelease[] = [];
-              for (const clist of discCandidates) {
-                combinedDisc.push(...clist);
-              }
-              const bestDiscography = deduplicateDiscography(combinedDisc);
-              if (bestDiscography.length > 0) {
-                saveBandDiscographyToCache(initBand.id, initName, bestDiscography);
-              }
-
-              const bestLineup = deduplicateLineup(
-                (updated[idx].lineup && updated[idx].lineup.length > 0)
-                  ? updated[idx].lineup
-                  : (initBand.lineup || [])
-              );
-
-              // Upgrade with user edits taking absolute precedence over pre-seeded master
-              updated[idx] = {
-                ...initBand,
-                ...updated[idx],
-                avatar_url: bestAvatar,
-                logo_url: bestLogo,
-                avatar: bestLogo,
-                image: bestLogo,
-                cover_url: bestCover,
-                banner_url: bestCover,
-                bio: bestBio,
-                record_label: updated[idx].record_label || updated[idx].label || initBand.record_label || initBand.label,
-                label: updated[idx].label || updated[idx].record_label || initBand.label || initBand.record_label,
-                discography: bestDiscography,
-                lineup: bestLineup,
-                verification_status: updated[idx].verification_status || initBand.verification_status || 'community_archive'
-              };
+      // Clean slate migration for Cannibal Corpse discography to wipe ghost/corrupt releases
+      try {
+        const CC_WIPED_KEY = 'nexus_cc_discography_wiped_v4';
+        if (!safeLocalStorage.getItem(CC_WIPED_KEY)) {
+          clearBandDiscographyFromCache('def01697-734a-43fa-8b88-66166b28f743', 'cannibal corpse');
+          clearBandDiscographyFromCache('cc-cannibal-corpse-official-uuid', 'cannibal corpse');
+          safeLocalStorage.removeItem('nexus_core_band_discography_cannibal corpse');
+          safeLocalStorage.removeItem('nexus_core_band_discography_cannibal-corpse');
+          safeLocalStorage.removeItem('nexus_core_band_discography_def01697-734a-43fa-8b88-66166b28f743');
+          safeLocalStorage.removeItem('nexus_core_band_discography_7808e9e0-73d2-4286-af0b-a21487090b73');
+          
+          const rawArchives = safeLocalStorage.getItem(STORAGE_KEY);
+          if (rawArchives) {
+            const parsedArchives = JSON.parse(rawArchives);
+            if (Array.isArray(parsedArchives)) {
+              const cleaned = parsedArchives.map((b: any) => {
+                const bName = (b.name || b.band_name || '').toLowerCase().trim();
+                const bId = String(b.id || '').toLowerCase().trim();
+                if (bName.includes('cannibal corpse') || bId === 'def01697-734a-43fa-8b88-66166b28f743' || bId === 'cc-cannibal-corpse-official-uuid' || bId === '7808e9e0-73d2-4286-af0b-a21487090b73') {
+                  return { ...b, id: 'def01697-734a-43fa-8b88-66166b28f743', discography: [] };
+                }
+                return b;
+              });
+              safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
             }
           }
-          safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        } else {
-          const initialFiltered = INITIAL_COMMUNITY_BANDS.filter(b => 
-            !deletedIds.has(b.id) &&
-            !deletedIds.has(ensureUUID(b.id)) &&
-            !deletedIds.has((b.name || '').toLowerCase().trim())
-          );
-          safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(initialFiltered));
+          safeLocalStorage.setItem(CC_WIPED_KEY, 'true');
         }
+      } catch (_) {}
+
+      // Clean slate migration for bands affected by 0-track / empty-cover placeholder discographies
+      try {
+        const PLACEHOLDER_WIPED_KEY = 'nexus_placeholder_discographies_wiped_v3';
+        if (!safeLocalStorage.getItem(PLACEHOLDER_WIPED_KEY)) {
+          const targetBands = [
+            { id: 'dof-deeds-of-flesh-official-uuid', name: 'deeds of flesh' },
+            { id: 'he-hate-eternal-official-uuid', name: 'hate eternal' },
+            { id: 'bf-birdflesh-official-uuid', name: 'birdflesh' },
+            { id: 'sc-scour-official-uuid', name: 'scour' },
+            { id: 'sb-squash-bowels-official-uuid', name: 'squash bowels' },
+            { id: 'lod-lust-of-decay-official-uuid', name: 'lust of decay' },
+            { id: '48ef20cc-0954-4a94-868e-0783699ec6ff', name: 'lust of decay' },
+            { id: '7ab93a9c-2446-4e8d-9d68-b4a596726630', name: 'scour' },
+            { id: 'f2f4b355-6c3b-4850-8603-191567f7a9db', name: 'hate eternal' },
+            { id: '92b270b9-828b-4da1-a3b9-078753fb7dc2', name: 'birdflesh' }
+          ];
+          
+          for (const tb of targetBands) {
+            clearBandDiscographyFromCache(tb.id, tb.name);
+            clearBandDiscographyFromCache(ensureUUID(tb.id), tb.name);
+            safeLocalStorage.removeItem(`nexus_core_band_discography_${tb.name}`);
+            safeLocalStorage.removeItem(`nexus_core_band_discography_${tb.name.replace(/[^a-z0-9]/g, '-')}`);
+            safeLocalStorage.removeItem(`nexus_core_band_discography_${tb.id}`);
+            safeLocalStorage.removeItem(`nexus_core_band_discography_${ensureUUID(tb.id)}`);
+          }
+
+          const rawArchives = safeLocalStorage.getItem(STORAGE_KEY);
+          if (rawArchives) {
+            const parsedArchives = JSON.parse(rawArchives);
+            if (Array.isArray(parsedArchives)) {
+              const cleaned = parsedArchives.map((b: any) => {
+                const bName = (b.name || b.band_name || '').toLowerCase().trim();
+                const bId = String(b.id || '').toLowerCase().trim();
+                const match = targetBands.find(tb => 
+                  bName === tb.name || bId === tb.id || bId === ensureUUID(tb.id)
+                );
+                if (match && Array.isArray(b.discography)) {
+                  const hasBadReleases = b.discography.some((d: any) => 
+                    (!d.cover_url && !d.cover_image) || (!d.tracks || d.tracks.length === 0)
+                  );
+                  if (hasBadReleases) {
+                    return { ...b, discography: [] };
+                  }
+                }
+                return b;
+              });
+              safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+            }
+          }
+          safeLocalStorage.setItem(PLACEHOLDER_WIPED_KEY, 'true');
+        }
+      } catch (_) {}
+
+      // Migration to fix Aeon (5), Benediction (10), Cannibal Corpse (18), Hypocrisy (17), & Extermination Dismemberment (5) discography count
+      // and restore Extermination Dismemberment's complete 5 official releases (Butcher Basement, Serial Urbicide, Protonemesis, Dehumanization Protocol, Enslaver of the Continents)
+      try {
+        const ALL_BANDS_DISCOGRAPHY_FIX_KEY = 'nexus_extermination_dismemberment_restore_5_releases_v12';
+        if (!safeLocalStorage.getItem(ALL_BANDS_DISCOGRAPHY_FIX_KEY)) {
+          // Clear cached discography for Aeon, Benediction, Cannibal Corpse, Hypocrisy, and Extermination Dismemberment to force full re-fetch of all releases from Supabase & seed master
+          clearBandDiscographyFromCache('0f365267-3742-4ddb-a853-ad458a233c62', 'aeon');
+          clearBandDiscographyFromCache('benediction-official-uuid', 'benediction');
+          clearBandDiscographyFromCache('def01697-734a-43fa-8b88-66166b28f743', 'cannibal corpse');
+          clearBandDiscographyFromCache('hypocrisy-official-uuid', 'hypocrisy');
+          clearBandDiscographyFromCache('2e4753ed-3af6-454d-912a-0512c544fb12', 'extermination dismemberment');
+          clearBandDiscographyFromCache('extermination-dismemberment-official-uuid', 'extermination dismemberment');
+          safeLocalStorage.removeItem('nexus_core_band_discography_aeon');
+          safeLocalStorage.removeItem('nexus_core_band_discography_0f365267-3742-4ddb-a853-ad458a233c62');
+          safeLocalStorage.removeItem('nexus_core_band_discography_benediction');
+          safeLocalStorage.removeItem('nexus_core_band_discography_benediction-official-uuid');
+          safeLocalStorage.removeItem('nexus_core_band_discography_cannibal corpse');
+          safeLocalStorage.removeItem('nexus_core_band_discography_cannibal-corpse');
+          safeLocalStorage.removeItem('nexus_core_band_discography_def01697-734a-43fa-8b88-66166b28f743');
+          safeLocalStorage.removeItem('nexus_core_band_discography_hypocrisy');
+          safeLocalStorage.removeItem('nexus_core_band_discography_hypocrisy-official-uuid');
+          safeLocalStorage.removeItem('nexus_core_band_discography_extermination dismemberment');
+          safeLocalStorage.removeItem('nexus_core_band_discography_extermination-dismemberment');
+          safeLocalStorage.removeItem('nexus_core_band_discography_2e4753ed-3af6-454d-912a-0512c544fb12');
+          safeLocalStorage.removeItem('nexus_core_band_discography_extermination-dismemberment-official-uuid');
+
+          // Set Cannibal Corpse authentic image URLs
+          const CC_REAL_AVATAR = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793953372064_1793953372104.jpg';
+          const CC_REAL_BANNER = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1793953524744_1793953524750.jpg';
+          
+          safeLocalStorage.setItem('nexus_core_band_logo_def01697-734a-43fa-8b88-66166b28f743', CC_REAL_AVATAR);
+          safeLocalStorage.setItem('nexus_core_band_cover_def01697-734a-43fa-8b88-66166b28f743', CC_REAL_BANNER);
+
+          const rawArchives = safeLocalStorage.getItem(STORAGE_KEY);
+          if (rawArchives) {
+            const parsedArchives = JSON.parse(rawArchives);
+            if (Array.isArray(parsedArchives)) {
+              const cleaned = parsedArchives.map((b: any) => {
+                const bName = (b.name || b.band_name || '').toLowerCase().trim();
+                const bId = String(b.id || '').toLowerCase().trim();
+                if (bName.includes('cannibal corpse') || bId === 'def01697-734a-43fa-8b88-66166b28f743') {
+                  delete b.discography;
+                  return {
+                    ...b,
+                    avatar: CC_REAL_AVATAR,
+                    avatar_url: CC_REAL_AVATAR,
+                    logo_url: CC_REAL_AVATAR,
+                    image: CC_REAL_AVATAR,
+                    cover_url: CC_REAL_BANNER,
+                    banner_url: CC_REAL_BANNER
+                  };
+                }
+                if (bName === 'benediction' || bId === 'benediction-official-uuid' || bName === 'hypocrisy' || bId === 'hypocrisy-official-uuid' || bName.includes('extermination dismemberment') || bId === 'extermination-dismemberment-official-uuid' || bId === '2e4753ed-3af6-454d-912a-0512c544fb12') {
+                  delete b.discography;
+                }
+                return b;
+              });
+              safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+            }
+          }
+          safeLocalStorage.setItem(ALL_BANDS_DISCOGRAPHY_FIX_KEY, 'true');
+        }
+      } catch (_) {}
+
+      // Clean slate migration for Deeds of Flesh discography to purge duplicate Gradually Melted (Re-Issue) and load exact 10 releases
+      try {
+        const DOF_FIX_KEY = 'nexus_deeds_of_flesh_10_releases_fix_v13';
+        if (!safeLocalStorage.getItem(DOF_FIX_KEY)) {
+          clearBandDiscographyFromCache('831ed6bc-e039-45d3-84cd-0a508fa18f57', 'deeds of flesh');
+          clearBandDiscographyFromCache('dof-deeds-of-flesh-official-uuid', 'deeds of flesh');
+          safeLocalStorage.removeItem('nexus_core_band_discography_deeds of flesh');
+          safeLocalStorage.removeItem('nexus_core_band_discography_deeds-of-flesh');
+          safeLocalStorage.removeItem('nexus_core_band_discography_831ed6bc-e039-45d3-84cd-0a508fa18f57');
+          safeLocalStorage.removeItem('nexus_core_band_discography_dof-deeds-of-flesh-official-uuid');
+
+          markReleaseDeletedInStorage('2b6d0a99-67bc-4d96-9c86-b27204130a48', 'Gradually Melted (Re-Issue) - EP', 'deeds of flesh');
+
+          const rawArchives = safeLocalStorage.getItem(STORAGE_KEY);
+          if (rawArchives) {
+            const parsedArchives = JSON.parse(rawArchives);
+            if (Array.isArray(parsedArchives)) {
+              const cleaned = parsedArchives.map((b: any) => {
+                const bName = (b.name || b.band_name || '').toLowerCase().trim();
+                const bId = String(b.id || '').toLowerCase().trim();
+                if (bName.includes('deeds of flesh') || bId === '831ed6bc-e039-45d3-84cd-0a508fa18f57' || bId === 'dof-deeds-of-flesh-official-uuid') {
+                  delete b.discography;
+                  return {
+                    ...b,
+                    id: '831ed6bc-e039-45d3-84cd-0a508fa18f57'
+                  };
+                }
+                return b;
+              });
+              safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+            }
+          }
+          safeLocalStorage.setItem(DOF_FIX_KEY, 'true');
+        }
+      } catch (_) {}
+
+      const deletedIds = getDeletedBandIds();
+
+      // Absorb any legacy localStorage catalog into memory, then strip bulky catalog keys from localStorage
+      const stored = safeLocalStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            this.memoryBands = parsed.filter(b => {
+              const bId = String(b?.id || '').trim();
+              const bName = (b?.name || (b as any)?.band_name || '').toLowerCase().trim();
+              if (!bId && !bName) return false;
+              if (deletedIds.has(bId) || deletedIds.has(ensureUUID(bId)) || deletedIds.has(bName)) return false;
+              if (UNOFFICIAL_MOCK_BAND_IDS.has(bId)) return false;
+              if (UNOFFICIAL_MOCK_BAND_NAMES.has(bName) && !bId.startsWith('db-')) return false;
+              return true;
+            });
+          }
+        } catch {}
+        safeLocalStorage.removeItem(STORAGE_KEY);
       }
+      safeLocalStorage.removeItem('nexus_community_band_archives');
     } catch (e) {
       console.warn('Error initializing community band archives:', e);
     }
@@ -666,12 +1559,15 @@ export class CommunityBandManager {
     try {
       const raw = safeLocalStorage.getItem(STORAGE_KEY);
       const deletedIds = getDeletedBandIds();
-      let list: CommunityBandRecord[] = [];
+      let list: CommunityBandRecord[] = [...this.memoryBands];
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) list = parsed;
+          if (Array.isArray(parsed)) {
+            list = [...parsed, ...list];
+          }
         } catch {}
+        safeLocalStorage.removeItem(STORAGE_KEY);
       }
       
       const initialMap = new Map(INITIAL_COMMUNITY_BANDS.map(b => [b.id, b]));
@@ -728,60 +1624,83 @@ export class CommunityBandManager {
           continue;
         }
 
-        // Resiliently restore lineup from dedicated localStorage keys if empty in the archive object
+        // Resiliently restore lineup from dedicated localStorage keys only if item.lineup is not explicitly defined
         const cachedLineupRaw = safeLocalStorage.getItem(`nexus_core_band_lineup_${item.id}`) ||
                                 safeLocalStorage.getItem(`nexus_core_band_lineup_${itemUUID}`) ||
                                 (cleanNorm ? safeLocalStorage.getItem(`nexus_core_band_lineup_${cleanNorm}`) : null);
         let restoredLineupFromCache: LineupMember[] | null = null;
-        if (cachedLineupRaw) {
+        if (cachedLineupRaw !== null && cachedLineupRaw !== undefined && String(cachedLineupRaw).trim() !== '') {
           try {
             const p = JSON.parse(cachedLineupRaw);
-            if (Array.isArray(p) && p.length > 0) restoredLineupFromCache = p;
+            if (Array.isArray(p)) restoredLineupFromCache = p;
           } catch {}
         }
 
         let processedItem = item;
-        // If it's a pre-seeded band, only fill in missing fields from fresh, never overwrite user edits!
+        const cachedDisco = loadBandDiscographyFromCache(processedItem.id, cleanNorm);
+        const itemDisco = Array.isArray(processedItem.discography) ? processedItem.discography : [];
+        const freshDisco = fresh && Array.isArray(fresh.discography) ? fresh.discography : [];
+
+        const parsedItemLineup = parseBandLineup(item.lineup);
+        const isCleared = isLineupIntentionallyCleared(item.id, itemUUID, cleanNorm);
+        // If it's a pre-seeded band, fill in missing baseline fields from fresh ONLY when DB/user field is null/undefined
         if (fresh) {
+          const safeLineup = parsedItemLineup.length > 0
+            ? parsedItemLineup
+            : isCleared
+            ? []
+            : (restoredLineupFromCache && restoredLineupFromCache.length > 0 ? restoredLineupFromCache : (fresh.lineup || []));
+          const safeAvatar = resolveCanonicalBandLogo(item) || resolveCanonicalBandLogo(fresh);
+          const safeCover = resolveCanonicalBandCover(item) || resolveCanonicalBandCover(fresh);
           processedItem = {
             ...fresh,
             ...item,
             name: rawName,
             band_name: rawName,
-            avatar_url: item.avatar_url || fresh.avatar_url,
-            logo_url: item.logo_url || fresh.logo_url,
-            cover_url: item.cover_url || fresh.cover_url,
-            banner_url: item.banner_url || fresh.banner_url,
+            avatar_url: safeAvatar,
+            logo_url: safeAvatar,
+            image_url: safeAvatar,
+            logo: safeAvatar,
+            avatar: safeAvatar,
+            image: safeAvatar,
+            cover_url: safeCover,
+            banner_url: safeCover,
             bio: (item.bio !== undefined && item.bio !== null) ? item.bio : (fresh.bio || ''),
             city: (item.city !== undefined && item.city !== null) ? item.city : (fresh.city || ''),
             state: (item.state !== undefined && item.state !== null) ? item.state : (fresh.state || ''),
             record_label: (item.record_label !== undefined && item.record_label !== null) ? item.record_label : (item.label || fresh.record_label || fresh.label || ''),
             discography: deduplicateDiscography([
-              ...(Array.isArray(item.discography) ? item.discography : []),
-              ...(loadBandDiscographyFromCache(item.id, rawName) || []),
-              ...(fresh.discography || [])
-            ]),
-            lineup: (Array.isArray(item.lineup) && item.lineup.length > 0)
-              ? item.lineup
-              : (restoredLineupFromCache || fresh.lineup || [])
+              ...itemDisco,
+              ...(cachedDisco || []),
+              ...(item.discography !== undefined ? [] : freshDisco)
+            ], rawName),
+            lineup: safeLineup
           };
         } else {
-          const cachedDisco = loadBandDiscographyFromCache(processedItem.id, cleanNorm);
-          if (cachedDisco && cachedDisco.length > 0) {
-            processedItem = {
-              ...processedItem,
-              discography: deduplicateDiscography([
-                ...(Array.isArray(processedItem.discography) ? processedItem.discography : []),
-                ...cachedDisco
-              ])
-            };
-          }
-          if (restoredLineupFromCache && (!Array.isArray(processedItem.lineup) || processedItem.lineup.length === 0)) {
-            processedItem = {
-              ...processedItem,
-              lineup: restoredLineupFromCache
-            };
-          }
+          const safeAvatar = resolveCanonicalBandLogo(item);
+          const safeCover = resolveCanonicalBandCover(item);
+          processedItem = {
+            ...processedItem,
+            name: rawName,
+            band_name: rawName,
+            avatar_url: safeAvatar,
+            logo_url: safeAvatar,
+            image_url: safeAvatar,
+            logo: safeAvatar,
+            avatar: safeAvatar,
+            image: safeAvatar,
+            cover_url: safeCover,
+            banner_url: safeCover,
+            discography: deduplicateDiscography([
+              ...itemDisco,
+              ...(cachedDisco || [])
+            ], rawName),
+            lineup: parsedItemLineup.length > 0
+              ? parsedItemLineup
+              : isCleared
+              ? []
+              : (restoredLineupFromCache && restoredLineupFromCache.length > 0 ? restoredLineupFromCache : [])
+          };
         }
 
         // Group key: if name is non-placeholder, group by normName; if placeholder, group strictly by UUID
@@ -829,25 +1748,22 @@ export class CommunityBandManager {
         }
       }
 
-      // 3. Append any initial pre-seeded band that is missing from user's storage and not deleted
-      for (const initBand of INITIAL_COMMUNITY_BANDS) {
-        const initNormName = initBand.name.toLowerCase().trim();
-        if (deletedIds.has(initBand.id) || deletedIds.has(ensureUUID(initBand.id))) continue;
-        if (!seenIds.has(initBand.id) && !seenNames.has(initNormName)) {
-          seenIds.add(initBand.id);
-          seenNames.add(initNormName);
-          result.push(initBand);
+      // 3. Append any initial pre-seeded band that is missing from user's storage and not deleted (skipped after an authoritative cloud sync)
+      if (!this.hasAuthoritativeCloudSync) {
+        for (const initBand of INITIAL_COMMUNITY_BANDS) {
+          const initNormName = initBand.name.toLowerCase().trim();
+          if (deletedIds.has(initBand.id) || deletedIds.has(ensureUUID(initBand.id))) continue;
+          if (!seenIds.has(initBand.id) && !seenNames.has(initNormName)) {
+            seenIds.add(initBand.id);
+            seenNames.add(initNormName);
+            result.push(initBand);
+          }
         }
       }
 
-      // Auto-prune localStorage if duplicates or deleted items were purged
-      if (needsPruning && result.length > 0) {
-        try {
-          safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(result));
-        } catch {}
-      }
+      this.memoryBands = result;
 
-      const finalResult = (result.length > 0 ? result : INITIAL_COMMUNITY_BANDS).slice().sort((a, b) => {
+      const finalResult = result.slice().sort((a, b) => {
         const nameA = (a.name || (a as any).band_name || '').trim();
         const nameB = (b.name || (b as any).band_name || '').trim();
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
@@ -855,11 +1771,7 @@ export class CommunityBandManager {
 
       return finalResult;
     } catch {
-      return INITIAL_COMMUNITY_BANDS.slice().sort((a, b) => {
-        const nameA = (a.name || (a as any).band_name || '').trim();
-        const nameB = (b.name || (b as any).band_name || '').trim();
-        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
-      });
+      return [];
     }
   }
 
@@ -901,9 +1813,10 @@ export class CommunityBandManager {
         return false;
       }
 
-      if (Array.isArray(b.lineup)) {
-        return b.lineup.some((m: any) => {
-          const mName = (typeof m === 'string' ? m : m?.name || '').toLowerCase().trim();
+      const parsedMembers = parseBandLineup(b.lineup);
+      if (parsedMembers.length > 0) {
+        return parsedMembers.some((m) => {
+          const mName = (m?.name || '').toLowerCase().trim();
           if (!mName) return false;
 
           // Never match Mike Flores for Emmanuel Flores
@@ -949,10 +1862,6 @@ export class CommunityBandManager {
           return false;
         });
       }
-      if (typeof (b.lineup as any) === 'string') {
-        const lineStr = String(b.lineup).toLowerCase();
-        return lineStr === clean;
-      }
       return false;
     }) || null;
   }
@@ -970,31 +1879,38 @@ export class CommunityBandManager {
   }
 
   private saveToStorage(list: CommunityBandRecord[]): void {
+    this.memoryBands = Array.isArray(list) ? [...list] : [];
     try {
-      safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-    } catch (e) {
-      console.warn('LocalStorage quota exceeded when saving bands, pruning bulky base64 assets...', e);
-      try {
-        const pruned = list.map(b => ({
-          ...b,
-          avatar_url: b.avatar_url?.startsWith('data:') ? undefined : b.avatar_url,
-          logo_url: b.logo_url?.startsWith('data:') ? undefined : b.logo_url,
-          cover_url: b.cover_url?.startsWith('data:') ? undefined : b.cover_url
-        }));
-        safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
-      } catch (err2) {
-        console.error('Critical storage failure:', err2);
-      }
-    }
+      safeLocalStorage.removeItem(STORAGE_KEY);
+      safeLocalStorage.removeItem('nexus_community_band_archives');
+    } catch {}
+  }
+
+  public upsertBand(
+    band: Partial<CommunityBandRecord> & { name?: string; id?: string },
+    options?: { isNew?: boolean; skipRemoteSync?: boolean; allowEmptyLineup?: boolean }
+  ): CommunityBandRecord {
+    return this.upsertCommunityBand(band, options);
   }
 
   // Create or quick-edit a fan/community band page without official registration forms
   public upsertCommunityBand(
     band: Partial<CommunityBandRecord> & { name?: string; id?: string },
-    options?: { isNew?: boolean }
+    options?: { isNew?: boolean; skipRemoteSync?: boolean; allowEmptyLineup?: boolean }
   ): CommunityBandRecord {
-    const all = this.getAll();
     const candidateName = (band.name || (band as any).band_name || '').trim();
+    if (isDeletedOrZombieBand(candidateName) || isDeletedOrZombieBand(band.id)) {
+      console.warn('[communityBands] Blocked upserting deleted or zombie band:', candidateName || band.id);
+      return {
+        id: band.id || generateUUID(),
+        name: candidateName,
+        band_name: candidateName,
+        genre: 'Extreme Metal',
+        created_at: new Date().toISOString(),
+        verification_status: 'community_archive'
+      } as CommunityBandRecord;
+    }
+    const all = this.getAll();
     const isExplicitNew = Boolean(options?.isNew);
     
     // 1. Exact ID lookup (only if not explicitly creating a brand-new band)
@@ -1007,20 +1923,24 @@ export class CommunityBandManager {
       }
     }
 
-    // 2. Canonical Name lookup if not found by ID (only when NOT explicitly creating a new band)
-    if (!isExplicitNew && existingIndex < 0 && candidateName && candidateName.toLowerCase() !== 'nexus artist') {
+    // 2. Canonical Name lookup if not found by ID (only when NOT explicitly creating a new band, or when UUID/slug collides with existing local archive)
+    if (existingIndex < 0 && candidateName && candidateName.toLowerCase() !== 'nexus artist') {
       const cleanCandidate = candidateName.toLowerCase().trim();
-      existingIndex = all.findIndex((b) => {
+      const nameMatchIdx = all.findIndex((b) => {
         const bName = (b.name || (b as any).band_name || '').toLowerCase().trim();
         return bName === cleanCandidate;
       });
+      if (!isExplicitNew && nameMatchIdx >= 0) {
+        existingIndex = nameMatchIdx;
+      }
     }
 
     const now = new Date().toISOString();
     let result: CommunityBandRecord;
 
-    const resolvedAvatar = band.avatar_url || band.logo_url || (band as any).avatar || (band as any).image;
-    const resolvedCover = band.cover_url || band.banner_url || (band as any).banner || (band as any).cover;
+    const resolvedAvatar = pickBestBandImage(band.avatar_url, band.logo_url, (band as any).avatar, (band as any).image);
+    const resolvedCover = pickBestBandImage(band.cover_url, band.banner_url, (band as any).banner, (band as any).cover);
+    const incomingLineup = band.lineup !== undefined ? parseBandLineup(band.lineup) : null;
 
     if (existingIndex >= 0 && !isExplicitNew) {
       const existing = all[existingIndex];
@@ -1038,15 +1958,24 @@ export class CommunityBandManager {
         discographyToSave = Array.isArray(cached) ? cached : (band.discography || []);
       }
 
-      // Preserve lineup: if incoming lineup is explicitly passed as an array, use it directly (even if empty)
+      // Preserve lineup: if caller explicitly provided band.lineup (including an empty array []), honor it directly
+      const existingLineup = parseBandLineup(existing.lineup);
       let lineupToSave: LineupMember[];
-      if (Array.isArray(band.lineup)) {
-        lineupToSave = band.lineup;
-      } else if (existing.lineup && Array.isArray(existing.lineup)) {
-        lineupToSave = existing.lineup;
+      if (incomingLineup !== null) {
+        lineupToSave = incomingLineup;
+      } else if (existing.lineup !== undefined && existing.lineup !== null) {
+        lineupToSave = existingLineup;
       } else {
-        lineupToSave = [];
+        const storedLineup = (existing.id ? safeLocalStorage.getItem(`nexus_core_band_lineup_${existing.id}`) : null) ||
+                             (validName ? safeLocalStorage.getItem(`nexus_core_band_lineup_${validName.toLowerCase().trim()}`) : null) ||
+                             (validName ? safeLocalStorage.getItem(`nexus_core_band_lineup_${validName.toLowerCase().trim().replace(/[^a-z0-9_-]+/g, '-')}`) : null);
+        lineupToSave = storedLineup ? parseBandLineup(storedLineup) : [];
       }
+
+      const existingBestAvatar = pickBestBandImage(existing.logo_url, existing.avatar_url, (existing as any).avatar, (existing as any).image);
+      const existingBestCover = pickBestBandImage(existing.cover_url, existing.banner_url, (existing as any).banner, (existing as any).cover);
+      const finalBestAvatar = resolvedAvatar || existingBestAvatar || existing.logo_url || existing.avatar_url;
+      const finalBestCover = resolvedCover || existingBestCover || existing.cover_url || existing.banner_url;
 
       const updated: CommunityBandRecord = {
         ...existing,
@@ -1057,12 +1986,12 @@ export class CommunityBandManager {
         genre: band.genre || existing.genre || 'Extreme Metal',
         micro_genres: updatedMicroGenres,
         subgenres: updatedMicroGenres,
-        avatar_url: (band.avatar_url !== undefined && band.avatar_url !== null) ? band.avatar_url : (resolvedAvatar !== undefined && resolvedAvatar !== '' ? resolvedAvatar : (existing.avatar_url || existing.logo_url)),
-        logo_url: (band.logo_url !== undefined && band.logo_url !== null) ? band.logo_url : (resolvedAvatar !== undefined && resolvedAvatar !== '' ? resolvedAvatar : (existing.logo_url || existing.avatar_url)),
-        avatar: (band.avatar !== undefined && band.avatar !== null) ? band.avatar : (resolvedAvatar !== undefined && resolvedAvatar !== '' ? resolvedAvatar : (existing.avatar || existing.avatar_url)),
-        image: (band.image !== undefined && band.image !== null) ? band.image : (resolvedAvatar !== undefined && resolvedAvatar !== '' ? resolvedAvatar : (existing.image || existing.avatar_url)),
-        cover_url: (band.cover_url !== undefined && band.cover_url !== null) ? band.cover_url : (resolvedCover !== undefined && resolvedCover !== '' ? resolvedCover : (existing.cover_url || existing.banner_url)),
-        banner_url: (band.banner_url !== undefined && band.banner_url !== null) ? band.banner_url : (resolvedCover !== undefined && resolvedCover !== '' ? resolvedCover : (existing.banner_url || existing.cover_url)),
+        avatar_url: finalBestAvatar,
+        logo_url: finalBestAvatar,
+        avatar: finalBestAvatar,
+        image: finalBestAvatar,
+        cover_url: finalBestCover,
+        banner_url: finalBestCover,
         founded_year: band.founded_year !== undefined ? band.founded_year : existing.founded_year,
         city: band.city !== undefined ? band.city : existing.city,
         state: band.state !== undefined ? band.state : existing.state,
@@ -1088,10 +2017,12 @@ export class CommunityBandManager {
         saveBandDiscographyToCache(updated.id, validName, discographyToSave);
         saveBandDiscographyToCache(existing.id, validName, discographyToSave);
       }
-      if (lineupToSave && lineupToSave.length > 0) {
-        safeLocalStorage.setItem(`nexus_core_band_lineup_${updated.id}`, JSON.stringify(lineupToSave));
-        safeLocalStorage.setItem(`nexus_core_band_lineup_${existing.id}`, JSON.stringify(lineupToSave));
-        if (validName) safeLocalStorage.setItem(`nexus_core_band_lineup_${validName.toLowerCase().trim()}`, JSON.stringify(lineupToSave));
+      if (lineupToSave.length > 0 || incomingLineup !== null) {
+        const serializedLineup = JSON.stringify(lineupToSave);
+        safeLocalStorage.setItem(`nexus_core_band_lineup_${updated.id}`, serializedLineup);
+        safeLocalStorage.setItem(`nexus_core_band_lineup_${ensureUUID(updated.id)}`, serializedLineup);
+        safeLocalStorage.setItem(`nexus_core_band_lineup_${existing.id}`, serializedLineup);
+        if (validName) safeLocalStorage.setItem(`nexus_core_band_lineup_${validName.toLowerCase().trim()}`, serializedLineup);
       }
       if (updated.logo_url && !updated.logo_url.startsWith('data:')) {
         safeLocalStorage.setItem(`nexus_core_band_logo_${updated.id}`, updated.logo_url);
@@ -1113,6 +2044,7 @@ export class CommunityBandManager {
 
       const validName = (candidateName || 'Nexus Artist').trim();
       const initialMicroGenres = band.micro_genres || band.subgenres || (band.genre ? [band.genre] : ['Extreme Metal']);
+      const initialLineup = incomingLineup || [];
       const newBand: CommunityBandRecord = {
         id: newId,
         name: validName,
@@ -1128,19 +2060,19 @@ export class CommunityBandManager {
         record_label: band.record_label || band.label || band.label_name || '',
         label: band.label || band.record_label || band.label_name || '',
         label_name: band.label_name || band.record_label || band.label || '',
-        bio: band.bio || `Community-curated archive and discography for ${validName}.`,
-        avatar_url: resolvedAvatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
-        logo_url: resolvedAvatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
-        avatar: resolvedAvatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
-        image: resolvedAvatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
-        cover_url: resolvedCover || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200',
-        banner_url: resolvedCover || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200',
+        bio: band.bio || 'Not written yet.',
+        avatar_url: resolvedAvatar || '',
+        logo_url: resolvedAvatar || '',
+        avatar: resolvedAvatar || '',
+        image: resolvedAvatar || '',
+        cover_url: resolvedCover || '',
+        banner_url: resolvedCover || '',
         spotify_url: band.spotify_url || band.spotify || '',
         bandcamp_url: band.bandcamp_url || band.bandcamp || '',
         metal_archives_url: band.metal_archives_url || '',
         youtube_url: band.youtube_url || band.featured_youtube_url || '',
         featured_youtube_url: band.featured_youtube_url || band.youtube_url || '',
-        lineup: band.lineup || [],
+        lineup: initialLineup,
         discography: band.discography || [],
         creator_id: band.creator_id,
         curated_by: band.curated_by || '@fan_archivist',
@@ -1151,10 +2083,26 @@ export class CommunityBandManager {
       };
       all.unshift(newBand);
       this.saveToStorage(all);
+      if (Array.isArray(newBand.discography) && newBand.discography.length > 0) {
+        saveBandDiscographyToCache(newBand.id, validName, newBand.discography);
+        saveBandDiscographyToCache(newId, validName, newBand.discography);
+      }
       if (newBand.lineup && newBand.lineup.length > 0) {
         safeLocalStorage.setItem(`nexus_core_band_lineup_${newBand.id}`, JSON.stringify(newBand.lineup));
         safeLocalStorage.setItem(`nexus_core_band_lineup_${newId}`, JSON.stringify(newBand.lineup));
         if (validName) safeLocalStorage.setItem(`nexus_core_band_lineup_${validName.toLowerCase().trim()}`, JSON.stringify(newBand.lineup));
+      } else if (options?.allowEmptyLineup && incomingLineup !== null) {
+        safeLocalStorage.removeItem(`nexus_core_band_lineup_${newBand.id}`);
+        safeLocalStorage.removeItem(`nexus_core_band_lineup_${newId}`);
+        if (validName) safeLocalStorage.removeItem(`nexus_core_band_lineup_${validName.toLowerCase().trim()}`);
+      }
+      if (newBand.logo_url && !newBand.logo_url.startsWith('data:')) {
+        safeLocalStorage.setItem(`nexus_core_band_logo_${newBand.id}`, newBand.logo_url);
+        safeLocalStorage.setItem(`nexus_core_band_logo_${newId}`, newBand.logo_url);
+      }
+      if (newBand.cover_url && !newBand.cover_url.startsWith('data:')) {
+        safeLocalStorage.setItem(`nexus_core_band_cover_${newBand.id}`, newBand.cover_url);
+        safeLocalStorage.setItem(`nexus_core_band_cover_${newId}`, newBand.cover_url);
       }
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: newBand }));
@@ -1162,10 +2110,12 @@ export class CommunityBandManager {
       result = newBand;
     }
 
-    // Proactively sync band row to Supabase 'bands' table & 'releases' table
-    this.syncToSupabaseTables(result, options).catch((e) => {
-      console.warn('[communityBands] Supabase remote sync notice:', e);
-    });
+    // Proactively sync band row to Supabase 'bands' table & 'releases' table unless caller manages remote sync explicitly
+    if (!options?.skipRemoteSync) {
+      this.syncToSupabaseTables(result, options).catch((e) => {
+        console.warn('[communityBands] Supabase remote sync notice:', e);
+      });
+    }
 
     return result;
   }
@@ -1178,7 +2128,31 @@ export class CommunityBandManager {
     if (idx < 0 && bandId) {
       idx = all.findIndex(b => (b.name || '').toLowerCase().trim() === bandId.toLowerCase().trim() || ((b as any).band_name || '').toLowerCase().trim() === bandId.toLowerCase().trim());
     }
-    if (idx < 0) return { success: false, error: 'Band archive not found.' };
+    // Record in deleted tracking set immediately to prevent resurrection from cached payloads
+    markBandDeletedInStorage(bandId, bandId);
+    markBandDeletedInStorage(targetUUID, bandId);
+    const candidateSlug = bandId ? bandId.toLowerCase().replace(/[^a-z0-9_-]+/g, '-') : '';
+    if (candidateSlug) markBandDeletedInStorage(candidateSlug);
+
+    if (idx < 0) {
+      // Even if not in local array, execute remote delete on Supabase
+      try {
+        const client = getSupabase();
+        if (client && bandId) {
+          const cleanName = bandId.trim();
+          await Promise.allSettled([
+            client.from('bands').delete().ilike('band_name', cleanName),
+            client.from('bands').delete().ilike('custom_slug', candidateSlug),
+            client.from('bands').delete().eq('id', targetUUID)
+          ]);
+        }
+      } catch {}
+      purgeDeletedAndZombieBands();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: { deletedId: bandId } }));
+      }
+      return { success: true };
+    }
 
     const band = all[idx];
     const bName = (band.name || (band as any).band_name || '').trim();
@@ -1259,9 +2233,33 @@ export class CommunityBandManager {
   }
 
   // Background & explicit sync to live Supabase 'bands' & 'releases' tables and buckets
+  // Serialized per band identity key so concurrent calls never race INSERT vs UPDATE
   public async syncToSupabaseTables(
     band: CommunityBandRecord | (Partial<CommunityBandRecord> & { id: string }),
-    options?: { isNew?: boolean }
+    options?: { isNew?: boolean; allowEmptyLineup?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
+    const rawName = (band.name || (band as any).band_name || '').trim().toLowerCase();
+    const rawSlug = ((band as any).custom_slug || (band as any).slug || rawName).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    const lockKey = rawSlug || (band.id ? ensureUUID(band.id) : 'default');
+
+    const prevLock = this.syncLocks.get(lockKey) || Promise.resolve({ success: true });
+    const runTask = prevLock.then(
+      () => this.executeSyncToSupabaseTables(band, options),
+      () => this.executeSyncToSupabaseTables(band, options)
+    );
+    this.syncLocks.set(lockKey, runTask);
+    try {
+      return await runTask;
+    } finally {
+      if (this.syncLocks.get(lockKey) === runTask) {
+        this.syncLocks.delete(lockKey);
+      }
+    }
+  }
+
+  private async executeSyncToSupabaseTables(
+    band: CommunityBandRecord | (Partial<CommunityBandRecord> & { id: string }),
+    options?: { isNew?: boolean; allowEmptyLineup?: boolean }
   ): Promise<{ success: boolean; error?: string }> {
     const dispatchSyncLog = (message: string) => {
       console.log(`[Supabase Band Sync] ${message}`);
@@ -1297,7 +2295,18 @@ export class CommunityBandManager {
         'origin': 'Origin',
         'peelingflesh': 'PeelingFlesh',
         'putrid-pile': 'Putrid Pile',
-        'lividity': 'Lividity'
+        'lividity': 'Lividity',
+        'aeon': 'Aeon',
+        'hypocrisy': 'Hypocrisy',
+        'cannibal-corpse': 'Cannibal Corpse',
+        'cannibal corpse': 'Cannibal Corpse',
+        'birdflesh': 'Birdflesh',
+        'hate-eternal': 'Hate Eternal',
+        'hate eternal': 'Hate Eternal',
+        'scour': 'Scour',
+        'squash-bowels': 'Squash Bowels',
+        'squash bowels': 'Squash Bowels',
+        'gorgasm': 'Gorgasm'
       };
 
       if (!resolvedBandName || resolvedBandName.toLowerCase() === 'nexus artist' || resolvedBandName.toLowerCase() === 'underground label') {
@@ -1351,8 +2360,8 @@ export class CommunityBandManager {
         ? (band.id ? ensureUUID(band.id) : generateUUID())
         : ensureUUID(band.id);
 
-      // If updating an existing band, check if a row with this custom_slug already exists in Supabase to preserve its UUID
-      if (!isExplicitNew && targetSlug && client) {
+      // Always check if a row with this custom_slug already exists in Supabase to preserve its canonical UUID
+      if (targetSlug && client) {
         try {
           const { data: slugRow } = await client.from('bands').select('id').eq('custom_slug', targetSlug).maybeSingle();
           if (slugRow?.id) {
@@ -1361,10 +2370,10 @@ export class CommunityBandManager {
         } catch {}
       }
 
-      dispatchSyncLog(`Resolved target band "${resolvedBandName}" (UUID: ${bandUUID}, Mode: ${isExplicitNew ? 'INSERT' : 'UPDATE/UPSERT'}). Checking storage assets...`);
+      dispatchSyncLog(`Resolved target band "${resolvedBandName}" (UUID: ${bandUUID}, Mode: ${isExplicitNew ? 'INSERT/UPSERT' : 'UPDATE/UPSERT'}). Checking storage assets...`);
 
       // Auto-upload base64 images to community-bands bucket using standardized uploadCommunityBandMedia helper
-      let finalAvatarUrl = band.avatar_url || (band as any).logo_url || (band as any).avatar || (band as any).image || existing?.avatar_url || existing?.logo_url;
+      let finalAvatarUrl = pickBestBandImage(band.avatar_url, (band as any).logo_url, (band as any).avatar, (band as any).image, existing?.avatar_url, existing?.logo_url) || undefined;
       if (finalAvatarUrl && finalAvatarUrl.startsWith('data:')) {
         try {
           dispatchSyncLog('Uploading avatar/logo image to Supabase storage bucket...');
@@ -1379,7 +2388,7 @@ export class CommunityBandManager {
         }
       }
 
-      let finalCoverUrl = band.cover_url || (band as any).banner_url || (band as any).banner || (band as any).cover || existing?.cover_url || existing?.banner_url;
+      let finalCoverUrl = pickBestBandImage(band.cover_url, (band as any).banner_url, (band as any).banner, (band as any).cover, existing?.cover_url, existing?.banner_url) || undefined;
       if (finalCoverUrl && finalCoverUrl.startsWith('data:')) {
         try {
           dispatchSyncLog('Uploading cover banner image to Supabase storage bucket...');
@@ -1396,23 +2405,41 @@ export class CommunityBandManager {
 
       // Update local storage record with the uploaded storage URLs and all incoming band properties (bio, lineup, etc.)
       const all = this.getAll();
-      const idx = all.findIndex(b => b.id === band.id || ensureUUID(b.id) === bandUUID);
+      const idx = all.findIndex(b => b.id === band.id || ensureUUID(b.id) === bandUUID || (resolvedBandName && (b.name || (b as any).band_name || '').toLowerCase().trim() === resolvedBandName.toLowerCase()));
 
+      const incomingParsedLineup = band.lineup !== undefined ? parseBandLineup(band.lineup) : null;
       const resolvedLineup: LineupMember[] = (() => {
-        if (Array.isArray(band.lineup) && band.lineup.length > 0) return band.lineup;
-        if (idx >= 0 && Array.isArray(all[idx].lineup) && all[idx].lineup.length > 0) return all[idx].lineup;
-        if (existing?.lineup && Array.isArray(existing.lineup) && existing.lineup.length > 0) return existing.lineup;
+        if (incomingParsedLineup !== null && (incomingParsedLineup.length > 0 || options?.allowEmptyLineup)) {
+          return incomingParsedLineup;
+        }
+        if (idx >= 0 && all[idx].lineup !== undefined && all[idx].lineup !== null) {
+          const fromAll = parseBandLineup(all[idx].lineup);
+          if (fromAll.length > 0) return fromAll;
+        }
+        if (existing?.lineup !== undefined && existing?.lineup !== null) {
+          const fromExisting = parseBandLineup(existing.lineup);
+          if (fromExisting.length > 0) return fromExisting;
+        }
         const stored = (band.id ? safeLocalStorage.getItem(`nexus_core_band_lineup_${band.id}`) : null) ||
                        safeLocalStorage.getItem(`nexus_core_band_lineup_${bandUUID}`) ||
                        (resolvedBandName ? safeLocalStorage.getItem(`nexus_core_band_lineup_${resolvedBandName.toLowerCase().trim()}`) : null);
-        if (stored) {
-          try {
-            const p = JSON.parse(stored);
-            if (Array.isArray(p) && p.length > 0) return p;
-          } catch {}
-        }
-        return [];
+        return stored ? parseBandLineup(stored) : [];
       })();
+
+      const safeMergedAvatar = pickBestBandImage(
+        finalAvatarUrl,
+        band.logo_url,
+        band.avatar_url,
+        idx >= 0 ? all[idx].logo_url : undefined,
+        idx >= 0 ? all[idx].avatar_url : undefined
+      ) || undefined;
+      const safeMergedCover = pickBestBandImage(
+        finalCoverUrl,
+        band.cover_url,
+        band.banner_url,
+        idx >= 0 ? all[idx].cover_url : undefined,
+        idx >= 0 ? all[idx].banner_url : undefined
+      ) || undefined;
 
       const mergedRecord: CommunityBandRecord = {
         ...(idx >= 0 ? all[idx] : {}),
@@ -1424,12 +2451,12 @@ export class CommunityBandManager {
         genre: band.genre || (idx >= 0 ? all[idx].genre : undefined) || 'Extreme Metal',
         created_at: (idx >= 0 ? all[idx].created_at : undefined) || new Date().toISOString(),
         verification_status: band.verification_status || (idx >= 0 ? all[idx].verification_status : undefined) || 'community_archive',
-        avatar_url: finalAvatarUrl || band.avatar_url || (idx >= 0 ? all[idx].avatar_url : undefined),
-        logo_url: finalAvatarUrl || band.logo_url || (idx >= 0 ? all[idx].logo_url : undefined),
-        avatar: finalAvatarUrl || band.avatar || (idx >= 0 ? all[idx].avatar : undefined),
-        image: finalAvatarUrl || band.image || (idx >= 0 ? all[idx].image : undefined),
-        cover_url: finalCoverUrl || band.cover_url || (idx >= 0 ? all[idx].cover_url : undefined),
-        banner_url: finalCoverUrl || band.banner_url || (idx >= 0 ? all[idx].banner_url : undefined),
+        avatar_url: safeMergedAvatar,
+        logo_url: safeMergedAvatar,
+        avatar: safeMergedAvatar,
+        image: safeMergedAvatar,
+        cover_url: safeMergedCover,
+        banner_url: safeMergedCover,
         bio: band.bio !== undefined ? band.bio : (idx >= 0 ? all[idx].bio : '')
       };
 
@@ -1438,12 +2465,13 @@ export class CommunityBandManager {
       } else {
         all.push(mergedRecord);
       }
-      safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+      this.saveToStorage(all);
 
-      if (resolvedLineup.length > 0) {
-        safeLocalStorage.setItem(`nexus_core_band_lineup_${bandUUID}`, JSON.stringify(resolvedLineup));
-        if (band.id) safeLocalStorage.setItem(`nexus_core_band_lineup_${band.id}`, JSON.stringify(resolvedLineup));
-        if (resolvedBandName) safeLocalStorage.setItem(`nexus_core_band_lineup_${resolvedBandName.toLowerCase().trim()}`, JSON.stringify(resolvedLineup));
+      if (resolvedLineup.length > 0 || incomingParsedLineup !== null) {
+        const serializedLineup = JSON.stringify(resolvedLineup);
+        safeLocalStorage.setItem(`nexus_core_band_lineup_${bandUUID}`, serializedLineup);
+        if (band.id) safeLocalStorage.setItem(`nexus_core_band_lineup_${band.id}`, serializedLineup);
+        if (resolvedBandName) safeLocalStorage.setItem(`nexus_core_band_lineup_${resolvedBandName.toLowerCase().trim()}`, serializedLineup);
       }
 
       if (finalAvatarUrl && !finalAvatarUrl.startsWith('data:')) {
@@ -1489,17 +2517,22 @@ export class CommunityBandManager {
         lineup: resolvedLineup,
         is_verified: (band as any).is_verified !== undefined ? Boolean((band as any).is_verified) : (((band as any).verification_status === 'verified_official') || (existing as any)?.is_verified || false),
         custom_slug: (targetSlug || resolvedBandName).toLowerCase().trim().replace(/[^a-z0-9_-]+/g, '-'),
+        status: band.status || (band.is_split_up ? 'split-up' : (existing?.status || 'active')),
+        is_split_up: Boolean(band.status === 'split-up' || band.is_split_up || existing?.status === 'split-up' || (existing as any)?.is_split_up),
         updated_at: new Date().toISOString()
       };
 
-      dispatchSyncLog(`Executing upsertBandToDatabase (isNew: ${isExplicitNew})...`);
-      const bandResult = await upsertBandToDatabase(rawBandPayload, { isNew: isExplicitNew });
+      dispatchSyncLog(`Executing upsertBandToDatabase (isNew: ${isExplicitNew}, members: ${resolvedLineup.length})...`);
+      const bandResult = await upsertBandToDatabase(rawBandPayload, {
+        isNew: isExplicitNew,
+        allowEmptyLineup: options?.allowEmptyLineup
+      });
 
       if (bandResult?.error) {
         console.error('[communityBands] Band upsert error:', bandResult.error);
         dispatchSyncLog(`❌ Band sync error: ${bandResult.error}`);
       } else {
-        dispatchSyncLog(`✅ Band "${resolvedBandName}" synchronized to database successfully.`);
+        dispatchSyncLog(`✅ Band "${resolvedBandName}" (${resolvedLineup.length} members) synchronized to database successfully.`);
       }
 
       try {
@@ -1517,16 +2550,9 @@ export class CommunityBandManager {
         return { success: false, error: bandResult.error };
       }
 
-      // Broadcast update events across all UI listeners
+      // Broadcast normalized record (with array lineup) across all UI listeners
       window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', {
-        detail: {
-          ...band,
-          id: band.id,
-          avatar_url: finalAvatarUrl,
-          logo_url: finalAvatarUrl,
-          cover_url: finalCoverUrl,
-          banner_url: finalCoverUrl
-        }
+        detail: mergedRecord
       }));
 
       // 2. Sync discography albums to 'releases' table with strict batch upsert & duplicate filtering
@@ -1544,7 +2570,7 @@ export class CommunityBandManager {
             }
             seenReleaseIds.add(releaseId);
 
-            let albumCoverUrl = album.cover_url || album.cover_image || album.coverUrl || album.coverImage || album.image_url || null;
+            let albumCoverUrl = extractReleaseCover(album, resolvedBandName) || findMasterReleaseCover(album.title, resolvedBandName) || album.cover_url || album.cover_image || album.coverUrl || album.coverImage || album.image_url || null;
             if (albumCoverUrl && albumCoverUrl.startsWith('data:image')) {
               try {
                 const uploaded = await uploadBase64ToStorage(albumCoverUrl, 'community-bands', `${bandUUID}-${idx}`, 'cover');
@@ -1557,8 +2583,7 @@ export class CommunityBandManager {
             releasePayloads.push({
               id: releaseId,
               band_id: bandUUID,
-              band_name: resolvedBandName,
-              artist: resolvedBandName,
+              band: resolvedBandName,
               title: album.title || `Release ${idx + 1}`,
               type: album.type || 'album',
               release_date: album.year || String(new Date().getFullYear()),
@@ -1582,30 +2607,63 @@ export class CommunityBandManager {
           }
         }
 
-        // Prune any releases from Supabase that are no longer present in band.discography
-        try {
-          const { data: existingRemoteReleases } = await client
-            .from('releases')
-            .select('id, title')
-            .or(`band_id.eq.${bandUUID},band_id.eq.${band.id},band_name.ilike.${resolvedBandName}`);
-          
-          if (existingRemoteReleases && Array.isArray(existingRemoteReleases)) {
-            const activeIds = new Set(releasePayloads.map(r => r.id));
-            const activeTitles = new Set(releasePayloads.map(r => (r.title || '').toLowerCase().trim()));
-            const toDelete = existingRemoteReleases.filter(r => {
-              const rTitle = (r.title || '').toLowerCase().trim();
-              return !activeIds.has(r.id) && !activeTitles.has(rTitle);
-            });
-            
-            if (toDelete.length > 0) {
-              const delIds = toDelete.map(r => r.id);
-              dispatchSyncLog(`Pruning ${delIds.length} deleted release(s) from Supabase...`);
-              await client.from('releases').delete().in('id', delIds);
-              toDelete.forEach(r => markReleaseDeletedInStorage(r.id, r.title, bandUUID));
+        if (band.discography.length === 0) {
+          // Explicit wipe / clean slate: delete all releases in Supabase for this band
+          try {
+            dispatchSyncLog(`Wiping all remote releases for "${resolvedBandName}" from Supabase...`);
+            if (bandUUID) {
+              await client.from('releases').delete().eq('band_id', bandUUID);
             }
+            if (band.id && band.id !== bandUUID) {
+              await client.from('releases').delete().eq('band_id', band.id);
+            }
+            dispatchSyncLog(`All remote releases for "${resolvedBandName}" wiped from Supabase.`);
+          } catch (wipeErr) {
+            console.warn('[communityBands] Release wipe notice:', wipeErr);
           }
-        } catch (pruneErr) {
-          console.warn('[communityBands] Release pruning notice:', pruneErr);
+        } else if (releasePayloads.length > 0) {
+          try {
+            const isUuidStr = (val?: string | null) =>
+              Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim()));
+            const targetBandIds = Array.from(
+              new Set(
+                [bandUUID, band.id]
+                  .filter((v): v is string => isUuidStr(v ? String(v) : null))
+                  .map((v) => String(v).trim())
+              )
+            );
+            const { data: allRemoteReleases } = targetBandIds.length > 0
+              ? await client
+                  .from('releases')
+                  .select('id, title, band_id')
+                  .in('band_id', targetBandIds)
+              : { data: [] as any[] };
+            
+            if (allRemoteReleases && Array.isArray(allRemoteReleases)) {
+              const activeIds = new Set(releasePayloads.map(r => r.id));
+              const activeTitles = new Set(releasePayloads.map(r => (r.title || '').toLowerCase().replace(/[^a-z0-9]/g, '')));
+
+              const toDelete = allRemoteReleases.filter(r => {
+                if (!r) return false;
+                const rBandId = String(r.band_id || '').toLowerCase().trim();
+                const matchesBand = (
+                  rBandId === bandUUID.toLowerCase() ||
+                  rBandId === String(band.id || '').toLowerCase()
+                );
+                if (!matchesBand) return false;
+                const rNormTitle = (r.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                return !activeIds.has(r.id) && !activeTitles.has(rNormTitle);
+              });
+              
+              if (toDelete.length > 0) {
+                const delIds = toDelete.map(r => r.id);
+                dispatchSyncLog(`Pruning ${delIds.length} obsolete release(s) from Supabase...`);
+                await client.from('releases').delete().in('id', delIds);
+              }
+            }
+          } catch (pruneErr) {
+            console.warn('[communityBands] Release pruning notice:', pruneErr);
+          }
         }
       }
 
@@ -1618,38 +2676,120 @@ export class CommunityBandManager {
     }
   }
 
-  // Fetch live Supabase 'bands' and 'releases' rows and merge into community archives
-  public async fetchFromSupabase(): Promise<CommunityBandRecord[]> {
+  // Fetch live Supabase 'bands' and 'releases' rows with schema-resilient selection and full alphabetical batch pagination
+  public async fetchFromSupabase(options?: {
+    page?: number;
+    pageSize?: number;
+    searchQuery?: string;
+    authoritative?: boolean;
+  }): Promise<CommunityBandRecord[]> {
     try {
       const client = getSupabase();
       if (!client) return this.getAll();
 
-      const { data: bandsData, error: bandsErr } = await client
-        .from('bands')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const hasExplicitPagination =
+        typeof options?.page === 'number' || typeof options?.pageSize === 'number';
+      const cleanSearch = options?.searchQuery?.trim() || '';
 
-      if (bandsErr || !bandsData || !Array.isArray(bandsData)) {
+      let bandsData: any[] = [];
+      let bandsErr: any = null;
+
+      if (hasExplicitPagination) {
+        const page = options?.page ?? 0;
+        const pageSize = options?.pageSize ?? 50;
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+
+        let bandsQuery = client
+          .from('bands')
+          .select('*')
+          .order('band_name', { ascending: true })
+          .range(from, to);
+
+        if (cleanSearch.length > 0) {
+          const safeQ = cleanSearch.replace(/[,%()]/g, ' ').trim();
+          if (safeQ) {
+            bandsQuery = bandsQuery.or(`band_name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,state_province.ilike.%${safeQ}%`);
+          }
+        }
+
+        const res = await bandsQuery;
+        bandsErr = res.error;
+        if (Array.isArray(res.data)) bandsData = res.data;
+      } else {
+        const BATCH_SIZE = 500;
+        const MAX_BATCHES = 20;
+        const seenRowKeys = new Set<string>();
+
+        for (let batchIdx = 0; batchIdx < MAX_BATCHES; batchIdx++) {
+          const from = batchIdx * BATCH_SIZE;
+          const to = from + BATCH_SIZE - 1;
+
+          let bandsQuery = client
+            .from('bands')
+            .select('*')
+            .order('band_name', { ascending: true })
+            .range(from, to);
+
+          if (cleanSearch.length > 0) {
+            const safeQ = cleanSearch.replace(/[,%()]/g, ' ').trim();
+            if (safeQ) {
+              bandsQuery = bandsQuery.or(`band_name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,state_province.ilike.%${safeQ}%`);
+            }
+          }
+
+          const { data: batchData, error: batchErr } = await bandsQuery;
+          if (batchErr) {
+            bandsErr = batchErr;
+            break;
+          }
+          if (!Array.isArray(batchData) || batchData.length === 0) {
+            break;
+          }
+
+          for (const row of batchData) {
+            const rowKey = row?.id ? String(row.id) : `${row?.band_name || row?.name || ''}::${bandsData.length}`;
+            if (!seenRowKeys.has(rowKey)) {
+              seenRowKeys.add(rowKey);
+              bandsData.push(row);
+            }
+          }
+
+          if (batchData.length < BATCH_SIZE) {
+            break;
+          }
+        }
+      }
+
+      if (bandsErr || !Array.isArray(bandsData)) {
         return this.getAll();
       }
 
       let releasesData: any[] = [];
       try {
-        const { data: relData, error: relErr } = await client
-          .from('releases')
-          .select('*');
+        const REL_BATCH_SIZE = 500;
+        for (let rBatch = 0; rBatch < 5; rBatch++) {
+          const rFrom = rBatch * REL_BATCH_SIZE;
+          const rTo = rFrom + REL_BATCH_SIZE - 1;
+          const { data: relData, error: relErr } = await client
+            .from('releases')
+            .select('*')
+            .range(rFrom, rTo);
 
-        if (!relErr && Array.isArray(relData) && relData.length > 0) {
-          releasesData = relData;
-        } else {
+          if (relErr || !Array.isArray(relData) || relData.length === 0) break;
+          releasesData.push(...relData);
+          if (relData.length < REL_BATCH_SIZE) break;
+        }
+
+        if (releasesData.length === 0) {
           // Fall back to releasesService which checks server /api/releases and IndexedDB
           const fallbackReleases = await fetchReleasesFromDatabase();
           if (Array.isArray(fallbackReleases) && fallbackReleases.length > 0) {
             releasesData = fallbackReleases.map(r => ({
               id: r.id,
               band_id: r.band_id,
-              band_name: r.band_name || r.artist || (r as any).artist_name || '',
-              artist: r.artist || r.band_name || (r as any).artist_name || '',
+              band_name: r.band || r.band_name || r.artist || (r as any).artist_name || '',
+              artist: r.artist || r.band || r.band_name || (r as any).artist_name || '',
               title: r.title,
               release_date: r.releaseDate || r.release_date,
               type: r.type,
@@ -1666,16 +2806,22 @@ export class CommunityBandManager {
         if (Array.isArray(fallbackReleases)) releasesData = fallbackReleases;
       }
 
-      const all = this.getAll();
-      const updatedList = [...all];
+      const isAuthoritativeSync = Boolean(options?.authoritative && !cleanSearch && bandsData.length > 0);
+      if (isAuthoritativeSync) {
+        this.hasAuthoritativeCloudSync = true;
+      }
+
+      const updatedList: CommunityBandRecord[] = isAuthoritativeSync ? [] : [...this.getAll()];
+      const cloudSyncedIds = new Set<string>();
       const deletedIds = getDeletedBandIds();
 
-      for (const b of bandsData) {
-        let bandName = b.band_name || b.name;
-        if (!bandName || (bandName.toLowerCase().trim() === 'nexus artist' && !b.bio && (!b.micro_genres || b.micro_genres.length === 0))) continue;
+      for (const b of bandsData as any[]) {
+        let bandName = (b.band_name || b.name || '').trim();
+        const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
+        if (!bandName && !bSlug) continue;
+        if (bandName.toLowerCase() === 'nexus artist' && !b.bio && (!b.micro_genres || b.micro_genres.length === 0)) continue;
 
         let cleanBandName = bandName.toLowerCase().trim();
-        const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
         const bId = String(b.id || '').trim();
         const bUUID = bId ? ensureUUID(bId) : '';
 
@@ -1690,7 +2836,7 @@ export class CommunityBandManager {
               if (!r) return false;
               const rBandId = String(r.band_id || '').toLowerCase().trim();
               const rUUID = rBandId ? ensureUUID(rBandId) : '';
-              const rBandName = String(r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
+              const rBandName = String(r.band || r.band_name || r.artist || r.artist_name || '').toLowerCase().trim();
 
               if (bId && (rBandId === bId.toLowerCase() || rUUID === bId.toLowerCase())) return true;
               if (bUUID && (rBandId === bUUID.toLowerCase() || rUUID === bUUID.toLowerCase())) return true;
@@ -1725,6 +2871,8 @@ export class CommunityBandManager {
         }));
 
         const KNOWN_SEEDED_NAMES: Record<string, string> = {
+          'aeon': 'Aeon',
+          'hypocrisy': 'Hypocrisy',
           'cordyceps': 'Cordyceps',
           'cranial-impalement': 'Cranial Impalement',
           'mortician': 'Mortician',
@@ -1737,7 +2885,13 @@ export class CommunityBandManager {
           'putrid-pile': 'Putrid Pile',
           'lividity': 'Lividity',
           'suffocation': 'Suffocation',
-          'stabbing': 'Stabbing'
+          'stabbing': 'Stabbing',
+          'cannibal-corpse': 'Cannibal Corpse',
+          'cannibal corpse': 'Cannibal Corpse',
+          'extermination-dismemberment': 'Extermination Dismemberment',
+          'extermination dismemberment': 'Extermination Dismemberment',
+          'birdflesh': 'Birdflesh',
+          'gorgasm': 'Gorgasm'
         };
 
         // Match existing band by ID (exact or UUID) or custom_slug or exact canonical name
@@ -1759,7 +2913,6 @@ export class CommunityBandManager {
           if (cleanBandName && sName === cleanBandName && cleanBandName !== 'nexus artist' && cleanBandName !== 'underground label') return true;
           return false;
         });
-        const effectiveExisting = existingItem || seedMatch;
 
         // Protect against accidental label / placeholder corruption (e.g. 'Underground Label', 'Nexus Artist')
         if (cleanBandName === 'underground label' || cleanBandName === 'nexus artist' || !cleanBandName) {
@@ -1778,50 +2931,8 @@ export class CommunityBandManager {
           cleanBandName = bandName.toLowerCase().trim();
         }
 
-        let parsedLineup: LineupMember[] = [];
-        if (Array.isArray(b.lineup)) {
-          parsedLineup = b.lineup;
-        } else if (typeof b.lineup === 'string' && b.lineup.trim()) {
-          try {
-            const parsed = JSON.parse(b.lineup);
-            if (Array.isArray(parsed)) parsedLineup = parsed;
-          } catch {
-            // Support comma-delimited strings e.g. "John (Guitar), Jane (Bass)" or plain names
-            const parts = b.lineup.split(',').map((s: string) => s.trim()).filter(Boolean);
-            parsedLineup = parts.map((part: string, idx: number) => {
-              const match = part.match(/^(.*?)\s*\((.*?)\)$/);
-              if (match) {
-                return {
-                  id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-                  name: match[1].trim(),
-                  role: match[2].trim() || 'Musician',
-                  status: 'active' as const,
-                  years: 'Present'
-                };
-              }
-              return {
-                id: `mem-${idx}-${part.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-                name: part,
-                role: 'Musician',
-                status: 'active' as const,
-                years: 'Present'
-              };
-            });
-          }
-        }
-
-        // Also retrieve cached lineup from localStorage keys to guarantee user edits are preserved
-        const cachedLineupRaw = (bId ? localStorage.getItem(`nexus_core_band_lineup_${bId}`) : null) ||
-                                (bUUID ? localStorage.getItem(`nexus_core_band_lineup_${bUUID}`) : null) ||
-                                (existingItem?.id ? localStorage.getItem(`nexus_core_band_lineup_${existingItem.id}`) : null) ||
-                                (cleanBandName ? localStorage.getItem(`nexus_core_band_lineup_${cleanBandName}`) : null);
-        let cachedLineup: LineupMember[] = [];
-        if (cachedLineupRaw) {
-          try {
-            const p = JSON.parse(cachedLineupRaw);
-            if (Array.isArray(p) && p.length > 0) cachedLineup = p;
-          } catch {}
-        }
+        const hasDbLineup = b.lineup !== null && b.lineup !== undefined && String(b.lineup).trim() !== '';
+        const parsedLineup: LineupMember[] = parseBandLineup(b.lineup);
 
         const microGenres = Array.isArray(b.micro_genres)
           ? b.micro_genres
@@ -1829,125 +2940,119 @@ export class CommunityBandManager {
           ? b.micro_genres.split(',').map((s: string) => s.trim())
           : [];
 
-        const bIdKey = b.id || '';
-        const bUUIDKey = bIdKey ? ensureUUID(bIdKey) : '';
-        const savedLogo = (bIdKey ? localStorage.getItem(`nexus_core_band_logo_${bIdKey}`) : null) || 
-                          (bUUIDKey ? localStorage.getItem(`nexus_core_band_logo_${bUUIDKey}`) : null) ||
-                          (existingItem?.id ? localStorage.getItem(`nexus_core_band_logo_${existingItem.id}`) : null);
-        const savedCover = (bIdKey ? localStorage.getItem(`nexus_core_band_cover_${bIdKey}`) : null) || 
-                           (bUUIDKey ? localStorage.getItem(`nexus_core_band_cover_${bUUIDKey}`) : null) ||
-                           (existingItem?.id ? localStorage.getItem(`nexus_core_band_cover_${existingItem.id}`) : null);
+        // Unified Supabase image resolution: check all canonical columns in priority order without Unsplash fallbacks
+        const dbLogo = resolveCanonicalBandLogo(b);
+        const hasDbLogo = dbLogo.length > 0;
+        const resolvedAvatar = hasDbLogo
+          ? dbLogo
+          : resolveCanonicalBandLogo(seedMatch);
 
-        const resolvedAvatar = 
-          (b.logo_url && !b.logo_url.includes('unsplash')) ? b.logo_url :
-          (b.avatar_url && !b.avatar_url.includes('unsplash')) ? b.avatar_url :
-          (savedLogo && !savedLogo.includes('unsplash')) ? savedLogo :
-          (existingItem?.logo_url && !existingItem.logo_url.includes('unsplash') ? existingItem.logo_url : null) ||
-          (existingItem?.avatar_url && !existingItem.avatar_url.includes('unsplash') ? existingItem.avatar_url : null) ||
-          seedMatch?.logo_url || seedMatch?.avatar_url || b.logo_url || b.avatar_url || existingItem?.logo_url || existingItem?.avatar_url || existingItem?.image || '';
+        const dbCover = resolveCanonicalBandCover(b);
+        const hasDbCover = dbCover.length > 0;
+        const resolvedCover = hasDbCover
+          ? dbCover
+          : resolveCanonicalBandCover(seedMatch);
 
-        const resolvedCover = 
-          (b.cover_url && !b.cover_url.includes('unsplash')) ? b.cover_url :
-          (b.banner_url && !b.banner_url.includes('unsplash')) ? b.banner_url :
-          (savedCover && !savedCover.includes('unsplash')) ? savedCover :
-          (existingItem?.cover_url && !existingItem.cover_url.includes('unsplash') ? existingItem.cover_url : null) ||
-          (existingItem?.banner_url && !existingItem.banner_url.includes('unsplash') ? existingItem.banner_url : null) ||
-          seedMatch?.cover_url || seedMatch?.banner_url || b.cover_url || b.banner_url || existingItem?.cover_url || existingItem?.banner_url || '';
-
-        // Intelligently merge discography: prioritize Supabase remoteDiscography, local edits, existing item, and seed master
-        const cachedDiscography = loadBandDiscographyFromCache(bId, cleanBandName);
-        const mergedDiscography: DiscographyRelease[] = (() => {
-          let list: DiscographyRelease[] = [];
-          if (remoteDiscography && remoteDiscography.length > 0) {
-            list.push(...remoteDiscography);
-          }
-          if (cachedDiscography && cachedDiscography.length > 0) {
-            list.push(...cachedDiscography);
-          }
-          if (existingItem?.discography && existingItem.discography.length > 0) {
-            list.push(...existingItem.discography);
-          }
-          if (seedMatch?.discography && seedMatch.discography.length > 0) {
-            list.push(...seedMatch.discography);
-          }
-          return deduplicateDiscography(list);
-        })();
+        // Authoritative discography from Supabase releases table, falling back to seedMatch only when DB has no releases for a seeded band
+        const validRemote = (remoteDiscography || []).filter(r => !isDeletedRelease(r.id, r.title, cleanBandName));
+        const mergedDiscography: DiscographyRelease[] = deduplicateDiscography(
+          validRemote.length > 0 ? validRemote : (seedMatch?.discography || []),
+          cleanBandName
+        );
 
         if (mergedDiscography.length > 0) {
           saveBandDiscographyToCache(bId, cleanBandName, mergedDiscography);
           if (bUUID) saveBandDiscographyToCache(bUUID, cleanBandName, mergedDiscography);
         }
 
-        // Merge lineup non-destructively: prioritize richest lineup with member names, roles, years, and status
-        const candidateLineups = [
-          (cachedLineup && cachedLineup.length > 0) ? cachedLineup : null,
-          (existingItem?.lineup && existingItem.lineup.length > 0) ? existingItem.lineup : null,
-          (parsedLineup && parsedLineup.length > 0) ? parsedLineup : null,
-          (seedMatch?.lineup && seedMatch.lineup.length > 0) ? seedMatch.lineup : null
-        ].filter(Boolean) as LineupMember[][];
-
-        candidateLineups.sort((la, lb) => {
-          const detailA = la.reduce((acc, m) => acc + (m.years && m.years !== 'Present' ? 2 : 1) + (m.status ? 1 : 0), 0);
-          const detailB = lb.reduce((acc, m) => acc + (m.years && m.years !== 'Present' ? 2 : 1) + (m.status ? 1 : 0), 0);
-          return (lb.length * 10 + detailB) - (la.length * 10 + detailA);
-        });
-
-        const mergedLineup: LineupMember[] = deduplicateLineup(candidateLineups[0] || []);
+        // Authoritative lineup from Supabase: use non-empty DB lineup directly; if DB lineup is empty ('[]' or null),
+        // only keep it empty if the user explicitly cleared it (tracked via isLineupIntentionallyCleared), otherwise heal from seedMatch!
+        const isCleared = isLineupIntentionallyCleared(bId, bUUID, cleanBandName);
+        const mergedLineup: LineupMember[] = parsedLineup.length > 0
+          ? deduplicateLineup(parsedLineup)
+          : isCleared
+          ? []
+          : deduplicateLineup(seedMatch?.lineup || []);
 
         const isOfficialVE = (b.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || cleanBandName === 'virulent excision');
         const resolvedVerification: BandVerificationStatus = isOfficialVE
           ? 'verified_official'
-          : 'community_archive';
+          : (b.verification_status === 'verified_official' || b.is_verified ? 'verified_official' : 'community_archive');
 
-        // Prioritize Supabase cloud data for profile fields
+        // Prioritize Supabase cloud data with absolute precedence
         const record: CommunityBandRecord = {
-          id: b.id || existingItem?.id,
+          id: b.id || existingItem?.id || bSlug || generateUUID(),
           name: b.band_name || b.name || existingItem?.name || bandName,
           band_name: b.band_name || b.name || existingItem?.name || bandName,
+          custom_slug: b.custom_slug || existingItem?.custom_slug || seedMatch?.custom_slug,
           genre: b.genre || microGenres[0] || existingItem?.genre || seedMatch?.genre || 'Extreme Metal',
           subgenres: (microGenres.length > 0 ? microGenres : (existingItem?.subgenres && existingItem.subgenres.length > 0 ? existingItem.subgenres : (seedMatch?.subgenres || []))),
-          founded_year: b.founded_year || existingItem?.founded_year || seedMatch?.founded_year || '',
-          city: b.city || existingItem?.city || seedMatch?.city || '',
-          state: b.state_province || b.state || existingItem?.state || seedMatch?.state || '',
-          state_province: b.state_province || b.state || existingItem?.state_province || existingItem?.state || seedMatch?.state_province || seedMatch?.state || '',
-          country: b.country || existingItem?.country || seedMatch?.country || 'USA',
-          record_label: b.record_label || b.label_name || b.label || existingItem?.record_label || existingItem?.label || seedMatch?.record_label || seedMatch?.label || '',
-          label: b.label || b.record_label || b.label_name || existingItem?.label || existingItem?.record_label || seedMatch?.label || seedMatch?.record_label || '',
+          micro_genres: (microGenres.length > 0 ? microGenres : (existingItem?.micro_genres && existingItem.micro_genres.length > 0 ? existingItem.micro_genres : (seedMatch?.micro_genres || []))),
+          founded_year: b.founded_year ?? seedMatch?.founded_year ?? '',
+          city: b.city ?? seedMatch?.city ?? '',
+          state: b.state_province ?? b.state ?? seedMatch?.state ?? '',
+          state_province: b.state_province ?? b.state ?? seedMatch?.state_province ?? seedMatch?.state ?? '',
+          country: b.country ?? seedMatch?.country ?? 'USA',
+          record_label: b.record_label ?? b.label_name ?? b.label ?? seedMatch?.record_label ?? seedMatch?.label ?? '',
+          label: b.label ?? b.record_label ?? b.label_name ?? seedMatch?.label ?? seedMatch?.record_label ?? '',
           creator_id: b.creator_id || existingItem?.creator_id,
-          bio: (() => {
-            if (b.bio && b.bio.trim() !== '') return b.bio.trim();
-            if (existingItem?.bio && existingItem.bio.trim() !== '') return existingItem.bio.trim();
-            if (seedMatch?.bio && seedMatch.bio.trim() !== '') return seedMatch.bio.trim();
-            return `Community-curated archive for ${bandName}.`;
-          })(),
+          bio: (b.bio !== null && b.bio !== undefined && String(b.bio).trim() !== '') ? String(b.bio).trim() : (seedMatch?.bio || 'Not written yet.'),
           avatar_url: resolvedAvatar,
           logo_url: resolvedAvatar,
+          image_url: resolvedAvatar,
+          logo: resolvedAvatar,
           avatar: resolvedAvatar,
           image: resolvedAvatar,
           cover_url: resolvedCover,
           banner_url: resolvedCover,
-          spotify_url: b.spotify || b.spotify_url || existingItem?.spotify_url || seedMatch?.spotify_url || '',
-          bandcamp_url: b.bandcamp || b.bandcamp_url || existingItem?.bandcamp_url || seedMatch?.bandcamp_url || '',
-          metal_archives_url: b.metal_archives_url || existingItem?.metal_archives_url || seedMatch?.metal_archives_url || '',
-          youtube_url: b.featured_youtube_url || b.youtube_url || existingItem?.youtube_url || seedMatch?.youtube_url || '',
-          featured_youtube_url: b.featured_youtube_url || b.youtube_url || existingItem?.featured_youtube_url || seedMatch?.featured_youtube_url || '',
+          spotify_url: b.spotify ?? b.spotify_url ?? seedMatch?.spotify_url ?? '',
+          bandcamp_url: b.bandcamp ?? b.bandcamp_url ?? seedMatch?.bandcamp_url ?? '',
+          metal_archives_url: b.metal_archives_url ?? seedMatch?.metal_archives_url ?? '',
+          youtube_url: b.featured_youtube_url ?? b.youtube_url ?? seedMatch?.youtube_url ?? '',
+          featured_youtube_url: b.featured_youtube_url ?? b.youtube_url ?? seedMatch?.featured_youtube_url ?? '',
           lineup: mergedLineup,
           discography: mergedDiscography,
           curated_by: existingItem?.curated_by || seedMatch?.curated_by || '@fan_archivist',
           curator_name: existingItem?.curator_name || seedMatch?.curator_name || 'Community Archivist',
           created_at: b.created_at || existingItem?.created_at || seedMatch?.created_at || new Date().toISOString(),
+          updated_at: b.updated_at || existingItem?.updated_at || new Date().toISOString(),
+          status: b.status || ((b as any).is_split_up ? 'split-up' : (existingItem?.status || 'active')),
+          is_split_up: Boolean(b.status === 'split-up' || (b as any).is_split_up || existingItem?.status === 'split-up' || (existingItem as any)?.is_split_up),
           verification_status: resolvedVerification,
-          followers_count: existingItem?.followers_count || seedMatch?.followers_count || 120
+          followers_count: b.followers_count ?? existingItem?.followers_count ?? seedMatch?.followers_count ?? 120
         };
 
-        if (mergedLineup.length > 0) {
-          try {
-            if (record.id) localStorage.setItem(`nexus_core_band_lineup_${record.id}`, JSON.stringify(mergedLineup));
-            if (bId) localStorage.setItem(`nexus_core_band_lineup_${bId}`, JSON.stringify(mergedLineup));
-            if (bUUID) localStorage.setItem(`nexus_core_band_lineup_${bUUID}`, JSON.stringify(mergedLineup));
-            if (cleanBandName) localStorage.setItem(`nexus_core_band_lineup_${cleanBandName}`, JSON.stringify(mergedLineup));
-          } catch {}
-        }
+        cloudSyncedIds.add(record.id);
+        cloudSyncedIds.add(ensureUUID(record.id));
+
+        // Update localStorage strictly as a read-through cache of Supabase (and purge stale logo/cover entries when missing in Supabase)
+        try {
+          if (hasDbLineup || mergedLineup.length > 0) {
+            const serializedLineup = JSON.stringify(mergedLineup);
+            if (record.id) safeLocalStorage.setItem(`nexus_core_band_lineup_${record.id}`, serializedLineup);
+            if (bId) safeLocalStorage.setItem(`nexus_core_band_lineup_${bId}`, serializedLineup);
+            if (bUUID) safeLocalStorage.setItem(`nexus_core_band_lineup_${bUUID}`, serializedLineup);
+            if (cleanBandName) safeLocalStorage.setItem(`nexus_core_band_lineup_${cleanBandName}`, serializedLineup);
+          }
+          if (resolvedAvatar) {
+            if (record.id) safeLocalStorage.setItem(`nexus_core_band_logo_${record.id}`, resolvedAvatar);
+            if (bId) safeLocalStorage.setItem(`nexus_core_band_logo_${bId}`, resolvedAvatar);
+            if (bUUID) safeLocalStorage.setItem(`nexus_core_band_logo_${bUUID}`, resolvedAvatar);
+          } else {
+            if (record.id) safeLocalStorage.removeItem(`nexus_core_band_logo_${record.id}`);
+            if (bId) safeLocalStorage.removeItem(`nexus_core_band_logo_${bId}`);
+            if (bUUID) safeLocalStorage.removeItem(`nexus_core_band_logo_${bUUID}`);
+          }
+          if (resolvedCover) {
+            if (record.id) safeLocalStorage.setItem(`nexus_core_band_cover_${record.id}`, resolvedCover);
+            if (bId) safeLocalStorage.setItem(`nexus_core_band_cover_${bId}`, resolvedCover);
+            if (bUUID) safeLocalStorage.setItem(`nexus_core_band_cover_${bUUID}`, resolvedCover);
+          } else {
+            if (record.id) safeLocalStorage.removeItem(`nexus_core_band_cover_${record.id}`);
+            if (bId) safeLocalStorage.removeItem(`nexus_core_band_cover_${bId}`);
+            if (bUUID) safeLocalStorage.removeItem(`nexus_core_band_cover_${bUUID}`);
+          }
+        } catch {}
 
         if (existingIdx >= 0) {
           updatedList[existingIdx] = record;
@@ -1976,10 +3081,19 @@ export class CommunityBandManager {
       for (const group of byIdentity.values()) {
         if (group.length > 1) {
           group.sort((a, b) => {
+            const isCloudA = cloudSyncedIds.has(a.id) || cloudSyncedIds.has(ensureUUID(a.id));
+            const isCloudB = cloudSyncedIds.has(b.id) || cloudSyncedIds.has(ensureUUID(b.id));
+            if (isCloudA !== isCloudB) return isCloudA ? -1 : 1;
+
             const isOfficialA = (a.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || (a.name || '').toLowerCase() === 'virulent excision');
             const isOfficialB = (b.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || (b.name || '').toLowerCase() === 'virulent excision');
             if (isOfficialA && !isOfficialB) return -1;
             if (!isOfficialA && isOfficialB) return 1;
+
+            // Prioritize most recently updated record (cloud updates always supersede older local caches)
+            const timeA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const timeB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            if (timeB !== timeA) return timeB - timeA;
 
             const scoreA = (a.discography?.length || 0) * 10 +
               (a.lineup?.length || 0) * 2 +
@@ -2009,7 +3123,34 @@ export class CommunityBandManager {
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
       });
 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sortedDedupedList));
+      this.saveToStorage(sortedDedupedList);
+
+      // Overwrite secondary local caches with authoritative Supabase data so stale local entries never persist
+      try {
+        const regRaw = safeLocalStorage.getItem('nexus_registered_bands');
+        if (regRaw) {
+          const regParsed = JSON.parse(regRaw);
+          if (Array.isArray(regParsed)) {
+            const byKey = new Map<string, CommunityBandRecord>();
+            for (const rec of sortedDedupedList) {
+              byKey.set(rec.id, rec);
+              byKey.set(ensureUUID(rec.id), rec);
+              if (rec.name) byKey.set(rec.name.toLowerCase().trim(), rec);
+            }
+            const refreshedReg = regParsed.map((old: any) => {
+              const match = (old?.id && (byKey.get(old.id) || byKey.get(ensureUUID(old.id)))) ||
+                            (old?.name && byKey.get(String(old.name).toLowerCase().trim())) ||
+                            (old?.band_name && byKey.get(String(old.band_name).toLowerCase().trim()));
+              return match ? { ...old, ...match } : old;
+            });
+            safeLocalStorage.setItem('nexus_registered_bands', JSON.stringify(refreshedReg));
+          }
+        }
+      } catch {}
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: sortedDedupedList }));
+      }
       return sortedDedupedList;
     } catch (err) {
       console.warn('[communityBands] fetchFromSupabase exception:', err);
@@ -2043,7 +3184,7 @@ export class CommunityBandManager {
     };
 
     all[index] = updated;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    this.saveToStorage(all);
     window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: updated }));
 
     // Proactively sync handover state to Supabase
@@ -2079,6 +3220,62 @@ export class CommunityBandManager {
   // Quick helper to update avatar/logo artwork
   public async updateAvatar(bandId: string, avatarUrl: string): Promise<CommunityBandRecord> {
     return this.updateBand(bandId, { avatar_url: avatarUrl });
+  }
+
+  // Wipes all albums for a band from localStorage, in-memory records, and Supabase releases table for a fresh start
+  public async wipeBandDiscography(bandId: string, bandName?: string): Promise<boolean> {
+    const cleanId = String(bandId || '').trim();
+    const bandUUID = ensureUUID(cleanId);
+    const resolvedName = bandName || cleanId;
+
+    // 1. Clear all localStorage discography cache keys
+    clearBandDiscographyFromCache(cleanId, resolvedName);
+    if (bandUUID !== cleanId) clearBandDiscographyFromCache(bandUUID, resolvedName);
+
+    // 2. Clear discography in community band archives
+    const stored = safeLocalStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      try {
+        const bands = JSON.parse(stored);
+        if (Array.isArray(bands)) {
+          const updated = bands.map((b: CommunityBandRecord) => {
+            const matches = b.id === cleanId || ensureUUID(b.id) === bandUUID || (resolvedName && (b.name || '').toLowerCase() === resolvedName.toLowerCase());
+            if (matches) {
+              return { ...b, discography: [] };
+            }
+            return b;
+          });
+          safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        }
+      } catch {}
+    }
+
+    // 3. Clear from Supabase releases table
+    try {
+      const client = getSupabase();
+      if (client) {
+        if (bandUUID) {
+          await client.from('releases').delete().eq('band_id', bandUUID);
+        }
+        if (cleanId && cleanId !== bandUUID) {
+          await client.from('releases').delete().eq('band_id', cleanId);
+        }
+      }
+    } catch (e) {
+      console.warn('[communityBands] Wipe Supabase releases warning:', e);
+    }
+
+    // 4. Dispatch update events
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', {
+        detail: { id: cleanId, name: resolvedName, discography: [] }
+      }));
+      window.dispatchEvent(new CustomEvent('nexus_community_releases_updated', {
+        detail: { band_id: cleanId, releases: [] }
+      }));
+    }
+
+    return true;
   }
 
   // Push all local community bands and discographies to Supabase tables with unique UUIDs

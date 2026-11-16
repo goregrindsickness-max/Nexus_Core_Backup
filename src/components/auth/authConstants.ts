@@ -58,7 +58,7 @@ export function generateUUID(): string {
 export function normalizeLoadedProfile(data: any): any {
   if (!data) return {};
   const isMiguel = isMiguelNameOrProfile(data);
-  return {
+  const next: any = {
     ...data,
     id: data.id,
     full_name: data.full_name || data.name || '',
@@ -76,6 +76,44 @@ export function normalizeLoadedProfile(data: any): any {
     allowed_workspaces: Array.isArray(data.allowed_workspaces) ? data.allowed_workspaces : [],
     registered_workspaces: Array.isArray(data.registered_workspaces) ? data.registered_workspaces : []
   };
+
+  if (!isMiguel) {
+    const pBrand = String(next.promoter_name || next.promoter_agency || next.promoter_brand || next.promoter_metadata?.brand_name || next.promoter_metadata?.agency_name || '').toLowerCase();
+    if (pBrand.includes('nexus live')) {
+      delete next.promoter_name;
+      delete next.promoter_agency;
+      delete next.promoter_brand;
+      delete next.promoter_logo;
+      delete next.promoter_cover_image;
+      delete next.promoter_bio;
+      delete next.promoter_metadata;
+      if (!next.promoter_id || next.promoter_id === next.id) {
+        delete next.promoter_id;
+      }
+      next.registered_workspaces = (next.registered_workspaces || []).filter((w: any) => {
+        const t = typeof w === 'string' ? w.toLowerCase().trim() : String(w?.type || w?.key || '').toLowerCase().trim();
+        return t !== 'promoter';
+      });
+    }
+    const cBrand = String(next.creative_name || next.creative_business_name || next.creative_metadata?.business_name || '').toLowerCase();
+    if (cBrand.includes('vortex graphics')) {
+      delete next.creative_name;
+      delete next.creative_business_name;
+      delete next.creative_avatar;
+      delete next.creative_banner;
+      delete next.creative_bio;
+      delete next.creative_metadata;
+      if (!next.creative_id || next.creative_id === next.id) {
+        delete next.creative_id;
+      }
+      next.registered_workspaces = (next.registered_workspaces || []).filter((w: any) => {
+        const t = typeof w === 'string' ? w.toLowerCase().trim() : String(w?.type || w?.key || '').toLowerCase().trim();
+        return t !== 'creative';
+      });
+    }
+  }
+
+  return next;
 }
 
 export function normalizeRegisteredWorkspaces(existing: any = [], newRefs: any = []): string[] {
@@ -183,58 +221,7 @@ export const GENRE_CLUSTERS = [
   }
 ];
 
-export async function ensureAutoFollowMiguel(supabase: any, newUserId: string) {
-  if (!supabase || !newUserId) return;
-  try {
-    // Query profiles for Miguel / goregrindsickness / industry pro
-    const { data: proProfiles, error } = await supabase
-      .from('profiles')
-      .select('id, email, name, account_type')
-      .or('email.ilike.%goregrindsickness%,name.ilike.%miguel%,account_type.eq.industry pro');
-
-    let targetId: string | null = null;
-    if (proProfiles && proProfiles.length > 0) {
-      const match = proProfiles.find((p: any) => p.email?.toLowerCase().includes('goregrindsickness') || p.name?.toLowerCase().includes('miguel')) || proProfiles[0];
-      if (match?.id) {
-        targetId = match.id;
-      }
-    }
-
-    if (!targetId) {
-      const { data: fallbackProfiles } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('account_type', 'industry pro')
-        .limit(5);
-      if (fallbackProfiles && fallbackProfiles.length > 0) {
-        const validFallback = fallbackProfiles.find((p: any) => p.id !== newUserId);
-        if (validFallback) targetId = validFallback.id;
-      }
-    }
-
-    if (!targetId || targetId === newUserId) return;
-
-    const followId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'f0000000-0000-4000-8000-' + Math.floor(Math.random() * 1e12).toString(16).padStart(12, '0');
-    const payload = {
-      id: followId,
-      follower_id: newUserId,
-      followed_id: targetId,
-      target_type: 'user'
-    };
-
-    await supabase.from('follows').upsert([payload], { onConflict: 'follower_id,followed_id' });
-
-    try {
-      const localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
-      if (!localFollows[newUserId]) localFollows[newUserId] = {};
-      localFollows[newUserId][targetId] = true;
-      localStorage.setItem('nexus_local_follows_v1', JSON.stringify(localFollows));
-    } catch (e) {
-      // ignore
-    }
-
-    console.log(`[Auto-Follow Active] User ${newUserId} successfully auto-followed industry pro profile ${targetId}`);
-  } catch (err) {
-    console.warn('ensureAutoFollowMiguel exception:', err);
-  }
+export async function ensureAutoFollowMiguel(_supabase: any, _newUserId: string) {
+  // Strict opt-in relationships: newly registered accounts start with 0 auto-followed profiles or bands.
+  return;
 }

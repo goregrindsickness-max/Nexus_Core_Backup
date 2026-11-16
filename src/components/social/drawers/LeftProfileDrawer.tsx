@@ -35,18 +35,41 @@ import {
 import { WalletOAuthModal } from "../modals/WalletOAuthModal";
 import { PaymentMethodsSettings } from "../../PaymentMethodsSettings";
 import { CommunityBandCuratorModal } from "../modals/CommunityBandCuratorModal";
+import { communityBandManager } from "../../../lib/communityBands";
 import { isMiguelNameOrProfile } from "../utils/profileUtils";
+import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME } from "../../../utils/followSyncService";
 import { bugMonitor } from "../../../services/bugMonitorService";
 import { useModalStore } from "../../../store/useModalStore";
+import { handleImageErrorWithCache } from "../../../services/profileImageCacheService";
+import { AffiliatedEntitiesSection } from '../cards/AffiliatedEntitiesSection';
+import { hasRegisteredWorkspace } from '../../../types';
 import {
-  X, Check, User, Shield, ShieldAlert, Key, Sparkles, MapPin, Calendar, Building,
+  getChecklistPersistedState,
+  setShowSetupChecklist,
+  resolveUserChecklistKey,
+  hasScenePioneerBadge,
+  ONBOARDING_STATE_CHANGED_EVENT,
+  SCENE_PIONEER_BADGE_LABEL,
+} from '../../OnboardingChecklist';
+import {
+  BIRTHDAY_MONTHS,
+  getDaysInBirthdayMonth,
+  clampBirthdayDay,
+  normalizeBirthdayMonth,
+  loadBirthdayPrefsFromStorage,
+  saveBirthdayPrefsToStorage,
+  formatBirthdayMonthDay,
+  hasValidBirthday,
+} from '../../../utils/birthdayUtils';
+import {
+  X, Check, User, Shield, ShieldAlert, Key, Sparkles, MapPin, Calendar, Building, Building2,
   Camera, Globe, Instagram, Music2, Mail, Lock, Settings, LogOut, ChevronRight,
   ChevronDown, Edit3, Save, Flame, Zap, Award, Terminal, Sliders, Eye, EyeOff, Layers, Radio,
   FileText, Send, Plus, Trash2, ExternalLink, HelpCircle, Ticket, Barcode as BarcodeIcon,
   ShoppingBag, Search, Users, Play, Disc, MessageSquare, Bell, BellOff,
   UserCheck, UserMinus, Tag, SkipBack, Square, SkipForward, Volume2, Pause,
   Library, Download, Star, ArrowRight, Database, CreditCard, Crown, Wifi, WifiOff, Settings2, LayoutGrid, ShoppingCart, Music, Image as ImageIcon, Shirt, Fingerprint,
-  Bug
+  Bug, Cake
 } from 'lucide-react';
 
 interface LeftProfileDrawerProps {
@@ -89,6 +112,12 @@ interface LeftProfileDrawerProps {
   setProfileStealthMode?: (val: boolean) => void;
   profileFavoriteSong?: string;
   setProfileFavoriteSong?: (val: string) => void;
+  profileBirthdayMonth?: number | null;
+  setProfileBirthdayMonth?: (val: number | null) => void;
+  profileBirthdayDay?: number | null;
+  setProfileBirthdayDay?: (val: number | null) => void;
+  profileShowBirthdayShoutout?: boolean;
+  setProfileShowBirthdayShoutout?: (val: boolean) => void;
   profileEmail?: string;
   setProfileEmail?: (val: string) => void;
   profilePassword?: string;
@@ -122,7 +151,7 @@ interface LeftProfileDrawerProps {
   setFollowingSearchQuery?: (q: string) => void;
   discoverProfiles?: any[];
   setDiscoverProfiles?: React.Dispatch<React.SetStateAction<any[]>>;
-  handleFollowProfile?: (profile: any) => void;
+  handleFollowProfile?: (profile: any, action?: 'follow' | 'unfollow') => void;
   filterShowFollowedOnly?: boolean;
   setFilterShowFollowedOnly?: (val: boolean) => void;
   pinEntered?: string;
@@ -340,6 +369,380 @@ export const LeftProfileDrawer: React.FC<LeftProfileDrawerProps> = (props) => {
   const [activeOAuthProvider, setActiveOAuthProvider] = React.useState<'google' | 'apple' | 'paypal' | null>(null);
   const [walletsState, setWalletsState] = React.useState<UserWalletsState>(() => getStoredWallets(props.userProfile));
 
+  const checklistUserKey = React.useMemo(() => resolveUserChecklistKey(userProfile), [userProfile]);
+  const [showSetupChecklistState, setShowSetupChecklistState] = React.useState<boolean>(() => {
+    return !getChecklistPersistedState(resolveUserChecklistKey(userProfile)).dismissed;
+  });
+  const [pioneerUnlocked, setPioneerUnlocked] = React.useState<boolean>(() =>
+    hasScenePioneerBadge(userProfile)
+  );
+  const [birthdaySectionHighlight, setBirthdaySectionHighlight] = React.useState(false);
+
+  const [fallbackBdayMonth, setFallbackBdayMonth] = React.useState<number | null>(() => {
+    const stored = loadBirthdayPrefsFromStorage(userProfile || resolveUserChecklistKey(userProfile));
+    return normalizeBirthdayMonth(userProfile?.birthday_month ?? stored.birthday_month);
+  });
+  const [fallbackBdayDay, setFallbackBdayDay] = React.useState<number | null>(() => {
+    const stored = loadBirthdayPrefsFromStorage(userProfile || resolveUserChecklistKey(userProfile));
+    const m = normalizeBirthdayMonth(userProfile?.birthday_month ?? stored.birthday_month);
+    return clampBirthdayDay(m, userProfile?.birthday_day ?? stored.birthday_day);
+  });
+  const [fallbackShowBdayShoutout, setFallbackShowBdayShoutout] = React.useState<boolean>(() => {
+    const stored = loadBirthdayPrefsFromStorage(userProfile || resolveUserChecklistKey(userProfile));
+    return typeof userProfile?.show_birthday_shoutout === 'boolean'
+      ? userProfile.show_birthday_shoutout
+      : stored.show_birthday_shoutout;
+  });
+
+  React.useEffect(() => {
+    const stored = loadBirthdayPrefsFromStorage(userProfile || checklistUserKey);
+    const m = normalizeBirthdayMonth(userProfile?.birthday_month ?? stored.birthday_month);
+    const d = clampBirthdayDay(m, userProfile?.birthday_day ?? stored.birthday_day);
+    const show =
+      typeof userProfile?.show_birthday_shoutout === 'boolean'
+        ? userProfile.show_birthday_shoutout
+        : stored.show_birthday_shoutout;
+    setFallbackBdayMonth(m);
+    setFallbackBdayDay(d);
+    setFallbackShowBdayShoutout(show);
+  }, [
+    checklistUserKey,
+    userProfile?.id,
+    userProfile?.email,
+    userProfile?.birthday_month,
+    userProfile?.birthday_day,
+    userProfile?.show_birthday_shoutout,
+  ]);
+
+  const activeBdayMonth =
+    props.profileBirthdayMonth !== undefined && props.profileBirthdayMonth !== null
+      ? props.profileBirthdayMonth
+      : fallbackBdayMonth;
+  const activeBdayDay =
+    props.profileBirthdayDay !== undefined && props.profileBirthdayDay !== null
+      ? props.profileBirthdayDay
+      : fallbackBdayDay;
+  const activeShowBdayShoutout =
+    props.profileShowBirthdayShoutout !== undefined
+      ? props.profileShowBirthdayShoutout
+      : fallbackShowBdayShoutout;
+
+  const applyBirthdayPreferences = React.useCallback(
+    (nextMonth: number | null, nextDay: number | null, nextShow: boolean) => {
+      const normalizedMonth = normalizeBirthdayMonth(nextMonth);
+      const clampedDay = normalizedMonth ? clampBirthdayDay(normalizedMonth, nextDay) : null;
+
+      setFallbackBdayMonth(normalizedMonth);
+      setFallbackBdayDay(clampedDay);
+      setFallbackShowBdayShoutout(nextShow);
+
+      if (props.setProfileBirthdayMonth) props.setProfileBirthdayMonth(normalizedMonth);
+      if (props.setProfileBirthdayDay) props.setProfileBirthdayDay(clampedDay);
+      if (props.setProfileShowBirthdayShoutout) props.setProfileShowBirthdayShoutout(nextShow);
+
+      saveBirthdayPrefsToStorage(userProfile || checklistUserKey, {
+        birthday_month: normalizedMonth,
+        birthday_day: clampedDay,
+        show_birthday_shoutout: nextShow,
+      });
+      if (checklistUserKey) {
+        saveBirthdayPrefsToStorage(checklistUserKey, {
+          birthday_month: normalizedMonth,
+          birthday_day: clampedDay,
+          show_birthday_shoutout: nextShow,
+        });
+      }
+
+      // Also update role-scoped profile localStorage cache so reload hydration in UniversalSocialFeed picks it up immediately
+      if (typeof window !== 'undefined') {
+        try {
+          const profileCacheKey = `nexus_${portalRole}_profile_v1_${userProfile?.id || 'guest'}`;
+          const existingCacheRaw = localStorage.getItem(profileCacheKey);
+          if (existingCacheRaw) {
+            const existingCache = JSON.parse(existingCacheRaw);
+            localStorage.setItem(
+              profileCacheKey,
+              JSON.stringify({
+                ...existingCache,
+                birthday_month: normalizedMonth,
+                birthday_day: clampedDay,
+                show_birthday_shoutout: nextShow,
+              })
+            );
+          }
+        } catch (_) {}
+      }
+
+      if (setUserProfile) {
+        setUserProfile((prev: any) => {
+          if (!prev) return prev;
+          const updated = {
+            ...prev,
+            birthday_month: normalizedMonth,
+            birthday_day: clampedDay,
+            show_birthday_shoutout: nextShow,
+            ...(prev.promoter_metadata && typeof prev.promoter_metadata === 'object'
+              ? {
+                  promoter_metadata: {
+                    ...prev.promoter_metadata,
+                    birthday_month: normalizedMonth,
+                    birthday_day: clampedDay,
+                    show_birthday_shoutout: nextShow,
+                  },
+                }
+              : {}),
+          };
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+            } catch (_) {}
+          }
+          return updated;
+        });
+      }
+
+      if (selectedUserProfile?.isYou && setSelectedUserProfile) {
+        setSelectedUserProfile((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                birthday_month: normalizedMonth,
+                birthday_day: clampedDay,
+                show_birthday_shoutout: nextShow,
+              }
+            : prev
+        );
+      }
+
+      if (userProfile?.id && userProfile.id !== 'guest') {
+        const supabase = typeof getSupabase === 'function' ? getSupabase() : null;
+        if (supabase) {
+          const payload = extractGlobalProfilePayload(
+            {
+              id: userProfile.id,
+              birthday_month: normalizedMonth,
+              birthday_day: clampedDay,
+              show_birthday_shoutout: nextShow,
+            },
+            userProfile.id
+          );
+          executeSanitizedProfileUpsert(supabase, payload).catch(() => {});
+        }
+      }
+    },
+    [
+      checklistUserKey,
+      portalRole,
+      props.setProfileBirthdayMonth,
+      props.setProfileBirthdayDay,
+      props.setProfileShowBirthdayShoutout,
+      setUserProfile,
+      selectedUserProfile?.isYou,
+      setSelectedUserProfile,
+      userProfile,
+      getSupabase,
+    ]
+  );
+
+  React.useEffect(() => {
+    const syncChecklist = () => {
+      const state = getChecklistPersistedState(checklistUserKey);
+      setShowSetupChecklistState(!state.dismissed);
+      setPioneerUnlocked(hasScenePioneerBadge(userProfile));
+    };
+    syncChecklist();
+    window.addEventListener(ONBOARDING_STATE_CHANGED_EVENT, syncChecklist);
+    return () => window.removeEventListener(ONBOARDING_STATE_CHANGED_EVENT, syncChecklist);
+  }, [checklistUserKey, userProfile]);
+
+  React.useEffect(() => {
+    const handleOpenProfileSettings = (e: any) => {
+      setDrawerCurrentView('profile');
+      setLeftDrawerOpen(true);
+      if (e?.detail?.section === 'birthday') {
+        setBirthdaySectionHighlight(true);
+        setTimeout(() => {
+          const el = document.getElementById('nexus-birthday-settings');
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 200);
+        setTimeout(() => setBirthdaySectionHighlight(false), 2600);
+      }
+    };
+    window.addEventListener('nexus:open-profile-settings', handleOpenProfileSettings);
+    return () => window.removeEventListener('nexus:open-profile-settings', handleOpenProfileSettings);
+  }, [setDrawerCurrentView, setLeftDrawerOpen]);
+
+  const renderBirthdaySettingsCard = () => {
+    const maxDays = getDaysInBirthdayMonth(activeBdayMonth);
+    const formattedBday = formatBirthdayMonthDay(activeBdayMonth, activeBdayDay);
+    const bdayConfigured = hasValidBirthday({
+      birthday_month: activeBdayMonth,
+      birthday_day: activeBdayDay,
+    });
+
+    return (
+      <div
+        id="nexus-birthday-settings"
+        data-testid="profile-birthday-settings"
+        className={`pt-3 border-t border-zinc-900 space-y-3 transition-all rounded-xl ${
+          birthdaySectionHighlight
+            ? 'ring-2 ring-amber-400/70 bg-amber-950/15 p-3 -mx-1 shadow-[0_0_20px_rgba(245,158,11,0.2)]'
+            : ''
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h4 className="text-xs font-black uppercase text-amber-300 tracking-wider font-display flex items-center gap-1.5">
+              <Cake className="w-3.5 h-3.5 text-amber-400" />
+              <span>Birthday &amp; Scene Shoutouts</span>
+            </h4>
+            <p className="text-[9.5px] text-zinc-400 leading-normal mt-0.5">
+              Optional Month &amp; Day only (no birth year required). Celebrates on your profile, feed, and forum posts.
+            </p>
+          </div>
+          {bdayConfigured && (
+            <button
+              type="button"
+              onClick={() => {
+                applyBirthdayPreferences(null, null, activeShowBdayShoutout);
+              }}
+              className="text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-rose-300 shrink-0 cursor-pointer"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2.5">
+          <div>
+            <label
+              htmlFor="profile-birthday-month"
+              className="text-[10px] uppercase font-bold text-zinc-400 block mb-1"
+            >
+              Month (1–12)
+            </label>
+            <select
+              id="profile-birthday-month"
+              data-testid="birthday-month-select"
+              value={activeBdayMonth ?? ''}
+              onChange={(e) => {
+                const rawVal = e.target.value;
+                const nextMonth = rawVal ? Number(rawVal) : null;
+                const nextDay = nextMonth ? clampBirthdayDay(nextMonth, activeBdayDay || 1) : null;
+                applyBirthdayPreferences(nextMonth, nextDay, activeShowBdayShoutout);
+              }}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-2 text-xs text-white focus:border-amber-400 focus:outline-none font-medium cursor-pointer"
+            >
+              <option value="">Not Set</option>
+              {BIRTHDAY_MONTHS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.value} — {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label
+              htmlFor="profile-birthday-day"
+              className="text-[10px] uppercase font-bold text-zinc-400 block mb-1"
+            >
+              Day (1–{maxDays})
+            </label>
+            <select
+              id="profile-birthday-day"
+              data-testid="birthday-day-select"
+              disabled={!activeBdayMonth}
+              value={activeBdayDay ?? ''}
+              onChange={(e) => {
+                const rawVal = e.target.value;
+                const nextDay = rawVal ? Number(rawVal) : null;
+                applyBirthdayPreferences(activeBdayMonth, nextDay, activeShowBdayShoutout);
+              }}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-2 text-xs text-white focus:border-amber-400 focus:outline-none font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <option value="">Not Set</option>
+              {Array.from({ length: maxDays }, (_, idx) => idx + 1).map((dayNum) => (
+                <option key={dayNum} value={dayNum}>
+                  {dayNum}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {formattedBday && (
+          <div className="text-[10px] font-mono text-amber-300/90 bg-amber-950/20 border border-amber-500/30 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span>✓ Saved: {formattedBday}</span>
+            <span className="text-[9px] text-zinc-400">
+              {activeShowBdayShoutout ? 'Shoutout Public' : 'Shoutout Hidden'}
+            </span>
+          </div>
+        )}
+
+        <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <div>
+            <div className="text-xs font-bold text-zinc-200">Birthday Shoutout Badge &amp; Horns</div>
+            <div className="text-[9px] text-zinc-500 leading-snug mt-0.5 font-medium">
+              Show &quot;🎂 Birthday Today&quot; badge and mutual Birthday Horns trigger on your date
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="toggle-birthday-shoutout"
+            onClick={() => {
+              const nextShow = !activeShowBdayShoutout;
+              applyBirthdayPreferences(activeBdayMonth, activeBdayDay, nextShow);
+            }}
+            className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 cursor-pointer ${
+              activeShowBdayShoutout ? 'bg-amber-500' : 'bg-zinc-800'
+            }`}
+          >
+            <div
+              className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                activeShowBdayShoutout ? 'translate-x-4' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </label>
+      </div>
+    );
+  };
+
+  const renderShowSetupChecklistToggle = () => (
+    <label className="flex items-center justify-between gap-3 cursor-pointer">
+      <div>
+        <div className="text-xs font-bold text-zinc-300">Show Setup Checklist</div>
+        <div className="text-[9px] text-zinc-500 leading-none mt-0.5 font-medium">
+          Display the 7-step Profile Activation Checklist on your feed
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="toggle-show-setup-checklist"
+        onClick={() => {
+          const nextShow = !showSetupChecklistState;
+          setShowSetupChecklist(checklistUserKey, nextShow);
+          setShowSetupChecklistState(nextShow);
+          triggerNotification?.(
+            nextShow
+              ? 'Setup checklist restored to your feed.'
+              : 'Setup checklist hidden from your feed.'
+          );
+        }}
+        className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 cursor-pointer ${
+          showSetupChecklistState ? 'bg-rose-600' : 'bg-zinc-800'
+        }`}
+      >
+        <div
+          className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${
+            showSetupChecklistState ? 'translate-x-4' : 'translate-x-0'
+          }`}
+        />
+      </button>
+    </label>
+  );
+
   // Owner check for Autonomous Bug Diagnostics (Shake & Instabug Monitor)
   const isOwner = React.useMemo(() => {
     if (typeof isMiguelNameOrProfile === 'function' && isMiguelNameOrProfile(userProfile)) return true;
@@ -432,19 +835,28 @@ if (!leftDrawerOpen) return null;
   return (
         <div className={`fixed inset-0 ${isCommunityCuratorOpen ? 'z-[1000020]' : 'z-[250]'} flex`}>
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity" onClick={() => setLeftDrawerOpen(false)} />
-          <div className="relative w-[85%] sm:w-80 max-w-sm bg-[#030303] border-r border-zinc-900 h-full flex flex-col animate-in slide-in-from-left duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] overflow-hidden bg-[linear-gradient(to_right,rgba(239,68,68,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(239,68,68,0.06)_1px,transparent_1px)] [background-size:20px_20px]">
+          <div className="relative w-[85%] sm:w-80 max-w-sm bg-[#030303] border-r border-zinc-900 h-[100dvh] max-h-[100dvh] flex flex-col animate-in slide-in-from-left duration-300 shadow-[0_0_80px_rgba(0,0,0,0.95)] overflow-hidden bg-[linear-gradient(to_right,rgba(239,68,68,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(239,68,68,0.06)_1px,transparent_1px)] [background-size:20px_20px]">
             {/* Ambient Aura Glows for Left Drawer */}
             <div className="absolute top-0 left-0 w-64 h-64 bg-rose-950/5 rounded-full blur-[90px] pointer-events-none z-0" />
             <div className="absolute bottom-20 right-0 w-52 h-52 bg-purple-950/5 rounded-full blur-[80px] pointer-events-none z-0" />
 
-            <div className="p-6 border-b border-zinc-900 flex flex-col gap-4 bg-zinc-950/40 backdrop-blur-md shrink-0 z-10 relative overflow-hidden">
+            <div className="p-6 pt-[max(1.5rem,env(safe-area-inset-top))] border-b border-zinc-900 flex flex-col gap-4 bg-zinc-950/40 backdrop-blur-md shrink-0 z-10 relative overflow-hidden">
               <button onClick={() => setLeftDrawerOpen(false)} className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center bg-black/40 hover:bg-rose-900/40 border border-zinc-800 hover:border-rose-500/50 text-zinc-400 hover:text-rose-400 rounded-full transition-all z-50 cursor-pointer"><X className="w-4 h-4" /></button>
               {/* Optional Cover Image backdrop */}
               <div className="absolute inset-0 w-full h-full pointer-events-none z-0">
                 {(() => {
                   const effectiveCover = resolveEffectiveCover(portalRole || 'industry_pro', activeBand, userProfile, profileCoverUrl);
                   return effectiveCover ? (
-                    <img src={effectiveCover} className="w-full h-full object-cover opacity-20 blur-[1px]" alt="" />
+                    <img 
+                      src={effectiveCover} 
+                      className="w-full h-full object-cover opacity-20 blur-[1px]" 
+                      alt="" 
+                      onError={(e) => {
+                        handleImageErrorWithCache(e, effectiveCover, undefined).catch(() => {});
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
                   ) : (
                     <div className="w-full h-full bg-gradient-to-b from-rose-950/15 via-transparent to-transparent" />
                   );
@@ -461,11 +873,26 @@ if (!leftDrawerOpen) return null;
                     : portalRole === 'promoter' 
                     ? resolvePromoterName(userProfile) 
                     : ((portalRole as any) === 'label' ? (userProfile?.label_company_name || 'Pro Label') : (profileFullLegalName || 'User'));
-                  return effectiveAvatar ? (
-                    <img src={effectiveAvatar} className="w-14 h-14 rounded-full object-cover border border-rose-500/40 shrink-0 shadow-lg" alt="Profile" />
-                  ) : (
-                    <div className="w-14 h-14 rounded-full bg-rose-950/40 border border-rose-500/50 flex items-center justify-center font-black text-rose-400 text-xl shrink-0">
-                      {effectiveName.replace(/^@+/, '').charAt(0).toUpperCase()}
+                  return (
+                    <div className="relative shrink-0">
+                      {effectiveAvatar && (
+                        <img 
+                          src={effectiveAvatar} 
+                          className="w-14 h-14 rounded-full object-cover border border-rose-500/40 shrink-0 shadow-lg" 
+                          alt="Profile" 
+                          onError={(e) => {
+                            handleImageErrorWithCache(e, effectiveAvatar, undefined).catch(() => {});
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.style.display = 'none';
+                            if (e.currentTarget.nextElementSibling) {
+                              (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                            }
+                          }}
+                        />
+                      )}
+                      <div className={`w-14 h-14 rounded-full bg-rose-950/40 border border-rose-500/50 flex items-center justify-center font-black text-rose-400 text-xl shrink-0 ${effectiveAvatar ? 'hidden' : ''}`}>
+                        {effectiveName.replace(/^@+/, '').charAt(0).toUpperCase()}
+                      </div>
                     </div>
                   );
                 })()}
@@ -523,6 +950,11 @@ if (!leftDrawerOpen) return null;
                           <span className="text-[8px] font-black uppercase tracking-wider bg-rose-950/40 border border-rose-900/40 text-rose-400 px-2 py-0.5 rounded-md font-mono">
                             {portalRole === 'fan_only' ? 'Fan Only' : 'Industry Pro'}
                           </span>
+                          {pioneerUnlocked && (
+                            <span className="text-[8px] font-black uppercase tracking-wider bg-amber-500/20 border border-amber-400/40 text-amber-300 px-2 py-0.5 rounded-md font-mono">
+                              🏆 {SCENE_PIONEER_BADGE_LABEL}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -673,7 +1105,10 @@ if (!leftDrawerOpen) return null;
                         {!isPromoter && (
                           <button 
                             type="button"
-                            onClick={() => setIsCommunityCuratorOpen(true)} 
+                            onClick={() => {
+                              communityBandManager.fetchFromSupabase().catch(() => {});
+                              setIsCommunityCuratorOpen(true);
+                            }} 
                             className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-zinc-800 transition-all duration-200 group cursor-pointer text-left"
                           >
                             <div className="flex items-center gap-3 min-w-0">
@@ -692,6 +1127,28 @@ if (!leftDrawerOpen) return null;
                             <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
                           </button>
                         )}
+
+                        {/* Public Pages & Festival Entities */}
+                        <button
+                          type="button"
+                          onClick={() => setDrawerCurrentView('public_entities')}
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-zinc-950/60 hover:bg-zinc-900/90 border border-zinc-900 hover:border-amber-500/40 transition-all duration-200 group cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:border-amber-500/40 group-hover:bg-amber-500/15 group-hover:shadow-[0_0_10px_rgba(245,158,11,0.25)] transition-all shrink-0">
+                              <Building2 className="w-4 h-4" />
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-bold text-zinc-200 group-hover:text-white transition-colors truncate">
+                                Public Pages & Entities
+                              </span>
+                              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 font-mono transition-colors truncate">
+                                Festivals, labels & collectives
+                              </span>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+                        </button>
 
                         {/* Autonomous Bug Diagnostics (Shake & Instabug Mode) - Located right under Band Archivist */}
                         {isOwner && (
@@ -778,7 +1235,7 @@ if (!leftDrawerOpen) return null;
                         </div>
                       )}
                     </div>
-                  <div className="p-4 border-t border-zinc-900 bg-zinc-950/50 mt-auto shrink-0">
+                  <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-zinc-900 bg-zinc-950/50 mt-auto shrink-0">
                     <button onClick={() => { setLeftDrawerOpen(false); onLogout?.(); }} className="w-full py-3.5 bg-zinc-900 text-rose-500 text-xs font-black uppercase tracking-wider rounded-lg hover:bg-zinc-800 transition-colors">
                       Log Out
                     </button>
@@ -1023,7 +1480,6 @@ if (!leftDrawerOpen) return null;
                                     value={profileFavoriteSong}
                                     onChange={(e) => {
                                       setProfileFavoriteSong(e.target.value);
-                                      triggerNotification?.(`📊 Popular track updated to: ${e.target.value}`);
                                     }}
                                     className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-xs text-white focus:border-orange-500 focus:outline-none font-medium cursor-pointer"
                                   >
@@ -1078,6 +1534,12 @@ if (!leftDrawerOpen) return null;
                                   placeholder="Enter bio, mission statement or underground manifesto..."
                                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-white placeholder-zinc-600 focus:border-orange-500 focus:outline-none resize-none font-medium transition-colors"
                                 />
+                              </div>
+
+                              {/* Personal Account Preferences inside Brand Settings too */}
+                              {renderBirthdaySettingsCard()}
+                              <div className="pt-3 border-t border-zinc-900">
+                                {renderShowSetupChecklistToggle()}
                               </div>
                             </div>
 
@@ -1170,7 +1632,7 @@ if (!leftDrawerOpen) return null;
                                     ref={avatarFileInputRef}
                                     type="file" 
                                     accept="image/*" 
-                                    className="hidden" 
+                                    className="sr-only" 
                                     onChange={(e) => {
                                       const file = e.target.files?.[0];
                                       if (file) {
@@ -1195,7 +1657,6 @@ if (!leftDrawerOpen) return null;
                                             e.preventDefault();
                                             e.stopPropagation();
                                             setProfileAvatarUrl(null);
-                                            triggerNotification?.("Profile avatar removed!");
                                             if (avatarFileInputRef.current) avatarFileInputRef.current.value = '';
                                           }}
                                           className="absolute -top-1 -right-1 bg-red-600 hover:bg-red-700 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold border border-zinc-950 z-20 cursor-pointer shadow-md"
@@ -1230,7 +1691,6 @@ if (!leftDrawerOpen) return null;
                                         type="button"
                                         onClick={() => {
                                           setProfileAvatarUrl(preset.url);
-                                          triggerNotification?.(`Avatar set to ${preset.name}!`);
                                         }}
                                         className={`px-1 py-0.5 text-[8px] font-mono border rounded transition-all cursor-pointer whitespace-nowrap ${
                                           profileAvatarUrl === preset.url
@@ -1256,7 +1716,7 @@ if (!leftDrawerOpen) return null;
                                     ref={coverFileInputRef}
                                     type="file" 
                                     accept="image/*" 
-                                    className="hidden" 
+                                    className="sr-only" 
                                     onChange={(e) => {
                                       const file = e.target.files?.[0];
                                       if (file) {
@@ -1280,7 +1740,6 @@ if (!leftDrawerOpen) return null;
                                           e.preventDefault();
                                           e.stopPropagation();
                                           setProfileCoverUrl(null);
-                                          triggerNotification?.("Profile cover banner removed!");
                                           if (coverFileInputRef.current) coverFileInputRef.current.value = '';
                                         }}
                                         className="absolute top-1 right-1 bg-red-600 hover:bg-red-700 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold border border-zinc-950 z-20 cursor-pointer shadow-md"
@@ -1315,7 +1774,6 @@ if (!leftDrawerOpen) return null;
                                         type="button"
                                         onClick={() => {
                                           setProfileCoverUrl(preset.url);
-                                          triggerNotification?.(`Cover set to ${preset.name}!`);
                                         }}
                                         className={`px-1 py-0.5 text-[8px] font-mono border rounded transition-all cursor-pointer whitespace-nowrap ${
                                           profileCoverUrl === preset.url
@@ -1572,7 +2030,6 @@ if (!leftDrawerOpen) return null;
                                             setProfileTopSongArtist(item.artist);
                                             setProfileTopSongTitle(item.title);
                                             setProfileFavoriteSong(`${item.artist} - ${item.title}`);
-                                            triggerNotification?.(`📊 Auto-selected track: ${item.artist} - ${item.title}`);
                                           }}
                                           className="px-2 py-1.5 bg-zinc-900 hover:bg-zinc-850 text-emerald-400 border border-zinc-800 rounded-xl text-[9px] font-bold font-mono transition-colors uppercase shrink-0"
                                           title="Auto-select track"
@@ -1774,7 +2231,6 @@ if (!leftDrawerOpen) return null;
                                   onClick={() => {
                                     const nextVal = !filterShowFollowedOnly;
                                     setFilterShowFollowedOnly(nextVal);
-                                    triggerNotification?.(nextVal ? "✨ Feed set to Followed Accounts only!" : "🌎 Feed set to show all community updates!");
                                   }}
                                   className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 ${filterShowFollowedOnly ? 'bg-rose-600' : 'bg-zinc-800'}`}
                                 >
@@ -1821,8 +2277,14 @@ if (!leftDrawerOpen) return null;
                                   <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${prefLocationServices ? 'translate-x-4' : 'translate-x-0'}`} />
                                 </button>
                               </label>
+
+                              {/* Show Setup Checklist */}
+                              {renderShowSetupChecklistToggle()}
                             </div>
                           </div>
+
+                          {/* Birthday & Scene Shoutouts */}
+                          {renderBirthdaySettingsCard()}
 
                           {/* Profile Blurb / Bio (At Bottom of Settings) */}
                           <div className="pt-3 border-t border-zinc-900 space-y-2">
@@ -1924,7 +2386,32 @@ if (!leftDrawerOpen) return null;
                         </div>
                         )
                       )}
-                      
+
+                      {drawerCurrentView === 'public_entities' && (
+                        <div className="space-y-4 pb-8">
+                          <div className="flex items-center justify-between gap-2 border-b border-zinc-900 pb-3">
+                            <div>
+                              <h3 className="text-sm font-black text-amber-400 uppercase tracking-widest font-display">
+                                Public Pages & Entities
+                              </h3>
+                              <p className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                                Create & manage festivals, labels, collectives & brand links
+                              </p>
+                            </div>
+                          </div>
+                          <AffiliatedEntitiesSection
+                            variant="manage"
+                            userProfile={userProfile}
+                            setUserProfile={setUserProfile}
+                            isOwnProfile={true}
+                            showPromoterWorkspacePointer={Boolean(
+                              isPromoter || hasRegisteredWorkspace(userProfile, 'promoter')
+                            )}
+                            triggerNotification={triggerNotification}
+                          />
+                        </div>
+                      )}
+
                       {drawerCurrentView === 'payment' && (
                         <div className="space-y-4">
                           <PaymentMethodsSettings
@@ -2824,7 +3311,6 @@ if (!leftDrawerOpen) return null;
                                                       type="button"
                                                       onClick={() => {
                                                         setCollPlayerRatings(prev => ({ ...prev, [activeMusicItem.id]: star }));
-                                                        triggerNotification?.(`Rated "${activeMusicItem.data.title || activeMusicItem.data.name}" ${star} Stars`);
                                                       }}
                                                       className="hover:scale-110 transition-transform cursor-pointer"
                                                     >
@@ -2995,7 +3481,6 @@ if (!leftDrawerOpen) return null;
                                                 setCollPlayerActiveTrackId(`${item.id}_t1`);
                                                 setCollPlayerProgress(0);
                                                 setCollPlayerIsPlaying(true);
-                                                triggerNotification?.(`Loaded ${item.data.title || item.data.name} into playback deck.`);
                                               }}
                                               className={`bg-[#0c0d10] border rounded-xl overflow-hidden relative cursor-pointer group transition-all duration-300 ${isActive ? 'border-rose-500/80 shadow-[0_0_15px_rgba(244,63,94,0.15)] ring-1 ring-rose-500/30' : 'border-zinc-850 hover:border-zinc-700'}`}
                                             >
@@ -3036,7 +3521,6 @@ if (!leftDrawerOpen) return null;
                                                 <button 
                                                   onClick={(e) => {
                                                     e.stopPropagation();
-                                                    triggerNotification?.(`Downloading HD lossless audio bundle for "${item.data.title || item.data.name}"...`);
                                                   }}
                                                   className="w-8 h-8 rounded-full border border-zinc-800 hover:border-zinc-700 text-zinc-500 hover:text-rose-400 flex items-center justify-center hover:bg-zinc-900 transition-all active:scale-90 shadow-md"
                                                   title="Download WAV Bundle"
@@ -3194,7 +3678,11 @@ if (!leftDrawerOpen) return null;
                         };
 
                         const toggleFollowProfile = (profileId: string, name: string) => {
-                          handleFollowProfile(name);
+                          const profileObj = discoverProfiles?.find(p => p.id === profileId || p.name === name);
+                          const target = profileObj || { id: profileId, name };
+                          const isFollowedNow = isProfileFollowedGlobally(target);
+                          saveFollowStateGlobally(target, !isFollowedNow, userProfile?.id);
+                          handleFollowProfile(profileObj || target || name, !isFollowedNow ? 'follow' : 'unfollow');
                         };
 
                         const toggleCategoryAlerts = () => {
@@ -3338,7 +3826,6 @@ if (!leftDrawerOpen) return null;
                                   onClick={() => {
                                     const nextVal = !filterShowFollowedOnly;
                                     setFilterShowFollowedOnly(nextVal);
-                                    triggerNotification?.(nextVal ? "✨ Feed set to Followed Accounts only!" : "🌎 Feed set to show all community updates!");
                                   }}
                                   className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase transition-all shrink-0 ${filterShowFollowedOnly ? 'bg-rose-950/60 border border-rose-500/30 text-rose-400' : 'bg-zinc-900 border border-zinc-850 text-zinc-500 hover:text-zinc-300'}`}
                                 >
@@ -3410,7 +3897,6 @@ if (!leftDrawerOpen) return null;
                                             onClick={() => {
                                               setActiveTab('feed');
                                               setLeftDrawerOpen(false);
-                                              triggerNotification?.(`🎧 Tuning in to ${profile?.name}'s tracks on your feed!`);
                                             }}
                                             title="View Tracks"
                                             className="w-6 h-6 rounded bg-zinc-950 border border-zinc-900 flex items-center justify-center text-rose-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
@@ -3424,7 +3910,6 @@ if (!leftDrawerOpen) return null;
                                             onClick={() => {
                                               setActiveTab('feed');
                                               setLeftDrawerOpen(false);
-                                              triggerNotification?.(`🎫 Opening ${profile?.name} schedule on the community dashboard!`);
                                             }}
                                             title="View Gigs"
                                             className="w-6 h-6 rounded bg-zinc-950 border border-zinc-900 flex items-center justify-center text-rose-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
@@ -3434,7 +3919,7 @@ if (!leftDrawerOpen) return null;
                                         )}
                                         {profile.role?.toLowerCase().includes('artist') && (
                                           <button 
-                                            onClick={() => triggerNotification?.(`🎵 ${profile?.name} added to queue`)}
+                                            onClick={() => {}}
                                             title="Listen"
                                             className="w-6 h-6 rounded bg-zinc-950 border border-zinc-900 flex items-center justify-center text-rose-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
                                           >
@@ -3449,8 +3934,6 @@ if (!leftDrawerOpen) return null;
                                               window.dispatchEvent(new CustomEvent('nexus_open_chat', { detail: { profile_id: profile?.name, name: profile?.name, username: profile?.name, avatar_url: profile.image } }));
                                               window.dispatchEvent(new CustomEvent('nexus_open_chat_thread', { detail: { profile_id: profile?.name, name: profile?.name, username: profile?.name, avatar_url: profile.image } }));
                                               setLeftDrawerOpen(false);
-                                              triggerNotification?.(`💬 DM with ${profile?.name} opened.`);
-
                                             }}
                                             title="Direct Message"
                                             className="w-6 h-6 rounded bg-zinc-950 border border-zinc-900 flex items-center justify-center text-rose-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
@@ -3587,7 +4070,7 @@ if (!leftDrawerOpen) return null;
                             setPinError('');
                             setDrawerCurrentView('root');
                             saveProfileData(true);
-                            triggerNotification?.("🟢 IDENTITY CONFIRMED: CHANGES COMMITTED SUCCESSFULLY.");
+                            triggerNotification?.("Profile changes saved.");
                           } else {
                             setPinError("❌ WRONG SECURITY PIN VALUE. TRANSACTION REFUSED.");
                             triggerNotification?.("⚠️ Access Denied: Incorrect PIN.");
@@ -3615,7 +4098,6 @@ if (!leftDrawerOpen) return null;
                   setCropperOpen(false);
                   setCropperImageSrc('');
                   try {
-                    triggerNotification?.("⏳ Processing and optimizing image...");
                     const userProfileId = userProfile?.id || 'profile_anonymous';
                     const bucket = cropperType === 'avatar' ? 'avatars' : 'bannersv2';
                     const token = cropperType === 'avatar' ? 'profile-avatar' : 'profile-banner';
@@ -3787,8 +4269,6 @@ if (!leftDrawerOpen) return null;
                         }
                       }));
                     }
-
-                    triggerNotification?.(`✨ ${cropperType === 'avatar' ? 'Profile Avatar' : 'Cover Banner'} updated & synchronized!`);
                   } catch (err: any) {
                     console.error("Failed to upload cropped image to storage:", err);
                     triggerNotification?.("⚠️ Failed to upload image to storage bucket.");

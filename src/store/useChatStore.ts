@@ -1,46 +1,63 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { getSupabase } from '../supabase';
 import { markChatAsRead, handleMarkAllAsRead } from '../lib/chat';
+import { pushManager } from '../lib/pushNotifications';
+import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
 
 
 /**
- * Resolves active authenticated user ID from local active profile or Supabase session.
+ * Resolves ALL valid active user IDs (primary Supabase session UID + local profile ID)
+ * so messaging queries never miss threads across persona switches or async auth hydration.
  */
-export const getValidUserId = async (client?: any): Promise<string> => {
+export const getAllValidUserIds = async (client?: any): Promise<string[]> => {
+  const ids = new Set<string>();
+  const supabase = client || getSupabase();
+
+  if (supabase) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) ids.add(session.user.id);
+      if (!session?.user?.id) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.id) ids.add(user.id);
+      }
+    } catch (err) {
+      console.warn('Messaging Warning: Exception resolving Supabase user session ID:', err);
+    }
+  }
+
   if (typeof localStorage !== 'undefined') {
     try {
+      const authTokenRaw = localStorage.getItem('nexus_core_auth_token');
+      if (authTokenRaw) {
+        const parsed = JSON.parse(authTokenRaw);
+        if (parsed?.user?.id) ids.add(parsed.user.id);
+      }
       const savedProfile = localStorage.getItem('nexus_core_user_profile');
       if (savedProfile) {
         const parsed = JSON.parse(savedProfile);
-        if (parsed?.id) return parsed.id;
+        if (parsed?.id) ids.add(parsed.id);
       }
-
       const savedUser = localStorage.getItem('nexus_user');
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
-        if (parsed?.id) return parsed.id;
+        if (parsed?.id) ids.add(parsed.id);
       }
     } catch (e) {
       console.warn('Messaging Warning: Failed to parse local storage profile for user ID:', e);
     }
   }
 
-  const supabase = client || getSupabase();
+  return Array.from(ids).filter(Boolean);
+};
 
-  if (supabase) {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        return session.user.id;
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user?.id) {
-        return user.id;
-      }
-    } catch (err) {
-      console.warn('Messaging Warning: Exception resolving Supabase user session ID:', err);
-    }
+/**
+ * Resolves active authenticated user ID from Supabase session first, falling back to local profile or guest ID.
+ */
+export const getValidUserId = async (client?: any): Promise<string> => {
+  const allIds = await getAllValidUserIds(client);
+  if (allIds.length > 0) {
+    return allIds[0];
   }
 
   if (typeof localStorage !== 'undefined') {
@@ -62,7 +79,12 @@ export const getValidUserId = async (client?: any): Promise<string> => {
 /**
  * Direct Raw Database Message Dispatcher
  */
-export const sendDirectMessage = async (senderId: string, recipientId: string, text: string) => {
+export const sendDirectMessage = async (
+  senderId: string,
+  recipientId: string,
+  text: string,
+  options?: { skipPush?: boolean; senderName?: string; recipientEmail?: string }
+) => {
   console.warn('=== [SEND MESSAGE DIAGNOSTIC] ===');
   console.warn('1. Sender ID:', senderId);
   console.warn('2. Recipient ID:', recipientId);
@@ -94,7 +116,53 @@ export const sendDirectMessage = async (senderId: string, recipientId: string, t
 
   const trimmed = text.trim();
 
-  // Raw, direct insert to Supabase
+  let senderName = options?.senderName || '';
+  if (!senderName && typeof localStorage !== 'undefined') {
+    try {
+      const savedProf = localStorage.getItem('nexus_core_user_profile') || localStorage.getItem('nexus_user');
+      if (savedProf) {
+        const parsed = JSON.parse(savedProf);
+        senderName = parsed?.full_name || parsed?.name || parsed?.console_handle || '';
+      }
+    } catch (_) {}
+  }
+
+  const recipientEmail = options?.recipientEmail || (recipientId.includes('@') ? recipientId : undefined);
+
+  // Prefer server-side DM endpoint when authenticated so FCM + Web Push fires reliably
+  // regardless of recipient socket/app state or client RBAC restrictions.
+  try {
+    const accessToken = await getSupabaseAccessToken();
+    if (accessToken && senderId !== recipientId) {
+      const apiRes = await authFetch('/api/social/dm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId,
+          recipientEmail,
+          message: trimmed,
+          senderId,
+          senderName: senderName || undefined,
+        }),
+      });
+      if (apiRes.ok) {
+        const apiJson = await apiRes.json().catch(() => null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
+        }
+        return {
+          success: true,
+          data: apiJson?.message || null,
+          error: null,
+          serverDispatched: true,
+        };
+      }
+    }
+  } catch (apiErr) {
+    console.warn('[Direct Chat] Server DM route fallback to direct Supabase:', apiErr);
+  }
+
+  // Raw, direct insert to Supabase fallback (offline/guest mode)
   const { data: chatData, error: chatError } = await supabase
     .from('nexus_chats')
     .insert([{
@@ -134,11 +202,42 @@ export const sendDirectMessage = async (senderId: string, recipientId: string, t
     console.warn('[Direct Chat] Notification write exception:', notifErr?.message || notifErr);
   }
 
+  if (!options?.skipPush && senderId !== recipientId) {
+    let senderEmail = '';
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const savedProf = localStorage.getItem('nexus_core_user_profile') || localStorage.getItem('nexus_user');
+        if (savedProf) {
+          const parsed = JSON.parse(savedProf);
+          if (!senderName) senderName = parsed?.full_name || parsed?.name || parsed?.console_handle || '';
+          if (parsed?.email) senderEmail = parsed.email;
+        }
+      } catch (_) {}
+    }
+    const displaySender = senderName || 'Nexus Contact';
+    pushManager.sendPushToServer({
+      userId: recipientId,
+      userEmail: recipientEmail,
+      excludeUserId: senderId,
+      excludeUserEmail: senderEmail || undefined,
+      title: `💬 Direct Message from ${displaySender}`,
+      body: trimmed.substring(0, 120),
+      category: 'direct_messages',
+      targetTab: 'messages',
+      priority: 'P1',
+      tag: `nexus-dm-${senderId}`,
+      data: {
+        senderId,
+        senderName: displaySender,
+      },
+    }).catch(() => {});
+  }
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('nexus_chats_updated'));
   }
 
-  return { success: !chatError, data: chatData, error: chatError };
+  return { success: !chatError, data: chatData, error: chatError, serverDispatched: false };
 };
 
 /**
@@ -323,7 +422,11 @@ export const useChatStore = () => {
           }
         )
         .subscribe((status: string) => {
-          console.log('Realtime chat subscription status:', status);
+          if (status === 'SUBSCRIBED') {
+            console.log('[Realtime Chat] Subscribed to direct messages');
+          } else if (status === 'CLOSED') {
+            console.debug('[Realtime Chat] Direct message channel closed');
+          }
         });
     });
 

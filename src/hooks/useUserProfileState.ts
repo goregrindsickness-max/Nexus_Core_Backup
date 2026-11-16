@@ -25,6 +25,13 @@ import {
   resolveEffectiveCover,
   formatCleanLocation 
 } from '../utils/bandProfileUtils';
+import {
+  normalizeBirthdayMonth,
+  normalizeBirthdayDay,
+  loadBirthdayPrefsFromStorage,
+  saveBirthdayPrefsToStorage,
+  resolveBirthdayUserKey,
+} from '../utils/birthdayUtils';
 
 export interface UseUserProfileStateProps {
   portalRole: string;
@@ -140,6 +147,7 @@ export function useUserProfileState({
   const [profilePassword, setProfilePassword] = useState('hardcore123');
   const [profilePin, setProfilePin] = useState(userProfile?.pin || '123456');
   const [profileLocation, setProfileLocation] = useState(() => {
+    const isOwner = isMiguelNameOrProfile(userProfile) || userProfile?.email?.toLowerCase() === 'goregrindsickness@gmail.com';
     if (portalRole === 'band') {
       return resolveBandLocation(activeBand, userProfile);
     }
@@ -152,9 +160,16 @@ export function useUserProfileState({
     if (portalRole === 'promoter') {
       return resolvePromoterLocation(userProfile);
     }
-    const signupLocation = (userProfile?.city && userProfile?.state_province) ? formatCleanLocation(userProfile.city, userProfile.state_province) : null;
-    if (portalRole === 'fan_only') return signupLocation || formatCleanLocation(userProfile?.city_state || userProfile?.location_code) || 'Denison, TX';
-    return signupLocation || formatCleanLocation(userProfile?.city_state || userProfile?.location_code) || 'Detroit, MI';
+    const savedUserLoc = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_location') : null;
+    if (savedUserLoc && (!isOwner || !savedUserLoc.toLowerCase().includes('detroit'))) {
+      return formatCleanLocation(savedUserLoc);
+    }
+    const signupLocation = (userProfile?.city && userProfile?.state_province) ? formatCleanLocation(userProfile.city, userProfile.state_province) : (userProfile?.city ? userProfile.city : null);
+    const candidateLoc = signupLocation || formatCleanLocation(userProfile?.city_state || userProfile?.location_code || userProfile?.location);
+    if (candidateLoc && (!isOwner || !candidateLoc.toLowerCase().includes('detroit'))) {
+      return candidateLoc;
+    }
+    return 'Denison, TX';
   });
 
   const [profileZip, setProfileZip] = useState(userProfile?.zip_code || '');
@@ -452,9 +467,10 @@ export function useUserProfileState({
       return (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_bio') : null) || userProfile?.creative_metadata?.bio || userProfile?.creative_bio || 'Professional creative specialist on the Nexus network.';
     }
     if (portalRole === 'promoter') {
+      const isOwner = isMiguelNameOrProfile(userProfile) || userProfile?.email?.toLowerCase() === 'goregrindsickness@gmail.com';
       const stored = typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_bio') : null;
       const cleanStored = (stored && !stored.toLowerCase().includes('booking management') && !stored.toLowerCase().includes('event organizer on nexus')) ? stored : null;
-      return userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio || cleanStored || 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.';
+      return userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio || cleanStored || (isOwner ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.');
     }
     if (portalRole === 'label') {
       return (typeof window !== 'undefined' ? localStorage.getItem('nexus_label_bio') : null) || userProfile?.label_bio || 'Official record label on Nexus.';
@@ -473,9 +489,10 @@ export function useUserProfileState({
     } else if (portalRole === 'creative') {
       freshBio = (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_bio') : null) || userProfile?.creative_metadata?.bio || userProfile?.creative_bio || 'Professional creative specialist on the Nexus network.';
     } else if (portalRole === 'promoter') {
+      const isOwner = isMiguelNameOrProfile(userProfile) || userProfile?.email?.toLowerCase() === 'goregrindsickness@gmail.com';
       const stored = typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_bio') : null;
       const cleanStored = (stored && !stored.toLowerCase().includes('booking management') && !stored.toLowerCase().includes('event organizer on nexus')) ? stored : null;
-      freshBio = userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio || cleanStored || 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.';
+      freshBio = userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio || cleanStored || (isOwner ? 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. I have a lengthy history in the underground extreme metal scene with several festivals under my name most notably the Chicago/ Texas Domination Fest that ran from 2014-2024. The next evolution is set to move to another new market more details on that in the near future.' : 'Independent concert promoter and live events coordinator.');
     } else if (portalRole === 'label') {
       freshBio = (typeof window !== 'undefined' ? localStorage.getItem('nexus_label_bio') : null) || userProfile?.label_bio || 'Official record label on Nexus.';
     } else {
@@ -491,10 +508,22 @@ export function useUserProfileState({
       }
     }
 
-    if (freshBio && freshBio !== profileBlurb) {
-      setProfileBlurb(freshBio);
+    if (freshBio) {
+      setProfileBlurb(prev => (prev === freshBio ? prev : freshBio));
     }
-  }, [portalRole, activeBand?.id, activeBand?.name, activeBand?.bio, activeBand?.description, userProfile?.band_bio, userProfile?.creative_metadata?.bio, userProfile?.creative_bio, userProfile?.promoter_metadata?.bio, userProfile?.promoter_bio, userProfile?.label_bio, userProfile?.bio, userProfile?.profileBlurb]);
+  }, [
+    portalRole, 
+    activeBand?.id, 
+    activeBand?.name, 
+    activeBand?.bio, 
+    activeBand?.description, 
+    userProfile?.band_bio, 
+    userProfile?.creative_metadata?.bio, 
+    userProfile?.creative_bio, 
+    userProfile?.promoter_metadata?.bio, 
+    userProfile?.promoter_bio, 
+    userProfile?.label_bio
+  ]);
 
   const [profileStealthMode, setProfileStealthMode] = useState(false);
   const [filterHideTicketPresales, setFilterHideTicketPresales] = useState(false);
@@ -503,7 +532,65 @@ export function useUserProfileState({
   const [prefPushNotifications, setPrefPushNotifications] = useState(true);
   const [prefLocationServices, setPrefLocationServices] = useState(false);
 
+  const initialBdayStored = loadBirthdayPrefsFromStorage(userProfile);
+  const [profileBirthdayMonth, setProfileBirthdayMonth] = useState<number | null>(() => {
+    const m = normalizeBirthdayMonth(userProfile?.birthday_month ?? initialBdayStored.birthday_month);
+    return m;
+  });
+  const [profileBirthdayDay, setProfileBirthdayDay] = useState<number | null>(() => {
+    const m = normalizeBirthdayMonth(userProfile?.birthday_month ?? initialBdayStored.birthday_month);
+    return normalizeBirthdayDay(userProfile?.birthday_day ?? initialBdayStored.birthday_day, m);
+  });
+  const [profileShowBirthdayShoutout, setProfileShowBirthdayShoutout] = useState<boolean>(() => {
+    if (typeof userProfile?.show_birthday_shoutout === 'boolean') {
+      return userProfile.show_birthday_shoutout;
+    }
+    return initialBdayStored.show_birthday_shoutout;
+  });
+
+  useEffect(() => {
+    const stored = loadBirthdayPrefsFromStorage(userProfile);
+    const m = normalizeBirthdayMonth(userProfile?.birthday_month ?? stored.birthday_month);
+    const d = normalizeBirthdayDay(userProfile?.birthday_day ?? stored.birthday_day, m);
+    const show =
+      typeof userProfile?.show_birthday_shoutout === 'boolean'
+        ? userProfile.show_birthday_shoutout
+        : stored.show_birthday_shoutout;
+    setProfileBirthdayMonth((prev) => (prev === m ? prev : m));
+    setProfileBirthdayDay((prev) => (prev === d ? prev : d));
+    setProfileShowBirthdayShoutout((prev) => (prev === show ? prev : show));
+  }, [
+    userProfile?.id,
+    userProfile?.email,
+    userProfile?.console_handle,
+    userProfile?.birthday_month,
+    userProfile?.birthday_day,
+    userProfile?.show_birthday_shoutout,
+  ]);
+
+  useEffect(() => {
+    const handleBirthdayEvent = (e: any) => {
+      const prefs = e?.detail?.prefs || loadBirthdayPrefsFromStorage(userProfile);
+      if (prefs) {
+        const m = normalizeBirthdayMonth(prefs.birthday_month);
+        const d = normalizeBirthdayDay(prefs.birthday_day, m);
+        const show = prefs.show_birthday_shoutout !== false;
+        setProfileBirthdayMonth((prev) => (prev === m ? prev : m));
+        setProfileBirthdayDay((prev) => (prev === d ? prev : d));
+        setProfileShowBirthdayShoutout((prev) => (prev === show ? prev : show));
+      }
+    };
+    window.addEventListener('nexus_birthday_updated', handleBirthdayEvent);
+    return () => window.removeEventListener('nexus_birthday_updated', handleBirthdayEvent);
+  }, [userProfile]);
+
   const saveProfileData = (finalSave: boolean = false) => {
+    const isOwner = isMiguelNameOrProfile(userProfile) || userProfile?.email?.toLowerCase() === 'goregrindsickness@gmail.com';
+    const cleanLoc = formatCleanLocation(profileLocation) || (isOwner ? 'Denison, TX' : '');
+    const locParts = cleanLoc ? cleanLoc.split(',').map(s => s.trim()) : [];
+    const resolvedCity = locParts[0] || (isOwner ? 'Denison' : '');
+    const resolvedState = locParts[1] || (isOwner ? 'TX' : '');
+
     const combinedGenres = Array.from(new Set([
       ...profilePrimaryGenres,
       ...profileMicroGenres,
@@ -516,7 +603,9 @@ export function useUserProfileState({
       profileEmail,
       profilePassword,
       profilePin,
-      profileLocation,
+      profileLocation: cleanLoc,
+      city: resolvedCity,
+      state_province: resolvedState,
       profileGenres: combinedGenres,
       profilePrimaryGenres,
       profileMicroGenres,
@@ -534,13 +623,26 @@ export function useUserProfileState({
       filterShowFollowedOnly,
       prefPushNotifications,
       prefLocationServices,
+      birthday_month: profileBirthdayMonth,
+      birthday_day: profileBirthdayDay,
+      show_birthday_shoutout: profileShowBirthdayShoutout,
       timestamp: Date.now()
     };
+
+    saveBirthdayPrefsToStorage(userProfile, {
+      birthday_month: profileBirthdayMonth,
+      birthday_day: profileBirthdayDay,
+      show_birthday_shoutout: profileShowBirthdayShoutout,
+    });
 
     const profileCacheKey = `nexus_${portalRole}_profile_v1_${userProfile?.id || 'guest'}`;
 
     try {
       localStorage.setItem(profileCacheKey, JSON.stringify(dataToSave));
+      localStorage.setItem('nexus_user_location', cleanLoc);
+      localStorage.setItem('nexus_user_city', resolvedCity);
+      localStorage.setItem('nexus_user_state', resolvedState);
+      localStorage.setItem('nexus_user_location_code', cleanLoc);
       if (profileTopSongUrl) localStorage.setItem('nexus_user_top_song_url', profileTopSongUrl);
       if (profileTopSongArtist) localStorage.setItem('nexus_user_top_song_artist', profileTopSongArtist);
       if (profileTopSongTitle) localStorage.setItem('nexus_user_top_song_title', profileTopSongTitle);
@@ -589,6 +691,11 @@ export function useUserProfileState({
       setUserProfile((prev: any) => {
         if (!prev) return prev;
         const sharedUpdates = {
+          city: resolvedCity,
+          state_province: resolvedState,
+          city_state: cleanLoc,
+          location_code: cleanLoc,
+          location: cleanLoc,
           top_song_url: profileTopSongUrl || prev?.top_song_url,
           featured_youtube_url: profileTopSongUrl || prev?.featured_youtube_url,
           top_song_artist: profileTopSongArtist || prev?.top_song_artist,
@@ -597,10 +704,14 @@ export function useUserProfileState({
           genres: combinedGenres.length > 0 ? combinedGenres : (prev?.genres || []),
           genre_tags: combinedGenres.length > 0 ? combinedGenres : (prev?.genre_tags || []),
           fan_genres: combinedGenres.length > 0 ? combinedGenres : (prev?.fan_genres || []),
+          birthday_month: profileBirthdayMonth,
+          birthday_day: profileBirthdayDay,
+          show_birthday_shoutout: profileShowBirthdayShoutout,
         };
 
+        let nextProfile: any;
         if (portalRole === 'promoter') {
-          return {
+          nextProfile = {
             ...prev,
             ...sharedUpdates,
             promoter_logo: profileAvatarUrl || prev?.promoter_logo,
@@ -615,11 +726,14 @@ export function useUserProfileState({
               featured_video_url: profileTopSongUrl || prev?.promoter_metadata?.featured_video_url,
               top_song_artist: profileTopSongArtist || prev?.promoter_metadata?.top_song_artist,
               top_song_title: profileTopSongTitle || prev?.promoter_metadata?.top_song_title,
-              genres: combinedGenres.length > 0 ? combinedGenres : (prev?.promoter_metadata?.genres || prev?.genres || [])
+              genres: combinedGenres.length > 0 ? combinedGenres : (prev?.promoter_metadata?.genres || prev?.genres || []),
+              birthday_month: profileBirthdayMonth,
+              birthday_day: profileBirthdayDay,
+              show_birthday_shoutout: profileShowBirthdayShoutout,
             }
           };
         } else if (portalRole === 'band') {
-          return {
+          nextProfile = {
             ...prev,
             ...sharedUpdates,
             band_logo: profileAvatarUrl || prev?.band_logo,
@@ -627,7 +741,7 @@ export function useUserProfileState({
             band_bio: profileBlurb || prev?.band_bio
           };
         } else if (portalRole === 'creative') {
-          return {
+          nextProfile = {
             ...prev,
             ...sharedUpdates,
             creative_avatar: profileAvatarUrl || prev?.creative_avatar,
@@ -638,11 +752,14 @@ export function useUserProfileState({
               bio: profileBlurb || prev?.creative_metadata?.bio,
               avatar_url: profileAvatarUrl || prev?.creative_metadata?.avatar_url,
               banner_url: profileCoverUrl || prev?.creative_metadata?.banner_url,
-              genres: combinedGenres.length > 0 ? combinedGenres : (prev?.creative_metadata?.genres || [])
+              genres: combinedGenres.length > 0 ? combinedGenres : (prev?.creative_metadata?.genres || []),
+              birthday_month: profileBirthdayMonth,
+              birthday_day: profileBirthdayDay,
+              show_birthday_shoutout: profileShowBirthdayShoutout,
             }
           };
         } else if (portalRole === 'label') {
-          return {
+          nextProfile = {
             ...prev,
             ...sharedUpdates,
             label_avatar: profileAvatarUrl || prev?.label_avatar,
@@ -650,7 +767,7 @@ export function useUserProfileState({
             label_bio: profileBlurb || prev?.label_bio
           };
         } else {
-          return {
+          nextProfile = {
             ...prev,
             ...sharedUpdates,
             avatar: profileAvatarUrl || prev?.avatar,
@@ -663,6 +780,13 @@ export function useUserProfileState({
             profileBlurb: profileBlurb || prev?.profileBlurb
           };
         }
+
+        try {
+          localStorage.setItem('nexus_core_user_profile', JSON.stringify(nextProfile));
+          profileStore.setItem('nexus_core_user_profile', nextProfile).catch(() => {});
+        } catch (_) {}
+
+        return nextProfile;
       });
     }
 
@@ -897,11 +1021,16 @@ export function useUserProfileState({
           top_song_url: personalTopSongUrl,
           avatar_url: personalAvatar,
           banner_url: personalBanner,
-          city: isProfessionalPortal ? (userProfile?.city || undefined) : profileLocation,
-          zip_code: profileZip,
+          city: resolvedCity,
+          state_province: resolvedState,
+          country: userProfile?.country || 'USA',
+          zip_code: profileZip || userProfile?.zip_code,
           pin: profilePin,
           update_ticker: userProfile?.update_ticker || userProfile?.rosterTicker || 'No updates posted yet',
           creative_id: isCreative ? (userProfile?.creative_id || userProfile?.registered_creative_id) : undefined,
+          birthday_month: profileBirthdayMonth,
+          birthday_day: profileBirthdayDay,
+          show_birthday_shoutout: profileShowBirthdayShoutout,
         }, userProfile.id);
 
         executeSanitizedProfileUpsert(
@@ -996,6 +1125,12 @@ export function useUserProfileState({
     setPrefPushNotifications,
     prefLocationServices,
     setPrefLocationServices,
+    profileBirthdayMonth,
+    setProfileBirthdayMonth,
+    profileBirthdayDay,
+    setProfileBirthdayDay,
+    profileShowBirthdayShoutout,
+    setProfileShowBirthdayShoutout,
     saveProfileData
   };
 }

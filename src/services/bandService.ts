@@ -1,6 +1,6 @@
 import { getSupabase } from './clientService';
-import { ensureUUID, generateUUID, executeWithSchemaResilience } from './schemaResilienceService';
-import { isCommunityBandRecord } from '../lib/seedBandsData';
+import { ensureUUID, generateUUID, executeWithSchemaResilience, registerSchemaSanitizers } from './schemaResilienceService';
+import { isCommunityBandRecord } from '../lib/communityBands';
 
 export const PRIMARY_GENRE_KEYWORDS = new Set([
   'extreme metal',
@@ -128,6 +128,8 @@ export const VALID_BAND_COLUMNS = new Set([
   'executive_contact_email',
   'executive_contact_phone',
   'client_roster_notes',
+  'status',
+  'is_split_up',
 ]);
 
 export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
@@ -241,100 +243,31 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
     'origin': 'Origin',
     'peelingflesh': 'PeelingFlesh',
     'putrid-pile': 'Putrid Pile',
-    'lividity': 'Lividity'
+    'lividity': 'Lividity',
+    'cannibal-corpse': 'Cannibal Corpse',
+    'cannibal corpse': 'Cannibal Corpse',
+    'birdflesh': 'Birdflesh',
+    'hate-eternal': 'Hate Eternal',
+    'hate eternal': 'Hate Eternal',
+    'scour': 'Scour',
+    'squash-bowels': 'Squash Bowels',
+    'squash bowels': 'Squash Bowels',
+    'gorgasm': 'Gorgasm'
   };
 
   let bName = (clean.band_name || clean.name || '').trim();
   const rawSlugCandidate = (clean.custom_slug || clean.slug || '').trim().toLowerCase();
 
-  // If bName is generic or missing, attempt deep resolution
+  // If bName is generic or missing, attempt resolution from slug without reading stale local caches
   if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-    // 1. Check known slug map
     if (rawSlugCandidate && KNOWN_SEEDED_NAMES[rawSlugCandidate]) {
       bName = KNOWN_SEEDED_NAMES[rawSlugCandidate];
-    }
-
-    // 2. Check local storage archives with dual UUID lookup
-    if ((!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') && clean.id) {
-      const cleanId = clean.id;
-      const cleanUUID = ensureUUID(clean.id);
-
-      const findInList = (list: any[]) => {
-        return list.find((b: any) => {
-          if (!b) return false;
-          const bId = b.id ? String(b.id) : '';
-          const bUUID = b.id ? ensureUUID(b.id) : '';
-          const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
-          return bId === cleanId || bUUID === cleanUUID || (rawSlugCandidate && bSlug === rawSlugCandidate);
-        });
-      };
-
-      try {
-        const archives = JSON.parse(localStorage.getItem('nexus_community_band_archives') || '[]');
-        const found = findInList(archives);
-        if (found?.name || found?.band_name) {
-          const storedName = (found.name || found.band_name).trim();
-          if (storedName && storedName.toLowerCase() !== 'underground label' && storedName.toLowerCase() !== 'nexus artist') {
-            bName = storedName;
-          }
-        }
-      } catch {}
-
-      if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-        try {
-          const allCommunity = JSON.parse(localStorage.getItem('nexus_community_bands_v2') || '[]');
-          const found = findInList(allCommunity);
-          if (found?.name || found?.band_name) {
-            const storedName = (found.name || found.band_name).trim();
-            if (storedName && storedName.toLowerCase() !== 'underground label' && storedName.toLowerCase() !== 'nexus artist') {
-              bName = storedName;
-            }
-          }
-        } catch {}
-      }
-
-      if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-        try {
-          const registered = JSON.parse(localStorage.getItem('nexus_registered_bands') || '[]');
-          const found = findInList(registered);
-          if (found?.name || found?.band_name) {
-            const storedName = (found.name || found.band_name).trim();
-            if (storedName && storedName.toLowerCase() !== 'underground label' && storedName.toLowerCase() !== 'nexus artist') {
-              bName = storedName;
-            }
-          }
-        } catch {}
-      }
-    }
-
-    // 3. Check active band
-    if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-      try {
-        const activeBandRaw = localStorage.getItem('nexus_active_band');
-        if (activeBandRaw) {
-          const parsed = JSON.parse(activeBandRaw);
-          if (parsed?.name || parsed?.band_name) {
-            const storedName = (parsed.name || parsed.band_name).trim();
-            if (storedName && storedName.toLowerCase() !== 'underground label' && storedName.toLowerCase() !== 'nexus artist') {
-              bName = storedName;
-            }
-          }
-        }
-      } catch {}
-    }
-
-    // 4. Derive from custom_slug if present
-    if ((!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') && rawSlugCandidate) {
-      if (KNOWN_SEEDED_NAMES[rawSlugCandidate]) {
-        bName = KNOWN_SEEDED_NAMES[rawSlugCandidate];
-      } else {
-        // Convert slug e.g. "my-cool-band" -> "My Cool Band"
-        bName = rawSlugCandidate
-          .split('-')
-          .filter(Boolean)
-          .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-          .join(' ');
-      }
+    } else if (rawSlugCandidate) {
+      bName = rawSlugCandidate
+        .split('-')
+        .filter(Boolean)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
     }
   }
 
@@ -352,10 +285,25 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
     clean.custom_slug = clean.band_name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   }
   delete clean.slug;
-  delete clean.status;
 
-  // 7. Sanitize logo_url and cover_url strictly
-  let rawLogo =
+  // Preserve and normalize band activity status ('active' | 'split-up' | 'on-hold' | 'unknown')
+  const rawStatus = String(clean.status || '').toLowerCase().trim();
+  if (rawStatus === 'split-up' || rawStatus === 'split_up' || rawStatus === 'split up' || rawStatus === 'disbanded' || clean.is_split_up === true) {
+    clean.status = 'split-up';
+    clean.is_split_up = true;
+  } else if (rawStatus === 'on-hold' || rawStatus === 'on_hold' || rawStatus === 'on hold' || rawStatus === 'hiatus') {
+    clean.status = 'on-hold';
+    clean.is_split_up = false;
+  } else if (rawStatus === 'unknown') {
+    clean.status = 'unknown';
+    clean.is_split_up = false;
+  } else {
+    clean.status = 'active';
+    clean.is_split_up = false;
+  }
+
+  // 7. Sanitize logo_url and cover_url strictly from explicit payload (never overwrite with stale localStorage)
+  const rawLogo =
     clean.logo_url ??
     clean.avatar_url ??
     clean.logo ??
@@ -363,29 +311,6 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
     clean.image ??
     clean.avatar ??
     null;
-
-  if ((!rawLogo || String(rawLogo).trim() === '') && clean.id) {
-    const cleanId = clean.id;
-    const cleanUUID = ensureUUID(clean.id);
-    try {
-      const allComm = JSON.parse(localStorage.getItem('nexus_community_bands_v2') || '[]');
-      const found = allComm.find((b: any) => b && (b.id === cleanId || ensureUUID(b.id) === cleanUUID));
-      if (found?.logo_url || found?.avatar_url || found?.avatar || found?.image) {
-        rawLogo = found.logo_url || found.avatar_url || found.avatar || found.image;
-      }
-    } catch {}
-  }
-  if ((!rawLogo || String(rawLogo).trim() === '') && clean.id) {
-    const cleanId = clean.id;
-    const cleanUUID = ensureUUID(clean.id);
-    try {
-      const regBands = JSON.parse(localStorage.getItem('nexus_registered_bands') || '[]');
-      const foundReg = regBands.find((b: any) => b && (b.id === cleanId || ensureUUID(b.id) === cleanUUID));
-      if (foundReg?.logo_url || foundReg?.avatar_url || foundReg?.avatar || foundReg?.image) {
-        rawLogo = foundReg.logo_url || foundReg.avatar_url || foundReg.avatar || foundReg.image;
-      }
-    } catch {}
-  }
 
   if (typeof rawLogo === 'string' && rawLogo.trim().length > 0 && !rawLogo.includes('Nexus%20Icon%20Circuits.png')) {
     clean.logo_url = rawLogo.trim();
@@ -398,25 +323,13 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
   delete clean.image;
   delete clean.avatar;
 
-  let rawCover =
+  const rawCover =
     clean.cover_url ??
     clean.banner_url ??
     clean.cover ??
     clean.band_cover ??
     clean.banner ??
     null;
-
-  if ((!rawCover || String(rawCover).trim() === '') && clean.id) {
-    const cleanId = clean.id;
-    const cleanUUID = ensureUUID(clean.id);
-    try {
-      const allComm = JSON.parse(localStorage.getItem('nexus_community_bands_v2') || '[]');
-      const found = allComm.find((b: any) => b && (b.id === cleanId || ensureUUID(b.id) === cleanUUID));
-      if (found?.cover_url || found?.banner_url || found?.cover || found?.banner) {
-        rawCover = found.cover_url || found.banner_url || found.cover || found.banner;
-      }
-    } catch {}
-  }
 
   if (typeof rawCover === 'string' && rawCover.trim().length > 0 && !rawCover.includes('Nexus%20Icon%20Circuits.png')) {
     clean.cover_url = rawCover.trim();
@@ -475,7 +388,7 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
   clean.apparel_sizes = clean.apparel_sizes || null;
   clean.user_role_in_band = clean.user_role_in_band ? String(clean.user_role_in_band).trim() : null;
 
-  // 12. Lineup sanitization - preserve rich LineupMember array serialized as JSON string for PostgreSQL text column
+  // 12. Lineup sanitization - preserve rich LineupMember array (including explicit empty arrays '[]' when cleared)
   if (clean.lineup !== undefined && clean.lineup !== null) {
     if (Array.isArray(clean.lineup)) {
       clean.lineup = JSON.stringify(clean.lineup);
@@ -493,10 +406,10 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
           clean.lineup = trimmed;
         }
       } else if (trimmed) {
-        // Parse comma-delimited strings e.g. "John (Guitar), Jane (Bass)" into LineupMember JSON
-        const parts = trimmed.split(',').map((s: string) => s.trim()).filter(Boolean);
+        // Parse comma-delimited strings e.g. "John (Guitar, Vocals), Jane (Bass)" into LineupMember JSON without splitting inside parentheses
+        const parts = trimmed.split(/,(?![^()]*\))/).map((s: string) => s.trim()).filter(Boolean);
         const parsedMembers = parts.map((part: string, idx: number) => {
-          const match = part.match(/^(.*?)\s*\((.*?)\)$/);
+          const match = part.match(/^(.*?)\s*\((.*)\)$/);
           if (match) {
             return {
               id: `mem-${idx}-${match[1].trim().toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
@@ -516,13 +429,14 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
         });
         clean.lineup = JSON.stringify(parsedMembers);
       } else {
-        clean.lineup = null;
+        // Explicit empty string means user cleared all lineup members
+        clean.lineup = '[]';
       }
     } else {
-      clean.lineup = null;
+      delete clean.lineup;
     }
   } else {
-    clean.lineup = null;
+    delete clean.lineup;
   }
 
   // 13. Legal, Verification, & Routing
@@ -605,13 +519,15 @@ export function sanitizeBandPayload(rawPayload: any): Record<string, any> {
   return clean;
 }
 
+registerSchemaSanitizers({ sanitizeBandPayload });
+
 /**
  * Robustly saves a band row to Supabase 'bands' table with multi-tier schema resilience,
  * automatic storage synchronization for base64 images, and local cache updates.
  */
 export async function upsertBandToDatabase(
   bandInput: any,
-  options?: { isNew?: boolean; triggerNotification?: (msg: string) => void }
+  options?: { isNew?: boolean; allowEmptyLineup?: boolean; triggerNotification?: (msg: string) => void }
 ): Promise<{ success: boolean; data?: any; error?: any }> {
   if (!bandInput || typeof bandInput !== 'object') {
     return { success: false, error: new Error('Invalid band input') };
@@ -627,39 +543,73 @@ export async function upsertBandToDatabase(
     cleanBand.id = ensureUUID(cleanBand.id || bandInput.id);
   }
 
+  // Decode lineup for local objects and events to preserve array representation in memory
+  let parsedLineupArray: any[] = [];
+  if (typeof cleanBand.lineup === 'string') {
+    try {
+      const parsed = JSON.parse(cleanBand.lineup);
+      if (Array.isArray(parsed)) parsedLineupArray = parsed;
+    } catch {}
+  } else if (Array.isArray(cleanBand.lineup)) {
+    parsedLineupArray = cleanBand.lineup;
+  }
+
+  const isExplicitlyClearedLineup =
+    Boolean(options?.allowEmptyLineup) &&
+    bandInput.lineup !== undefined &&
+    bandInput.lineup !== null &&
+    parsedLineupArray.length === 0;
+
+  if (parsedLineupArray.length === 0 && !isExplicitlyClearedLineup) {
+    delete cleanBand.lineup;
+  }
+
+  const hasExplicitLineupField = parsedLineupArray.length > 0 || isExplicitlyClearedLineup;
+
   // Sync to local storage immediately for zero-latency UI consistency
   try {
     const bandId = cleanBand.id;
     if (bandId) {
-      // Decode lineup for local objects to preserve array representation in memory
-      let parsedLineupArray: any[] = [];
-      if (typeof cleanBand.lineup === 'string') {
-        try {
-          const parsed = JSON.parse(cleanBand.lineup);
-          if (Array.isArray(parsed)) parsedLineupArray = parsed;
-        } catch {}
-      } else if (Array.isArray(cleanBand.lineup)) {
-        parsedLineupArray = cleanBand.lineup;
-      }
-
       if (parsedLineupArray.length > 0) {
-        localStorage.setItem(`nexus_core_band_lineup_${bandId}`, JSON.stringify(parsedLineupArray));
-        localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, JSON.stringify(parsedLineupArray));
+        const serialized = JSON.stringify(parsedLineupArray);
+        localStorage.setItem(`nexus_core_band_lineup_${bandId}`, serialized);
+        localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, serialized);
+        localStorage.removeItem(`nexus_core_band_lineup_cleared_${bandId}`);
+        localStorage.removeItem(`nexus_core_band_lineup_cleared_${ensureUUID(bandId)}`);
+        if (cleanBand.band_name) {
+          const normName = String(cleanBand.band_name).toLowerCase().trim();
+          localStorage.setItem(`nexus_core_band_lineup_${normName}`, serialized);
+          localStorage.removeItem(`nexus_core_band_lineup_cleared_${normName}`);
+        }
+      } else if (isExplicitlyClearedLineup) {
+        localStorage.setItem(`nexus_core_band_lineup_${bandId}`, '[]');
+        localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, '[]');
+        localStorage.setItem(`nexus_core_band_lineup_cleared_${bandId}`, 'true');
+        localStorage.setItem(`nexus_core_band_lineup_cleared_${ensureUUID(bandId)}`, 'true');
+        if (cleanBand.band_name) {
+          const normName = String(cleanBand.band_name).toLowerCase().trim();
+          localStorage.setItem(`nexus_core_band_lineup_${normName}`, '[]');
+          localStorage.setItem(`nexus_core_band_lineup_cleared_${normName}`, 'true');
+        }
       }
 
-      const memoryBand = {
+      const memoryBand: any = {
         ...cleanBand,
-        lineup: parsedLineupArray.length > 0 ? parsedLineupArray : (cleanBand.lineup || [])
       };
+      if (hasExplicitLineupField) {
+        memoryBand.lineup = parsedLineupArray;
+      } else {
+        delete memoryBand.lineup;
+      }
 
       // 1. Registered bands
       const regRaw = localStorage.getItem('nexus_registered_bands');
-      let registered: any[] = regRaw ? JSON.parse(regRaw) : [];
+      const registered: any[] = regRaw ? JSON.parse(regRaw) : [];
       const regIdx = registered.findIndex((b: any) => b.id === bandId || ensureUUID(b.id) === bandId);
       if (regIdx >= 0) {
         registered[regIdx] = { ...registered[regIdx], ...memoryBand };
       } else {
-        registered.push(memoryBand);
+        registered.push({ ...memoryBand, lineup: parsedLineupArray });
       }
       localStorage.setItem('nexus_registered_bands', JSON.stringify(registered));
 
@@ -678,7 +628,7 @@ export async function upsertBandToDatabase(
       const commRaw = localStorage.getItem('nexus_community_bands_v2');
       if (commRaw) {
         try {
-          let commList = JSON.parse(commRaw);
+          const commList = JSON.parse(commRaw);
           if (Array.isArray(commList)) {
             const cIdx = commList.findIndex((b: any) => b.id === bandId || ensureUUID(b.id) === bandId);
             if (cIdx >= 0) {
@@ -693,10 +643,14 @@ export async function upsertBandToDatabase(
     console.warn('[bandService] Local cache sync notice:', storageErr);
   }
 
-  // Broadcast window events to all UI listeners
+  // Broadcast window events to all UI listeners (always pass parsed array lineup, never raw JSON string)
+  const eventDetail = {
+    ...cleanBand,
+    ...(hasExplicitLineupField || parsedLineupArray.length > 0 ? { lineup: parsedLineupArray } : {})
+  };
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('nexus_active_band_updated', { detail: cleanBand }));
-    window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: cleanBand }));
+    window.dispatchEvent(new CustomEvent('nexus_active_band_updated', { detail: eventDetail }));
+    window.dispatchEvent(new CustomEvent('nexus_community_bands_updated', { detail: eventDetail }));
     if (cleanBand.logo_url) {
       verifyAndResyncBandLogo(cleanBand.logo_url, cleanBand.id);
       window.dispatchEvent(new CustomEvent('nexus_band_logo_updated', {
@@ -706,12 +660,10 @@ export async function upsertBandToDatabase(
   }
 
   if (!supabase) {
-    return { success: true, data: cleanBand };
+    return { success: true, data: eventDetail };
   }
 
   try {
-    const isExplicitNew = Boolean(options?.isNew);
-
     let existingRowId: string | null = null;
 
     // 1. Check by ID
@@ -722,7 +674,7 @@ export async function upsertBandToDatabase(
       }
     }
 
-    // 2. Check by custom_slug if not found by ID
+    // 2. Check by custom_slug if not found by ID (even if caller passed isNew: true)
     if (!existingRowId && cleanBand.custom_slug) {
       const { data: bySlug } = await supabase.from('bands').select('id').eq('custom_slug', cleanBand.custom_slug).maybeSingle();
       if (bySlug?.id) {
@@ -731,62 +683,75 @@ export async function upsertBandToDatabase(
       }
     }
 
-    if (existingRowId && !isExplicitNew) {
-      console.log(`[bandService] Record exists (${existingRowId}). Performing targeted UPDATE...`);
+    if (existingRowId) {
+      console.log(`[bandService] Record exists (${existingRowId}). Performing targeted verified UPDATE...`);
+      const updatePayload = { ...cleanBand, id: existingRowId };
       const updateRes = await executeWithSchemaResilience(
-        async (payload) => await supabase.from('bands').update(payload).eq('id', existingRowId),
-        cleanBand
+        async (payload) => await supabase.from('bands').update(payload).eq('id', existingRowId).select('id, band_name, lineup, updated_at'),
+        updatePayload
       );
 
-      if (!updateRes?.error) {
-        console.log(`[bandService] Successfully updated band record: ${cleanBand.id}`);
-        return { success: true, data: updateRes.data || cleanBand };
+      const updatedRows = Array.isArray(updateRes?.data) ? updateRes.data : (updateRes?.data ? [updateRes.data] : []);
+      if (!updateRes?.error && updatedRows.length > 0) {
+        console.log(`[bandService] Successfully updated band record: ${existingRowId}`);
+        return { success: true, data: { ...cleanBand, ...updatedRows[0], lineup: parsedLineupArray } };
       }
 
-      console.warn('[bandService] Resilient update returned error, attempting direct update:', updateRes.error);
-      const directUpdate = await supabase.from('bands').update(cleanBand).eq('id', existingRowId);
-      if (!directUpdate.error) {
-        return { success: true, data: cleanBand };
+      if (!updateRes?.error && updatedRows.length === 0) {
+        console.warn(`[bandService] Verified UPDATE affected 0 rows for ${existingRowId}, retrying direct upsert...`);
+      } else {
+        console.warn('[bandService] Resilient update returned error, attempting direct update:', updateRes?.error);
       }
 
-      const errMsg = directUpdate.error.message || JSON.stringify(directUpdate.error);
-      console.error(`[bandService] Database UPDATE failed for band ${cleanBand.id}:`, errMsg);
+      const directUpdate: any = await supabase.from('bands').update(updatePayload).eq('id', existingRowId).select('id, band_name, lineup, updated_at');
+      const directRows = Array.isArray(directUpdate?.data) ? directUpdate.data : (directUpdate?.data ? [directUpdate.data] : []);
+      if (!directUpdate?.error && directRows.length > 0) {
+        return { success: true, data: { ...cleanBand, ...directRows[0], lineup: parsedLineupArray } };
+      }
+
+      const fallbackUpsert = await supabase.from('bands').upsert([updatePayload], { onConflict: 'id' }).select('id, band_name, lineup, updated_at');
+      if (!fallbackUpsert.error) {
+        return { success: true, data: { ...cleanBand, lineup: parsedLineupArray } };
+      }
+
+      const errMsg = directUpdate.error?.message || fallbackUpsert.error?.message || JSON.stringify(directUpdate.error || fallbackUpsert.error);
+      console.error(`[bandService] Database UPDATE failed for band ${existingRowId}:`, errMsg);
       options?.triggerNotification?.(`❌ Database band update failed: ${errMsg}`);
-      return { success: false, data: cleanBand, error: errMsg };
+      return { success: false, data: eventDetail, error: errMsg };
     } else {
       console.log(`[bandService] Performing INSERT / UPSERT for band ${cleanBand.id} (Name: "${cleanBand.band_name}")...`);
-      
+
       const insertRes = await executeWithSchemaResilience(
-        async (payload) => await supabase.from('bands').insert([payload]),
+        async (payload) => await supabase.from('bands').insert([payload]).select('id, band_name, lineup, updated_at'),
         cleanBand
       );
 
       if (!insertRes?.error) {
         console.log(`[bandService] Successfully inserted band record: ${cleanBand.id}`);
-        return { success: true, data: insertRes.data || cleanBand };
+        return { success: true, data: { ...cleanBand, lineup: parsedLineupArray } };
       }
 
-      const directUpsert = await supabase.from('bands').upsert([cleanBand], { onConflict: 'custom_slug' });
+      const directUpsert = await supabase.from('bands').upsert([cleanBand], { onConflict: 'custom_slug' }).select('id, band_name, lineup, updated_at');
       if (!directUpsert.error) {
         console.log(`[bandService] Direct upsert succeeded for ${cleanBand.id}`);
-        return { success: true, data: cleanBand };
+        return { success: true, data: { ...cleanBand, lineup: parsedLineupArray } };
       }
 
-      const fallbackUpsert = await supabase.from('bands').upsert([cleanBand], { onConflict: 'id' });
+      const fallbackUpsert = await supabase.from('bands').upsert([cleanBand], { onConflict: 'id' }).select('id, band_name, lineup, updated_at');
       if (!fallbackUpsert.error) {
-        return { success: true, data: cleanBand };
+        return { success: true, data: { ...cleanBand, lineup: parsedLineupArray } };
       }
 
       const errMsg = directUpsert.error.message || insertRes.error?.message || JSON.stringify(insertRes.error);
       console.error(`[bandService] Database band save failed for ${cleanBand.id}:`, errMsg);
       options?.triggerNotification?.(`❌ Database band save failed: ${errMsg}`);
-      return { success: false, data: cleanBand, error: errMsg };
+      return { success: false, data: eventDetail, error: errMsg };
     }
   } catch (err: any) {
     const errMsg = err?.message || String(err);
     console.error('[bandService] Band database sync exception:', errMsg);
     options?.triggerNotification?.(`❌ Database sync exception: ${errMsg}`);
-    return { success: false, data: cleanBand, error: errMsg };
+    return { success: false, data: eventDetail, error: errMsg };
   }
 }
 
@@ -806,6 +771,21 @@ export const mapBandData = (rows: any[] | null) => {
     const validCreatorId = b.creator_id || b.user_id || b.owner_id || null;
     const validFeaturedYoutube = b.featured_youtube_url || b.youtube_url || '';
     const validMetalArchives = b.metal_archives_url || b.metal_archives || '';
+    const rawLogoCandidates = [
+      b.avatar_url,
+      b.logo_url,
+      b.image_url,
+      b.logo,
+      b.profile?.avatar_url,
+      b.avatar,
+      b.image,
+    ];
+    const resolvedLogo =
+      rawLogoCandidates.find((u) => {
+        if (typeof u !== 'string') return false;
+        const clean = u.trim().toLowerCase();
+        return Boolean(clean) && clean !== 'null' && clean !== 'undefined' && !clean.includes('unsplash') && !clean.includes('placeholder');
+      })?.trim() || '';
 
     return {
       ...b,
@@ -816,6 +796,9 @@ export const mapBandData = (rows: any[] | null) => {
       creator_id: validCreatorId,
       user_id: validCreatorId,
       owner_id: validCreatorId,
+      // Unified logo / avatar URL
+      avatar_url: resolvedLogo,
+      logo_url: resolvedLogo,
       // Bio & Description
       bio: b.bio || b.description || '',
       description: b.description || b.bio || '',
@@ -848,7 +831,7 @@ export const fetchUserBands = async (userId: string) => {
     const { data, error } = await supabase
       .from('bands')
       .select('*')
-      .or(`creator_id.eq.${userId},owner_id.eq.${userId}`)
+      .eq('creator_id', userId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -856,27 +839,7 @@ export const fetchUserBands = async (userId: string) => {
       return [];
     }
 
-    // Restrict active band workspace strictly to Virulent Excision
-    const validUserBands = (data || []).filter((b: any) => {
-      const bId = String(b.id || '').trim();
-      const bName = String(b.name || b.band_name || '').trim().toLowerCase();
-      return bId === 'cbddb810-259b-4230-9968-3d402dfdb872' || bName.includes('virulent excision');
-    });
-
-    const mapped = mapBandData(validUserBands);
-    if (mapped.length === 0) {
-      mapped.push({
-        id: 'cbddb810-259b-4230-9968-3d402dfdb872',
-        name: 'Virulent Excision',
-        band_name: 'Virulent Excision',
-        genre: 'Brutal Death Metal',
-        logo_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396',
-        cover_url: 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-cover_1787467851123.jpg?t=1787467851123',
-        owner_id: userId
-      });
-    }
-
-    return mapped;
+    return mapBandData(data || []);
   } catch (err: any) {
     console.warn('Notice fetching bands exception:', err?.message || err);
     return [];
@@ -925,8 +888,7 @@ export function verifyAndResyncBandLogo(url: string, bandId?: string) {
           const matches = (bandId && (b.id === bandId || ensureUUID(b.id) === ensureUUID(bandId))) ||
                           (activeId && (b.id === activeId || ensureUUID(b.id) === ensureUUID(activeId))) ||
                           (activeSlug && b.custom_slug === activeSlug) ||
-                          (activeName && b.name?.toLowerCase() === activeName) ||
-                          b.name?.toLowerCase() === 'brodequin' || b.name?.toLowerCase() === 'suffocation';
+                          (activeName && b.name?.toLowerCase() === activeName);
           if (matches && b.logo_url !== url) {
             changed = true;
             return { ...b, logo_url: url, avatar_url: url, avatar: url };
@@ -949,8 +911,7 @@ export function verifyAndResyncBandLogo(url: string, bandId?: string) {
           const matches = (bandId && (b.id === bandId || ensureUUID(b.id) === ensureUUID(bandId))) ||
                           (activeId && (b.id === activeId || ensureUUID(b.id) === ensureUUID(activeId))) ||
                           (activeSlug && b.custom_slug === activeSlug) ||
-                          (activeName && (b.name?.toLowerCase() === activeName || b.band_name?.toLowerCase() === activeName)) ||
-                          b.name?.toLowerCase() === 'brodequin' || b.name?.toLowerCase() === 'suffocation';
+                          (activeName && (b.name?.toLowerCase() === activeName || b.band_name?.toLowerCase() === activeName));
           if (matches && b.logo_url !== url) {
             changed = true;
             return { ...b, logo_url: url, avatar_url: url, avatar: url };
@@ -974,8 +935,7 @@ export function verifyAndResyncBandLogo(url: string, bandId?: string) {
           const matches = (bandId && (b.id === bandId || ensureUUID(b.id) === ensureUUID(bandId))) ||
                           (activeId && (b.id === activeId || ensureUUID(b.id) === ensureUUID(activeId))) ||
                           (activeSlug && b.custom_slug === activeSlug) ||
-                          (activeName && (b.name?.toLowerCase() === activeName || b.band_name?.toLowerCase() === activeName)) ||
-                          b.name?.toLowerCase() === 'brodequin' || b.name?.toLowerCase() === 'suffocation';
+                          (activeName && (b.name?.toLowerCase() === activeName || b.band_name?.toLowerCase() === activeName));
           if (matches && b.logo_url !== url) {
             changed = true;
             return { ...b, logo_url: url, avatar_url: url, avatar: url };

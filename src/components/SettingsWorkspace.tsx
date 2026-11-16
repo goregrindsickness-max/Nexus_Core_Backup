@@ -215,9 +215,9 @@ export default function SettingsWorkspace(props: any) {
       logo_url: logoUrl,
       is_verified: isVerifiedState,
       verification_platform: verificationPlatformInput || (isVerifiedState ? 'Spotify Official Artist' : null),
-      lineup: (Array.isArray(props.bandLineup) ? props.bandLineup : [])
-        .map((m: any) => `${m.name || 'Unnamed'} (${m.role || 'Vocals'} - Lvl ${m.clearanceLevel || 5})`)
-        .join(', ')
+      lineup: Array.isArray(props.bandLineup) && props.bandLineup.length > 0
+        ? props.bandLineup
+        : (Array.isArray(props.activeBand?.lineup) ? props.activeBand.lineup : [])
     };
 
     if (props.setBands) {
@@ -225,12 +225,15 @@ export default function SettingsWorkspace(props: any) {
     }
 
     try {
-      await upsertBandToDatabase(updated, { triggerNotification: props.triggerNotification });
+      await upsertBandToDatabase(updated, {
+        triggerNotification: props.triggerNotification,
+        allowEmptyLineup: false
+      });
     } catch (err) {
       console.warn("Error syncing band info to Supabase:", err);
     }
 
-    if (props.triggerNotification) props.triggerNotification('✨ Band profile saved & synced successfully!');
+    if (props.triggerNotification) props.triggerNotification('✨ Band profile saved!');
   };
 
   const handleReviewSubmit = () => {
@@ -668,7 +671,6 @@ export default function SettingsWorkspace(props: any) {
                         onClick={() => {
                           if (props.setSelectedMicroGenres) {
                             props.setSelectedMicroGenres([]);
-                            triggerNotification?.("🧹 Cleared all selected micro-genres.");
                           }
                         }}
                         className="px-2 py-0.5 bg-rose-950/30 hover:bg-rose-900/40 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded font-bold uppercase text-[8px] tracking-wider transition-all cursor-pointer"

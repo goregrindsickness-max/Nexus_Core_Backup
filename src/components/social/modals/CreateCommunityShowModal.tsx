@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { compressImageInSocialFeed } from '../../../utils/socialFeedUtils';
 import { showsStore, venuesStore } from '../../../utils/indexedDB';
-import { getSupabase, sanitizeShowForDb, generateUUID, ensureUUID, uploadBase64ToStorage } from '../../../supabase';
+import { generateUUID, ensureUUID, uploadBase64ToStorage, syncCommunityShowToCloud } from '../../../supabase';
 
 export interface CreateCommunityShowModalProps {
   isOpen: boolean;
@@ -316,18 +316,17 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       try {
         const raw = reader.result as string;
         const compressed = await compressImageInSocialFeed(raw, 1080, 1080, 0.8);
-        triggerNotification?.('⏳ Uploading flyer to storage...');
-        const uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
+        let uploadedUrl = await uploadBase64ToStorage(compressed, 'feed_media', 'community_show', 'flyer');
+        if (!uploadedUrl || uploadedUrl.startsWith('data:')) {
+          uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
+        }
         if (uploadedUrl && !uploadedUrl.startsWith('data:')) {
           onSuccess(uploadedUrl);
-          triggerNotification?.('✅ Flyer stored in cloud');
         } else {
           onSuccess(compressed);
-          triggerNotification?.('✅ Flyer attached');
         }
       } catch {
         onSuccess(reader.result as string);
-        triggerNotification?.('✅ Flyer attached');
       }
     };
     reader.readAsDataURL(file);
@@ -381,7 +380,6 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
     };
 
     setTourStops(prev => [...prev, newStop]);
-    triggerNotification?.(`📍 Added tour stop: ${newStop.city}, ${newStop.state} @ ${newStop.venue_name}`);
 
     // Reset inline inputs but keep date close or ready for next entry
     setStopCity('');
@@ -478,20 +476,10 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       additional_notes: JSON.stringify({
         tour_name: trimmedFestival || undefined,
         tour_title: trimmedFestival || undefined,
+        flyer_url: (flyerUrl && !flyerUrl.startsWith('data:image/')) ? flyerUrl : undefined,
       }),
       created_at: editingShow?.created_at || new Date().toISOString()
     };
-
-    // Also sync to Supabase directly
-    try {
-      const supabase = getSupabase();
-      if (supabase) {
-        const sanitized = sanitizeShowForDb(showPayload);
-        await supabase.from('shows').upsert([sanitized]);
-      }
-    } catch (err) {
-      console.warn('Direct show sync notice:', err);
-    }
 
     onSubmit(showPayload);
   };
@@ -562,10 +550,11 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
           }).catch(() => {});
         }
 
+        const resolvedStopFlyer = tourFlyerUrl || existingShow?.flyer_url || existingShow?.flyerUrl || undefined;
         const showPayload: any = {
           ...(existingShow || {}),
           id: showId,
-          creator_id: existingShow?.creator_id || 'community_curator',
+          creator_id: existingShow?.creator_id,
           name: finalName,
           show_name: finalName,
           headliner: headlinerVal,
@@ -586,31 +575,38 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
           age_restriction: existingShow?.age_restriction || 'All Ages',
           ticket_url: stop.ticket_url || existingShow?.ticket_url || undefined,
           external_ticket_url: stop.ticket_url || existingShow?.external_ticket_url || undefined,
-          flyer_url: tourFlyerUrl || existingShow?.flyer_url || undefined,
+          flyer_url: resolvedStopFlyer,
+          flyerUrl: resolvedStopFlyer,
           support_bands: sharedSupport || existingShow?.support_bands,
           support_lineup: sharedLineup.length > 0 ? sharedLineup : existingShow?.support_lineup,
           is_community_submitted: true,
           additional_notes: JSON.stringify({
             tour_name: activeTourName,
             tour_title: activeTourName,
-            stop_id: showId
+            stop_id: showId,
+            flyer_url: (resolvedStopFlyer && !resolvedStopFlyer.startsWith('data:image/')) ? resolvedStopFlyer : undefined,
           }),
           updated_at: new Date().toISOString()
         };
 
-        // 1. Save / Update in local IndexedDB store
+        // 1. Save / Update in local IndexedDB & localStorage extended cache
         await showsStore.setItem(showId, showPayload);
-
-        // 2. Sync to Supabase if connected
         try {
-          const supabase = getSupabase();
-          if (supabase) {
-            const dbSanitized = sanitizeShowForDb(showPayload);
-            await supabase.from('shows').upsert([dbSanitized]);
+          const rawExt = localStorage.getItem('nexus_core_shows_extended');
+          const extMap = rawExt ? JSON.parse(rawExt) : {};
+          extMap[showId] = { ...showPayload, _pendingCloudSync: true };
+          localStorage.setItem('nexus_core_shows_extended', JSON.stringify(extMap));
+
+          const rawCreated = localStorage.getItem('nexus_created_show_ids');
+          const createdList: string[] = rawCreated ? JSON.parse(rawCreated) : [];
+          if (!createdList.includes(showId)) {
+            createdList.push(showId);
+            localStorage.setItem('nexus_created_show_ids', JSON.stringify(createdList));
           }
-        } catch (sbErr) {
-          console.warn('Supabase tour show sync notice:', sbErr);
-        }
+        } catch (_) {}
+
+        // 2. Authoritative session-safe & RLS-compliant Supabase sync (queues offline if unreachable)
+        await syncCommunityShowToCloud(showPayload);
 
         createdCount++;
       }
@@ -619,7 +615,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
       window.dispatchEvent(new CustomEvent('COMMUNITY_SHOWS_UPDATED'));
       triggerNotification?.(`🎉 Successfully created ${createdCount} tour show events! Each stop now has its own event page you can edit anytime.`);
       
-      // Also invoke parent onSubmit with first show payload so state refreshes smoothly
+      // Also invoke parent onSubmit with batch marker so state refreshes cleanly
       if (tourStops.length > 0) {
         onSubmit({
           id: 'sh_batch_completed',
@@ -780,7 +776,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
                   ref={singleFlyerInputRef}
                   type="file" 
                   accept="image/*" 
-                  className="hidden" 
+                  className="sr-only" 
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) processImageFile(file, (url) => setFlyerUrl(url));
@@ -1025,7 +1021,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
                   <div className="sm:col-span-2">
                     <label className="block font-mono text-[11px] text-zinc-300 uppercase tracking-wider mb-1">
                       City <span className="text-emerald-400">*</span>
@@ -1048,6 +1044,18 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
                       value={stateProvince}
                       onChange={(e) => setStateProvince(e.target.value)}
                       placeholder="e.g. TX, CA"
+                      className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-mono text-[11px] text-zinc-300 uppercase tracking-wider mb-1">
+                      Country
+                    </label>
+                    <input 
+                      type="text"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                      placeholder="e.g. United States, UK"
                       className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-emerald-400"
                     />
                   </div>
@@ -1281,7 +1289,7 @@ export const CreateCommunityShowModal: React.FC<CreateCommunityShowModalProps> =
                       ref={tourFlyerInputRef}
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) processImageFile(file, (url) => setTourFlyerUrl(url));

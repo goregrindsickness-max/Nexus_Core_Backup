@@ -16,6 +16,22 @@ import {
   resolveBandHandle 
 } from '../../utils/bandProfileUtils';
 import MarqueeText from '../MarqueeText';
+import { syncGlobalUnreadBadge } from '../../utils/appBadgeService';
+import { CommunityBandManager } from '../../lib/communityBands';
+import { handleImageErrorWithCache } from '../../services/profileImageCacheService';
+import {
+  NetworkEntity,
+  ENTITY_CATEGORY_META,
+  getUserManagedEntities,
+  openTaggedBandOrEntityProfile,
+  syncNetworkEntitiesFromSupabase,
+} from '../../services/networkEntitiesService';
+import { CreateEntityModal } from '../social/modals/CreateEntityModal';
+import { FestivalLineupEditorModal } from '../social/modals/FestivalLineupEditorModal';
+import {
+  SwipableWorkspaceEntityCard,
+  buildWorkspaceEntityItems,
+} from '../social/navigation/SwipableWorkspaceEntityCard';
 
 export interface NexusTopBarProps {
   activeTab: string;
@@ -86,10 +102,26 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
 
   // Collapsible state for Active Managed Client / Band switcher card (collapsed by default to shrink vertical footprint)
   const [isBandClientSectionExpanded, setIsBandClientSectionExpanded] = useState(false);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [managedEntities, setManagedEntities] = useState<NetworkEntity[]>([]);
+  const [showCreateEntityModal, setShowCreateEntityModal] = useState(false);
+  const [lineupEditorEntity, setLineupEditorEntity] = useState<NetworkEntity | null>(null);
+
+  useEffect(() => {
+    const refresh = () => setManagedEntities(getUserManagedEntities(userProfile?.id));
+    refresh();
+    syncNetworkEntitiesFromSupabase().then(refresh).catch(() => {});
+    window.addEventListener('nexus_entities_updated', refresh);
+    return () => window.removeEventListener('nexus_entities_updated', refresh);
+  }, [userProfile?.id]);
 
   // Live ticker updates
   const [tickerIndex, setTickerIndex] = useState(0);
   const unreadNotificationsCount = (notifications || []).filter((n: any) => !n.is_read).length;
+
+  useEffect(() => {
+    syncGlobalUnreadBadge();
+  }, [unreadNotificationsCount]);
 
   const isTourManager = userProfile?.band_role_mode === 'tour_manager' || userProfile?.role?.toLowerCase() === 'tour manager';
 
@@ -110,7 +142,7 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
   }, [tickerMessages.length]);
 
   return (
-    <header className="w-full flex flex-col border-b border-[#1b1e25] bg-black sticky top-0 z-40 select-none">
+    <header className="w-full flex flex-col border-b border-[#1b1e25] bg-black sticky top-0 z-40 select-none pt-[env(safe-area-inset-top)]">
       {/* 1. Main Navigation Bar */}
       <div className="pl-2 pr-4 sm:pr-5 py-2.5 sm:py-3 flex items-center justify-between gap-2">
         {/* Brand Logo / Return Home */}
@@ -119,7 +151,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
             onClick={() => {
               setActiveTab('home-v2');
               if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
-              triggerNotification?.('Navigated to Home Dashboard');
             }}
             className="flex items-center select-none shrink-0 cursor-pointer hover:opacity-85 active:scale-98 transition-all focus:outline-none"
             title="Return to Home Dashboard"
@@ -129,36 +160,66 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
               alt="Nexus Core" 
               className="object-contain w-32 sm:w-36 h-auto"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                handleImageErrorWithCache(e, "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Nexus%20Core%20Long%20Logo%20copy.png").catch(() => {});
+                e.currentTarget.onerror = null;
+                e.currentTarget.style.display = 'none';
+                if (e.currentTarget.nextElementSibling) {
+                  (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex';
+                }
+              }}
             />
+            <div className="hidden items-center gap-1.5 px-1 py-0.5">
+              <span className="font-black tracking-wider text-base sm:text-lg bg-gradient-to-r from-purple-400 via-rose-500 to-amber-400 bg-clip-text text-transparent font-display">
+                NEXUS CORE
+              </span>
+            </div>
           </button>
         </div>
 
         {/* Action Controls & Workspace Switcher */}
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Offline Sync Badge */}
-          {pendingSyncCount > 0 && processOfflineQueue && (
-            <button
-              onClick={() => {
-                triggerNotification?.(`Retrying sync for ${pendingSyncCount} operations...`);
-                processOfflineQueue().then();
-              }}
-              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg px-2 py-1 flex items-center gap-1.5 transition text-[10px] font-mono font-bold uppercase tracking-wider cursor-pointer shadow-sm active:scale-95 animate-pulse"
-              title="Sync Pending Changes"
-            >
-              <Repeat className="w-3 h-3 text-amber-400 animate-spin" />
-              <span className="hidden sm:inline">Syncing: {pendingSyncCount}</span>
-            </button>
-          )}
+          {/* Cloud Sync Gateway Activation Button with Tactile Animation */}
+          <button
+            onClick={async () => {
+              setIsManualSyncing(true);
+              try {
+                if (processOfflineQueue) await processOfflineQueue();
+                await CommunityBandManager.getInstance().fetchFromSupabase();
+              } catch (e) {
+                // Silent
+              } finally {
+                setTimeout(() => setIsManualSyncing(false), 1400);
+              }
+            }}
+            disabled={isManualSyncing}
+            className={`rounded-xl px-2.5 py-1 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 font-mono text-[10px] font-bold uppercase tracking-wider ${
+              isManualSyncing
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.5)] scale-105'
+                : pendingSyncCount > 0
+                ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                : 'bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/80 shadow-inner'
+            }`}
+            title="Click to sync local changes and fetch latest database updates"
+          >
+            <RefreshCcw
+              className={`w-3.5 h-3.5 ${
+                isManualSyncing
+                  ? 'text-cyan-400 animate-spin'
+                  : pendingSyncCount > 0
+                  ? 'text-amber-400 animate-spin'
+                  : 'text-cyan-400 group-hover:rotate-180 transition-transform duration-500'
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {isManualSyncing ? 'Syncing...' : pendingSyncCount > 0 ? `Sync (${pendingSyncCount})` : 'Cloud Sync'}
+            </span>
+          </button>
 
           {/* Clearance Level / Plan Badge */}
           <button
             onClick={() => {
               setActiveTab('plans');
-              if (!isRosterOwner) {
-                triggerNotification?.('Viewing organization active sponsorship plan details.');
-              } else {
-                triggerNotification?.('Opening subscription & billing plans...');
-              }
             }}
             className={`rounded-xl px-2.5 py-1 flex items-center gap-2 transition cursor-pointer shadow-sm active:scale-95 shrink-0 ${
               !isRosterOwner
@@ -330,52 +391,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                       </div>
                     </div>
 
-                    {/* View Profile Button */}
-                    <button 
-                      onClick={() => {
-                        setRoleMenuOpen(false);
-                        const isBandActive = userProfile?.active_workspace === 'band' && activeBand;
-                        if (isBandActive) {
-                          const bandName = activeBand?.name || 'Band';
-                          const bandHandle = (activeBand as any)?.custom_slug || (activeBand as any)?.slug || '@band';
-                          const bandLogo = (activeBand as any)?.logo_url || null;
-                          const bandCover = (activeBand as any)?.banner_url || (activeBand as any)?.cover_url || null;
-                          const bandBio = activeBand?.bio || 'Band profile.';
-                          const detailPayload = {
-                            id: activeBand?.id || 'band:active',
-                            name: bandName,
-                            legalName: bandName,
-                            handle: bandHandle.startsWith('@') ? bandHandle : `@${bandHandle}`,
-                            avatar: bandLogo,
-                            avatar_url: bandLogo,
-                            logo: bandLogo,
-                            logo_url: bandLogo,
-                            banner: bandCover,
-                            banner_url: bandCover,
-                            cover: bandCover,
-                            cover_url: bandCover,
-                            location: activeBand?.homebase || 'Global',
-                            role: 'Band / Artist',
-                            account_type: 'band',
-                            type: 'band',
-                            isPersonal: false,
-                            isBandProfile: true,
-                            isYou: true,
-                            badges: ['⚡ Band Core', '🎵 Metal'],
-                            bio: bandBio
-                          };
-                          window.dispatchEvent(new CustomEvent('openPublicProfile', { detail: detailPayload }));
-                          triggerNotification?.("⚡ Opening Band Public Profile...");
-                        } else if (handleOpenMyProfile) {
-                          handleOpenMyProfile();
-                        }
-                      }}
-                      className="w-full flex items-center justify-center gap-2 mt-2 mb-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors cursor-pointer shadow-md shadow-emerald-950/30"
-                    >
-                      <User className="w-3.5 h-3.5" />
-                      {userProfile?.active_workspace === 'band' ? 'VIEW BAND PROFILE' : 'VIEW MY PROFILE'}
-                    </button>
-
                     {/* Default Band/Artist Tab Section - Only if band is registered (Collapsed by default to shrink vertical footprint) */}
                     {hasRegisteredWorkspace(userProfile, 'band') && activeBand && (
                       <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-2.5 mb-3 transition-all">
@@ -389,7 +404,16 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className="w-7 h-7 rounded-full overflow-hidden border border-[#00ffcc]/30 bg-zinc-950 shrink-0">
                               {activeBand?.logo_url ? (
-                                <img src={activeBand.logo_url} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                                <img
+                                  src={activeBand.logo_url}
+                                  className="w-full h-full object-cover"
+                                  alt=""
+                                  referrerPolicy="no-referrer"
+                                  onError={(e) => {
+                                    e.currentTarget.onerror = null;
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center text-[#00ffcc] font-mono text-xs font-bold">
                                   {activeBand?.name?.charAt(0).toUpperCase() || 'B'}
@@ -451,7 +475,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                                           localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
                                           window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
                                         } catch {}
-                                        triggerNotification?.(`🎸 Switched to Band Member (${prevRole}) Mode for ${activeBand.name}.`);
                                       }}
                                       className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700 hover:border-zinc-500 text-zinc-200 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
                                       title="Switch identity back to Artist / Band Member mode"
@@ -491,7 +514,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                                       } catch {}
                                       setActiveTab('home-v2');
                                       if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
-                                      triggerNotification?.(`🧭 Switched to Tour Manager & Booking Agent Mode for ${activeBand.name}. Executive tour suite active.`);
                                     }}
                                     className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-amber-500/20 via-amber-500/15 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 border border-amber-500/40 hover:border-amber-400 text-amber-300 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-95"
                                     title="Switch to Tour Manager & Booking Agent executive identity"
@@ -516,7 +538,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                                   onClick={() => {
                                     setRoleMenuOpen(false);
                                     setActiveTab('plans');
-                                    triggerNotification?.('Opening band roster manager. Register another band/artist here.');
                                   }}
                                   className="w-full mt-2 flex items-center justify-center gap-1.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-[#00ffcc] hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer"
                                 >
@@ -534,122 +555,319 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                     <div className="space-y-2">
                       <span className="block text-[8px] font-mono font-black text-zinc-500 tracking-wider uppercase mb-1.5">SWITCH ACTIVE PORTAL</span>
                       <div className="space-y-1">
-                        {[
-                          { key: 'industry_pro', icon: '🎟️', name: 'Industry Pro', desc: 'Active social environment', bg: 'bg-violet-950/40', border: 'border-violet-500/30', text: 'text-violet-400', dot: 'bg-violet-700 shadow-[0_0_8px_#6d28d9]' },
-                          { key: 'fan_only', icon: '💙', name: 'Fan Only', desc: 'Royal Blue fan community', bg: 'bg-cyan-950/40', border: 'border-cyan-500/30', text: 'text-cyan-400', dot: 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]' },
-                          { key: 'band', icon: '🎸', name: 'Band / Artist Workspace', desc: 'Lineup, repertoire & presets', bg: 'bg-emerald-950/40', border: 'border-emerald-500/30', text: 'text-emerald-400', dot: 'bg-emerald-500 shadow-[0_0_8px_#10b981]' },
-                          { key: 'promoter', icon: '🏟️', name: 'Venue Promoter Gateway', desc: 'Calendars, lineups & finance', bg: 'bg-yellow-950/40', border: 'border-yellow-500/30', text: 'text-yellow-400', dot: 'bg-yellow-500 shadow-[0_0_8px_#eab308]' },
-                          { key: 'creative', icon: '🛠️', name: 'Creative Hub & Crew', desc: 'Contracts, portfolio & sound crew', bg: 'bg-fuchsia-950/40', border: 'border-fuchsia-500/30', text: 'text-fuchsia-400', dot: 'bg-fuchsia-500 shadow-[0_0_8px_#d946ef]' },
-                          { key: 'label', icon: '💿', name: 'Record Label Console', desc: 'Oversee rosters & releases', bg: 'bg-orange-950/40', border: 'border-orange-500/30', text: 'text-orange-400', dot: 'bg-orange-500 shadow-[0_0_8px_#f97316]' }
-                        ].map((portal, idx) => {
+                        {(() => {
                           const rawPortalRole = userProfile?.active_workspace || userProfile?.account_type || 'fan_only';
                           const portalRole = (rawPortalRole === 'fan' || rawPortalRole === 'fan_only') ? 'fan_only' : rawPortalRole;
-                          const isActive = portalRole === portal.key;
                           const isFanAccount = userProfile?.account_type === 'fan' || userProfile?.account_type === 'fan_only';
-                          const isIndustryPro = !isFanAccount && (userProfile?.account_type === 'industry_pro' || ['band', 'promoter', 'creative', 'label'].some(w => hasRegisteredWorkspace(userProfile, w)));
-                          
-                          if (portal.key === 'fan_only' && isIndustryPro) {
+                          const isIndustryPro = !isFanAccount && (userProfile?.account_type === 'industry_pro' || userProfile?.account_type === 'industry pro' || ['band', 'promoter', 'creative', 'label'].some(w => hasRegisteredWorkspace(userProfile, w)));
+
+                          if (portalRole === 'fan_only' && !isIndustryPro) {
                             return (
-                              <div key={`portal-disabled-${portal.key}-${idx}`} className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950/20 border border-zinc-900/30 text-zinc-650 opacity-40 select-none cursor-not-allowed">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs grayscale opacity-50">{portal.icon}</span>
-                                  <div className="text-left">
-                                    <p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">{portal.name}</p>
-                                    <p className="text-[8px] font-mono leading-none text-zinc-600">downgrade not possible</p>
+                              <>
+                                <div className="w-full flex items-center justify-between p-2 rounded-xl bg-cyan-950/40 border border-cyan-500/30 text-cyan-400">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs">💙</span>
+                                    <div className="text-left">
+                                      <p className="text-[10px] font-black uppercase tracking-wider">Fan / Supporter</p>
+                                      <p className="text-[8px] opacity-80 font-mono leading-none">Active Environment</p>
+                                    </div>
                                   </div>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] animate-pulse" />
                                 </div>
-                                <span className="text-[9px] font-mono text-zinc-700">LOCKED</span>
-                              </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = {
+                                      ...userProfile,
+                                      active_workspace: 'industry_pro',
+                                      account_type: 'industry_pro',
+                                      role: 'Industry Pro',
+                                    };
+                                    if (setUserProfile) setUserProfile(updated as any);
+                                    try {
+                                      localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                                      window.dispatchEvent(
+                                        new CustomEvent('nexus_core_user_profile_updated', { detail: updated })
+                                      );
+                                    } catch {}
+                                    triggerNotification?.(
+                                      '⚡ Upgraded to Industry Pro! Select a workspace below to register.'
+                                    );
+                                  }}
+                                  className="w-full mt-1.5 p-3 rounded-xl bg-gradient-to-br from-[#291244] via-[#1a0b2e] to-[#0d282a] hover:from-[#36185a] hover:via-[#230f3d] hover:to-[#113638] border border-[#9d4edf]/60 hover:border-teal-400/80 shadow-[0_0_20px_rgba(157,78,223,0.28)] transition-all duration-200 cursor-pointer text-left group"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-8 h-8 rounded-lg bg-[#6601BB]/40 border border-[#a268ff]/50 flex items-center justify-center shrink-0">
+                                        <span className="text-xs">🎟️</span>
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-[10px] font-black uppercase tracking-wider text-white group-hover:text-teal-300 transition-colors">
+                                          Upgrade to Industry Pro
+                                        </p>
+                                        <p className="text-[9px] text-zinc-300/90 leading-snug mt-0.5">
+                                          Unlock Band, Promoter, Venue, Creative &amp; Label workspaces
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="w-5 h-5 rounded-full bg-teal-500/20 border border-teal-400/40 flex items-center justify-center shrink-0">
+                                      <ArrowRight className="w-3 h-3 text-teal-300 group-hover:translate-x-0.5 transition-transform" />
+                                    </div>
+                                  </div>
+                                </button>
+                              </>
                             );
                           }
 
-                          const isAllowed = (portal.key === 'industry_pro' || (portal.key === 'fan_only' && !isIndustryPro)) || hasRegisteredWorkspace(userProfile, portal.key) || (userProfile?.email === 'admin@nexus.com');
+                          return [
+                            { key: 'industry_pro', icon: '🎟️', name: 'Industry Pro', desc: 'Active social environment', bg: 'bg-violet-950/40', border: 'border-violet-500/30', text: 'text-violet-400', dot: 'bg-violet-700 shadow-[0_0_8px_#6d28d9]' },
+                            { key: 'fan_only', icon: '💙', name: 'Fan Only', desc: 'Royal Blue fan community', bg: 'bg-cyan-950/40', border: 'border-cyan-500/30', text: 'text-cyan-400', dot: 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]' },
+                            { key: 'band', icon: '🎸', name: 'Band / Artist Workspace', desc: 'Lineup, repertoire & presets', bg: 'bg-emerald-950/40', border: 'border-emerald-500/30', text: 'text-emerald-400', dot: 'bg-emerald-500 shadow-[0_0_8px_#10b981]' },
+                            { key: 'promoter', icon: '🏟️', name: 'Venue Promoter Gateway', desc: 'Calendars, lineups & finance', bg: 'bg-yellow-950/40', border: 'border-yellow-500/30', text: 'text-yellow-400', dot: 'bg-yellow-500 shadow-[0_0_8px_#eab308]' },
+                            { key: 'creative', icon: '🛠️', name: 'Creative Hub & Crew', desc: 'Contracts, portfolio & sound crew', bg: 'bg-fuchsia-950/40', border: 'border-fuchsia-500/30', text: 'text-fuchsia-400', dot: 'bg-fuchsia-500 shadow-[0_0_8px_#d946ef]' },
+                            { key: 'label', icon: '💿', name: 'Record Label Console', desc: 'Oversee rosters & releases', bg: 'bg-orange-950/40', border: 'border-orange-500/30', text: 'text-orange-400', dot: 'bg-orange-500 shadow-[0_0_8px_#f97316]' }
+                          ].map((portal, idx) => {
+                            const isActive = portalRole === portal.key;
 
-                          if (isActive) {
-                            return (
-                              <div key={`portal-active-${portal.key}-${idx}`} className={`w-full flex items-center justify-between p-2 rounded-xl ${portal.bg} border ${portal.border} ${portal.text}`}>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs">{portal.icon}</span>
-                                  <div className="text-left">
-                                    <p className="text-[10px] font-black uppercase tracking-wider">{portal.name}</p>
-                                    <p className="text-[8px] opacity-80 font-mono leading-none">Active Environment</p>
+                            if (portal.key === 'fan_only' && isIndustryPro) {
+                              return (
+                                <div key={`portal-disabled-${portal.key}-${idx}`} className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950/20 border border-zinc-900/30 text-zinc-650 opacity-40 select-none cursor-not-allowed">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs grayscale opacity-50">{portal.icon}</span>
+                                    <div className="text-left">
+                                      <p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">{portal.name}</p>
+                                      <p className="text-[8px] font-mono leading-none text-zinc-600">downgrade not possible</p>
+                                    </div>
                                   </div>
+                                  <span className="text-[9px] font-mono text-zinc-700">LOCKED</span>
                                 </div>
-                                <span className={`w-1.5 h-1.5 rounded-full ${portal.dot} animate-pulse`} />
-                              </div>
-                            );
-                          }
+                              );
+                            }
 
-                          if (isAllowed) {
+                            const isAllowed = (portal.key === 'industry_pro' || (portal.key === 'fan_only' && !isIndustryPro)) || hasRegisteredWorkspace(userProfile, portal.key) || (userProfile?.email === 'admin@nexus.com');
+
+                            if (
+                              isAllowed &&
+                              (portal.key === 'band' ||
+                                portal.key === 'promoter' ||
+                                portal.key === 'creative' ||
+                                portal.key === 'label')
+                            ) {
+                              const entityItems = buildWorkspaceEntityItems(portal.key, {
+                                userProfile,
+                                activeBand,
+                                bands,
+                                managedEntities,
+                              });
+                              return (
+                                <SwipableWorkspaceEntityCard
+                                  key={`portal-entity-${portal.key}-${idx}`}
+                                  workspaceType={portal.key}
+                                  entities={entityItems}
+                                  activeEntityId={
+                                    portal.key === 'band'
+                                      ? activeBand?.id || (userProfile as any)?.band_id
+                                      : undefined
+                                  }
+                                  isWorkspaceActive={isActive}
+                                  onSelectEntity={(selectedEntity) => {
+                                    setRoleMenuOpen(false);
+                                    const updated: any = {
+                                      ...userProfile,
+                                      active_workspace: portal.key,
+                                      account_type: portal.key,
+                                    };
+                                    if (portal.key === 'band') {
+                                      updated.band_id = selectedEntity.id || updated.band_id;
+                                      updated.band_name = selectedEntity.name || updated.band_name;
+                                      updated.band_handle = selectedEntity.handle || updated.band_handle;
+                                      updated.band_logo = selectedEntity.logoUrl || updated.band_logo;
+                                    } else if (portal.key === 'promoter') {
+                                      updated.promoter_agency = selectedEntity.name || updated.promoter_agency;
+                                      updated.promoter_handle = selectedEntity.handle || updated.promoter_handle;
+                                      updated.promoter_logo = selectedEntity.logoUrl || updated.promoter_logo;
+                                    } else if (portal.key === 'creative') {
+                                      updated.creative_name = selectedEntity.name || updated.creative_name;
+                                      updated.creative_handle = selectedEntity.handle || updated.creative_handle;
+                                      updated.creative_logo = selectedEntity.logoUrl || updated.creative_logo;
+                                    } else if (portal.key === 'label') {
+                                      updated.label_name = selectedEntity.name || updated.label_name;
+                                      updated.label_handle = selectedEntity.handle || updated.label_handle;
+                                      updated.label_avatar = selectedEntity.logoUrl || updated.label_avatar;
+                                    }
+                                    if (setUserProfile) setUserProfile(updated);
+                                    try {
+                                      localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                                      window.dispatchEvent(
+                                        new CustomEvent('nexus_core_user_profile_updated', { detail: updated })
+                                      );
+                                    } catch {}
+                                    if (portal.key === 'band') {
+                                      setActiveTab('home-v2');
+                                      if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
+                                    } else if (portal.key === 'promoter') {
+                                      setActiveTab('promoter');
+                                    } else if (portal.key === 'creative') {
+                                      setActiveTab('creative');
+                                    } else if (portal.key === 'label') {
+                                      setActiveTab('label');
+                                    }
+                                  }}
+                                />
+                              );
+                            }
+
+                            if (isActive) {
+                              return (
+                                <div key={`portal-active-${portal.key}-${idx}`} className={`w-full flex items-center justify-between p-2 rounded-xl ${portal.bg} border ${portal.border} ${portal.text}`}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs">{portal.icon}</span>
+                                    <div className="text-left">
+                                      <p className="text-[10px] font-black uppercase tracking-wider">{portal.name}</p>
+                                      <p className="text-[8px] opacity-80 font-mono leading-none">Active Environment</p>
+                                    </div>
+                                  </div>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${portal.dot} animate-pulse`} />
+                                </div>
+                              );
+                            }
+
+                            if (isAllowed) {
+                              return (
+                                <button
+                                  key={`portal-allowed-${portal.key}-${idx}`}
+                                  onClick={() => {
+                                    setRoleMenuOpen(false);
+                                    const targetAcc = (portal.key === 'fan' || portal.key === 'fan_only') ? 'fan_only' : (portal.key === 'industry_pro') ? 'industry_pro' : portal.key;
+                                    const updated = { ...userProfile, active_workspace: portal.key, account_type: targetAcc };
+                                    if (setUserProfile) setUserProfile(updated as any);
+                                    try {
+                                      localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
+                                      window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
+                                    } catch {}
+                                    if (portal.key === 'industry_pro' || portal.key === 'fan_only') {
+                                      setActiveTab('social');
+                                    } else if (portal.key === 'band') {
+                                      setActiveTab('home-v2');
+                                      if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
+                                    } else if (portal.key === 'promoter') {
+                                      setActiveTab('promoter');
+                                    } else if (portal.key === 'creative') {
+                                      setActiveTab('creative');
+                                    } else if (portal.key === 'label') {
+                                      setActiveTab('label');
+                                    }
+                                  }}
+                                  className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-900/50 hover:bg-zinc-800 border border-transparent hover:border-zinc-700 text-zinc-400 hover:text-white transition-all cursor-pointer group"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs opacity-50 group-hover:opacity-100 transition-opacity">{portal.icon}</span>
+                                    <div className="text-left">
+                                      <p className="text-[10px] font-black uppercase tracking-wider group-hover:text-white transition-colors">{portal.name}</p>
+                                      <p className="text-[8px] opacity-50 font-mono leading-none">{portal.desc}</p>
+                                    </div>
+                                  </div>
+                                  <div className="w-5 h-5 rounded-full bg-zinc-800 group-hover:bg-zinc-700 flex items-center justify-center transition-colors">
+                                    <ArrowRight className="w-3 h-3 text-zinc-500 group-hover:text-white" />
+                                  </div>
+                                </button>
+                              );
+                            }
+
                             return (
                               <button
-                                key={`portal-allowed-${portal.key}-${idx}`}
+                                key={`${portal.key}-${idx}`}
                                 onClick={() => {
                                   setRoleMenuOpen(false);
-                                  const targetAcc = (portal.key === 'fan' || portal.key === 'fan_only') ? 'fan_only' : (portal.key === 'industry_pro') ? 'industry_pro' : portal.key;
-                                  const updated = { ...userProfile, active_workspace: portal.key, account_type: targetAcc };
-                                  if (setUserProfile) setUserProfile(updated as any);
-                                  try {
-                                    localStorage.setItem('nexus_core_user_profile', JSON.stringify(updated));
-                                    window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: updated }));
-                                  } catch {}
-                                  if (portal.key === 'industry_pro' || portal.key === 'fan_only') {
-                                    setActiveTab('social');
-                                  } else if (portal.key === 'band') {
-                                    setActiveTab('home-v2');
-                                    if (setDashboardV2ActiveNav) setDashboardV2ActiveNav('EVENTS');
-                                  } else if (portal.key === 'promoter') {
-                                    setActiveTab('promoter');
-                                  } else if (portal.key === 'creative') {
-                                    setActiveTab('creative');
-                                  } else if (portal.key === 'label') {
-                                    setActiveTab('label');
+                                  if (typeof window !== 'undefined') {
+                                    localStorage.setItem('nexus_target_register_workspace', portal.key);
                                   }
-                                  triggerNotification?.(`⚡ Switched to ${portal.name}.`);
+                                  if (onUpgradeToPro) onUpgradeToPro();
                                 }}
-                                className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-900/50 hover:bg-zinc-800 border border-transparent hover:border-zinc-700 text-zinc-400 hover:text-white transition-all cursor-pointer group"
+                                className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950/40 border border-zinc-900/50 text-zinc-650 hover:text-zinc-500 transition-all cursor-pointer group"
                               >
                                 <div className="flex items-center gap-2">
-                                  <span className="text-xs opacity-50 group-hover:opacity-100 transition-opacity">{portal.icon}</span>
+                                  <span className="text-xs opacity-40">{portal.icon}</span>
                                   <div className="text-left">
-                                    <p className="text-[10px] font-black uppercase tracking-wider group-hover:text-white transition-colors">{portal.name}</p>
-                                    <p className="text-[8px] opacity-50 font-mono leading-none">{portal.desc}</p>
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 group-hover:text-zinc-500">{portal.name} 🔒</p>
+                                    <p className="text-[8px] opacity-40 font-mono leading-none">Registration Required</p>
                                   </div>
                                 </div>
-                                <div className="w-5 h-5 rounded-full bg-zinc-800 group-hover:bg-zinc-700 flex items-center justify-center transition-colors">
-                                  <ArrowRight className="w-3 h-3 text-zinc-500 group-hover:text-white" />
+                                <div className="w-5 h-5 rounded-full bg-zinc-950 flex items-center justify-center">
+                                  <span className="text-[10px]">🔒</span>
                                 </div>
                               </button>
                             );
-                          }
-
-                          return (
-                            <button
-                              key={`${portal.key}-${idx}`}
-                              onClick={() => {
-                                setRoleMenuOpen(false);
-                                if (typeof window !== 'undefined') {
-                                  localStorage.setItem('nexus_target_register_workspace', portal.key);
-                                }
-                                triggerNotification?.(`Opening secure registration gateway for ${portal.name}...`);
-                                if (onUpgradeToPro) onUpgradeToPro();
-                              }}
-                              className="w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950/40 border border-zinc-900/50 text-zinc-650 hover:text-zinc-500 transition-all cursor-pointer group"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs opacity-40">{portal.icon}</span>
-                                <div className="text-left">
-                                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 group-hover:text-zinc-500">{portal.name} 🔒</p>
-                                  <p className="text-[8px] opacity-40 font-mono leading-none">Registration Required</p>
-                                </div>
-                              </div>
-                              <div className="w-5 h-5 rounded-full bg-zinc-950 flex items-center justify-center">
-                                <span className="text-[10px]">🔒</span>
-                              </div>
-                            </button>
-                          );
-                        })}
+                          });
+                        })()}
                       </div>
+                    </div>
+
+                    {/* Decoupled Public Brand Entities & Festival Pages */}
+                    <div className="mt-3 pt-3 border-t border-zinc-800/80 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[8px] font-mono font-black text-amber-400 tracking-wider uppercase">
+                          PUBLIC PAGES & FESTIVAL ENTITIES ({managedEntities.length})
+                        </span>
+                      </div>
+
+                      {managedEntities.length > 0 && (
+                        <div className="space-y-1 max-h-36 overflow-y-auto pr-0.5">
+                          {managedEntities.map((ent) => {
+                            const catMeta = ENTITY_CATEGORY_META[ent.category] || ENTITY_CATEGORY_META.festival;
+                            return (
+                              <div
+                                key={ent.id}
+                                className="w-full flex items-center justify-between gap-1.5 p-1.5 rounded-xl bg-zinc-900/70 hover:bg-zinc-800/90 border border-zinc-800/80 transition-all"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRoleMenuOpen(false);
+                                    openTaggedBandOrEntityProfile(ent, triggerNotification);
+                                  }}
+                                  className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
+                                >
+                                  <span className="text-xs shrink-0">{catMeta.icon}</span>
+                                  <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-wider text-white truncate">
+                                      {ent.display_name}
+                                    </p>
+                                    <p className="text-[8px] font-mono text-amber-300/80 truncate">
+                                      @{ent.slug} • {catMeta.shortLabel}
+                                    </p>
+                                  </div>
+                                </button>
+                                {ent.category === 'festival' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRoleMenuOpen(false);
+                                      setLineupEditorEntity(ent);
+                                    }}
+                                    className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[8px] font-mono font-bold uppercase shrink-0 cursor-pointer"
+                                  >
+                                    Lineup
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRoleMenuOpen(false);
+                          setShowCreateEntityModal(true);
+                        }}
+                        className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/50 text-amber-300 hover:text-white text-[10px] font-mono font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-amber-400" />
+                        <span>+ Create Public Page or Entity</span>
+                      </button>
                     </div>
 
                     {/* Bottom Actions */}
@@ -662,7 +880,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                           } else {
                             setActiveTab('plans');
                           }
-                          triggerNotification?.('Opening system settings...');
                         }}
                         className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-zinc-300 hover:text-white hover:bg-zinc-900/60 rounded-xl transition-colors text-left cursor-pointer"
                       >
@@ -676,7 +893,6 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
                           localStorage.removeItem('nexus_core_user_profile'); 
                           if (setUserProfile) setUserProfile(null); 
                           window.location.reload();
-                          triggerNotification?.("Session terminated. Signed out successfully.");
                         }}
                         className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-rose-500 hover:text-rose-400 hover:bg-rose-950/20 rounded-xl transition-colors text-left cursor-pointer"
                       >
@@ -691,6 +907,26 @@ export const NexusTopBar: React.FC<NexusTopBarProps> = ({
           </div>
         </div>
       </div>
+
+      <CreateEntityModal
+        isOpen={showCreateEntityModal}
+        onClose={() => setShowCreateEntityModal(false)}
+        userProfile={userProfile}
+        onEntityCreated={(created, createdEditionId) => {
+          setManagedEntities(getUserManagedEntities(userProfile?.id));
+          if (created.category === 'festival' && createdEditionId) {
+            setLineupEditorEntity(created);
+          }
+        }}
+        triggerNotification={triggerNotification}
+      />
+
+      <FestivalLineupEditorModal
+        isOpen={Boolean(lineupEditorEntity)}
+        onClose={() => setLineupEditorEntity(null)}
+        entity={lineupEditorEntity}
+        triggerNotification={triggerNotification}
+      />
 
       {/* 2. Live Scene Radar Marquee Ticker */}
       <div className="bg-[#090b10] border-t border-b border-zinc-900/80 px-3 py-1 flex items-center gap-2 text-[10px] font-mono text-zinc-400 overflow-hidden">

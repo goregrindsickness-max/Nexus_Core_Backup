@@ -23,13 +23,21 @@ import {
   VolumeX,
   Minimize2,
   Maximize2,
-  Battery
+  Battery,
+  UserPlus,
+  Check,
+  User
 } from 'lucide-react';
+import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME } from '../../../utils/followSyncService';
+import { getSupabase } from '../../../supabase';
 import { RADIO_PLAYLISTS, FRONTEND_FALLBACK_PLAYLISTS } from '../../../data/socialFeedMockData';
+import { FirstTimeTooltip } from '../../common/FirstTimeTooltip';
+import { authFetch, getSupabaseAccessToken } from '../../../utils/apiConfig';
 import {
   getPlaylistTracksResilient,
   enrichTrackBatchDirect,
-  persistSingleTrackMeta
+  persistSingleTrackMeta,
+  resolveNativeAudioStreamUrl
 } from '../../../services/sceneRadioMetadataService';
 import {
   initGlobalMediaInterceptors,
@@ -38,7 +46,7 @@ import {
   markSceneRadioUserActive,
   isSceneRadioImmune
 } from '../utils/mediaPlaybackCoordinator';
-import { persistentAudioService } from '../../../services/persistentAudioService';
+import { persistentAudioService, getSilentAudioCarrier } from '../../../services/persistentAudioService';
 
 export interface SceneRadioPlayerProps {
   showSceneRadio?: boolean;
@@ -50,6 +58,181 @@ export interface SceneRadioPlayerProps {
   portalRole?: string;
   userProfile?: any;
 }
+
+// Helper to parse actual Band Name from video title (ignoring record label uploaders & uploader channels)
+export const extractBandNameFromTrack = (track: any): string => {
+  if (!track) return 'Unknown Band';
+  let rawTitle = String(track.title || '').trim();
+  let rawAuthor = String(track.author || '').trim();
+
+  // Decode common HTML entities (e.g. &quot;, &#39;, &amp;)
+  rawTitle = rawTitle
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+
+  rawAuthor = rawAuthor
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+
+  // Clean title from common YouTube brackets like (Official Video), [HD], [Official Audio], etc.
+  const cleanedTitle = rawTitle
+    .replace(/\[(OFFICIAL|AUDIO|MUSIC VIDEO|LYRIC VIDEO|HD|4K|VISUALIZER|FULL ALBUM|TOP TRACKS|REMASTERED).*?\]/gi, '')
+    .replace(/\((OFFICIAL|AUDIO|MUSIC VIDEO|LYRIC VIDEO|HD|4K|VISUALIZER|FULL ALBUM|TOP TRACKS|REMASTERED).*?\)/gi, '')
+    .trim();
+
+  // Look for standard music video title separators: "Band - Song Title", "Band : Song Title", "Band | Song Title", etc.
+  const separators = [' - ', ' – ', ' — ', ' : ', ' | '];
+  for (const sep of separators) {
+    if (cleanedTitle.includes(sep)) {
+      const parts = cleanedTitle.split(sep).map(p => p.trim()).filter(Boolean);
+      if (parts[0] && parts[0].length >= 2) {
+        return parts[0];
+      }
+    }
+  }
+
+  // Check if author is a known record label or aggregator channel
+  const knownLabels = [
+    'nuclear blast', 'metal blade', 'unique leader', 'century media', 'napalm records',
+    'relapse records', 'season of mist', 'profound lore', 'dark descent', 'debemur morti',
+    'indie recordings', 'goregrind', 'slam worldwide', 'death metal promotion', 'hardcore worldwide',
+    'vevo', 'official', 'records', 'entertainment', 'music'
+  ];
+
+  const authorLower = rawAuthor.toLowerCase();
+  const isKnownLabel = knownLabels.some(lbl => authorLower.includes(lbl));
+
+  // If author is NOT a known label, use author if author exists and title didn't have separators
+  if (rawAuthor && !isKnownLabel && rawAuthor.length >= 2) {
+    return rawAuthor.replace(/\s*-\s*Topic$/i, '').replace(/VEVO$/i, '').trim();
+  }
+
+  // Otherwise return cleaned title before separator or full cleaned title
+  return cleanedTitle || rawAuthor || 'Unknown Band';
+};
+
+// Dynamic Theme Accent Color Helper based on active portal role or profile workspace
+export const getRoleAccentTheme = (portalRole?: string, activeWorkspace?: string) => {
+  const role = (activeWorkspace || portalRole || 'band').toLowerCase();
+
+  // Label = Neon Orange
+  if (role.includes('label')) {
+    return {
+      name: 'orange',
+      primaryBg: 'bg-orange-500 hover:bg-orange-400 text-black font-black shadow-orange-950/80',
+      activeBadge: 'bg-orange-950/90 text-orange-300 border-orange-500/60',
+      subtleBg: 'bg-orange-950/40 border-orange-500/40 text-orange-300',
+      text: 'text-orange-400',
+      textBright: 'text-orange-300',
+      border: 'border-orange-500/40',
+      ring: 'ring-orange-500/60',
+      glow: 'shadow-[0_0_20px_rgba(249,115,22,0.4)]',
+      progressFromTo: 'from-orange-500 via-amber-400 to-orange-400',
+      playButton: 'bg-orange-500 hover:bg-orange-400 text-black font-black shadow-lg shadow-orange-950/80',
+      playIcon: 'fill-black text-black',
+      accentHex: '#ff5500'
+    };
+  }
+
+  // Creative = Magenta
+  if (role.includes('creative')) {
+    return {
+      name: 'magenta',
+      primaryBg: 'bg-fuchsia-500 hover:bg-fuchsia-400 text-white font-black shadow-fuchsia-950/80',
+      activeBadge: 'bg-fuchsia-950/90 text-fuchsia-300 border-fuchsia-500/60',
+      subtleBg: 'bg-fuchsia-950/40 border-fuchsia-500/40 text-fuchsia-300',
+      text: 'text-fuchsia-400',
+      textBright: 'text-fuchsia-300',
+      border: 'border-fuchsia-500/40',
+      ring: 'ring-fuchsia-500/60',
+      glow: 'shadow-[0_0_20px_rgba(217,70,239,0.4)]',
+      progressFromTo: 'from-fuchsia-500 via-pink-500 to-rose-400',
+      playButton: 'bg-fuchsia-500 hover:bg-fuchsia-400 text-white shadow-lg shadow-fuchsia-950/80',
+      playIcon: 'fill-white text-white',
+      accentHex: '#ff007f'
+    };
+  }
+
+  // Industry Pro = Darker Purple
+  if (role.includes('industry') || role.includes('pro')) {
+    return {
+      name: 'purple',
+      primaryBg: 'bg-purple-800 hover:bg-purple-700 text-white shadow-purple-950/80',
+      activeBadge: 'bg-purple-950/90 text-purple-300 border-purple-600/60',
+      subtleBg: 'bg-purple-950/60 border-purple-600/40 text-purple-300',
+      text: 'text-purple-400',
+      textBright: 'text-purple-300',
+      border: 'border-purple-600/50',
+      ring: 'ring-purple-600/60',
+      glow: 'shadow-[0_0_20px_rgba(147,51,234,0.4)]',
+      progressFromTo: 'from-purple-800 via-purple-700 to-indigo-900',
+      playButton: 'bg-purple-800 hover:bg-purple-700 text-white shadow-lg shadow-purple-950/90',
+      playIcon: 'fill-white text-white',
+      accentHex: '#7e22ce'
+    };
+  }
+
+  // Promoter = Yellow
+  if (role.includes('promoter')) {
+    return {
+      name: 'yellow',
+      primaryBg: 'bg-yellow-400 hover:bg-yellow-300 text-black font-black shadow-yellow-950/80',
+      activeBadge: 'bg-yellow-950/90 text-yellow-300 border-yellow-500/60',
+      subtleBg: 'bg-yellow-950/40 border-yellow-500/40 text-yellow-300',
+      text: 'text-yellow-400',
+      textBright: 'text-yellow-300',
+      border: 'border-yellow-500/40',
+      ring: 'ring-yellow-500/60',
+      glow: 'shadow-[0_0_20px_rgba(234,179,8,0.4)]',
+      progressFromTo: 'from-yellow-500 via-amber-400 to-yellow-300',
+      playButton: 'bg-yellow-400 hover:bg-yellow-300 text-black shadow-lg shadow-yellow-950/80',
+      playIcon: 'fill-black text-black',
+      accentHex: '#eab308'
+    };
+  }
+
+  // Fan = Cyan
+  if (role.includes('fan')) {
+    return {
+      name: 'cyan',
+      primaryBg: 'bg-cyan-400 hover:bg-cyan-300 text-black font-black shadow-cyan-950/80',
+      activeBadge: 'bg-cyan-950/90 text-cyan-300 border-cyan-500/60',
+      subtleBg: 'bg-cyan-950/40 border-cyan-500/40 text-cyan-300',
+      text: 'text-cyan-400',
+      textBright: 'text-cyan-300',
+      border: 'border-cyan-500/40',
+      ring: 'ring-cyan-500/60',
+      glow: 'shadow-[0_0_20px_rgba(34,211,238,0.4)]',
+      progressFromTo: 'from-cyan-500 via-sky-400 to-blue-400',
+      playButton: 'bg-cyan-400 hover:bg-cyan-300 text-black shadow-lg shadow-cyan-950/80',
+      playIcon: 'fill-black text-black',
+      accentHex: '#00e5ff'
+    };
+  }
+
+  // Band = Neon Green (#39ff14)
+  return {
+    name: 'green',
+    primaryBg: 'bg-[#39ff14] hover:bg-[#28d00d] text-black font-black shadow-emerald-950/80',
+    activeBadge: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60',
+    subtleBg: 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300',
+    text: 'text-[#39ff14]',
+    textBright: 'text-emerald-300',
+    border: 'border-emerald-500/40',
+    ring: 'ring-emerald-500/60',
+    glow: 'shadow-[0_0_20px_rgba(57,255,20,0.4)]',
+    progressFromTo: 'from-[#39ff14] via-[#00ffcc] to-emerald-400',
+    playButton: 'bg-[#39ff14] hover:bg-[#28d00d] text-black shadow-lg shadow-[#39ff14]/30',
+    playIcon: 'fill-black text-black',
+    accentHex: '#39ff14'
+  };
+};
 
 // Helper to choose a completely random genre on initial mount
 const getRandomRadioGenre = (): keyof typeof RADIO_PLAYLISTS => {
@@ -79,6 +262,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
   userProfile,
 }) => {
   const isBandWorkspace = portalRole === 'band' || userProfile?.active_workspace === 'band';
+  const theme = getRoleAccentTheme(portalRole, userProfile?.active_workspace);
   const [internalShowSceneRadio, setInternalShowSceneRadio] = useState(true);
   const showSceneRadio = externalShowSceneRadio !== undefined ? externalShowSceneRadio : internalShowSceneRadio;
   const setShowSceneRadio = externalSetShowSceneRadio || setInternalShowSceneRadio;
@@ -95,6 +279,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
   const currentVideoIndexRef = useRef<number>(0);
   const isShuffleRef = useRef<boolean>(true);
   const [isShuffle, setIsShuffle] = useState<boolean>(true);
+  const wasPlayingWhenHiddenRef = useRef<boolean>(false);
 
   // Keep ref synchronized with state
   useEffect(() => {
@@ -112,6 +297,203 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
   const [radioPlayerError, setRadioPlayerError] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
   const [searchPlaylistQuery, setSearchPlaylistQuery] = useState('');
+
+  // Clip Video Overlay Controls Auto-Hide State
+  const [showClipControls, setShowClipControls] = useState<boolean>(true);
+  const clipControlsTimerRef = useRef<any>(null);
+
+  const resetClipControlsTimer = () => {
+    setShowClipControls(true);
+    if (clipControlsTimerRef.current) {
+      clearTimeout(clipControlsTimerRef.current);
+    }
+    if (sceneRadioPlaying) {
+      clipControlsTimerRef.current = setTimeout(() => {
+        setShowClipControls(false);
+      }, 2200);
+    }
+  };
+
+  useEffect(() => {
+    if (showVideo && sceneRadioPlaying) {
+      resetClipControlsTimer();
+    } else if (!showVideo) {
+      setShowClipControls(true);
+      if (clipControlsTimerRef.current) {
+        clearTimeout(clipControlsTimerRef.current);
+      }
+    }
+  }, [showVideo, sceneRadioPlaying]);
+
+  // Matched App Band Profile State
+  const [matchedBandProfile, setMatchedBandProfile] = useState<any | null>(null);
+  const [isFollowingMatched, setIsFollowingMatched] = useState<boolean>(false);
+  const lastQueriedArtistRef = useRef<string>('');
+
+  // Automatically query Supabase / profiles whenever currently playing track changes
+  useEffect(() => {
+    let active = true;
+    const currentTrack = playlistVideos[currentVideoIndex];
+    if (!currentTrack) {
+      setMatchedBandProfile(null);
+      lastQueriedArtistRef.current = '';
+      return;
+    }
+
+    const searchArtistName = extractBandNameFromTrack(currentTrack);
+    if (!searchArtistName || searchArtistName.trim().length < 2) {
+      setMatchedBandProfile(null);
+      lastQueriedArtistRef.current = '';
+      return;
+    }
+
+    const cleanQuery = searchArtistName.trim().toLowerCase();
+    if (lastQueriedArtistRef.current === cleanQuery && matchedBandProfile) {
+      return;
+    }
+    lastQueriedArtistRef.current = cleanQuery;
+
+    const resolveMatchedProfile = async () => {
+      const client = getSupabase();
+      if (!client) return;
+
+      const cleanQuery = searchArtistName.trim().toLowerCase();
+
+      try {
+        // 1. Query bands table first
+        const { data: bandData } = await client
+          .from('bands')
+          .select('*')
+          .ilike('band_name', `%${cleanQuery}%`)
+          .limit(1);
+
+        if (active && bandData && bandData.length > 0) {
+          const b = bandData[0];
+          const prof = {
+            id: `db-band-${b.id}`,
+            raw_id: b.id,
+            band_id: b.id,
+            user_id: b.creator_id || b.user_id,
+            name: b.band_name || b.name,
+            role: 'Band',
+            category: 'bands',
+            genre: Array.isArray(b.micro_genres) ? b.micro_genres.join(' / ') : (b.micro_genres || 'Death Metal'),
+            location: [b.city, b.state_province || b.state, b.country].filter(Boolean).join(', '),
+            desc: b.bio || `${b.band_name} on Nexus Network`,
+            avatar: b.logo_url || b.cover_url || b.avatar_url || '',
+            image: b.logo_url || b.cover_url || b.avatar_url || '',
+            banner: b.cover_url || '',
+            isBandProfile: true,
+            isRealBand: true
+          };
+          setMatchedBandProfile(prof);
+
+            setIsFollowingMatched(isProfileFollowedGlobally(prof));
+          return;
+        }
+
+        // 2. Query profiles table
+        const { data: profData } = await client
+          .from('profiles')
+          .select('*')
+          .or(`full_name.ilike.%${cleanQuery}%,band_name.ilike.%${cleanQuery}%`)
+          .limit(1);
+
+        if (active && profData && profData.length > 0) {
+          const p = profData[0];
+          const profName = p.bandName || p.full_name || p.display_name || p.name;
+          const prof = {
+            id: `db-p-${p.id}`,
+            raw_id: p.id,
+            user_id: p.id,
+            name: profName,
+            role: p.role || 'Band',
+            category: 'bands',
+            desc: p.bio || 'Artist Profile on Nexus',
+            avatar: p.avatar_url || p.avatar || '',
+            image: p.avatar_url || p.avatar || '',
+            banner: p.banner_url || ''
+          };
+          setMatchedBandProfile(prof);
+
+            setIsFollowingMatched(isProfileFollowedGlobally(prof));
+          return;
+        }
+
+        if (active) {
+          const rawBandName = searchArtistName.trim();
+          const fallbackProf = {
+            id: `artist-${cleanQuery.replace(/[^a-z0-9]/g, '-')}`,
+            raw_id: cleanQuery,
+            name: rawBandName,
+            role: 'Band',
+            category: 'bands',
+            genre: RADIO_PLAYLISTS[selectedRadioGenre]?.name || 'Scene Radio',
+            desc: `${rawBandName} • Featured Artist on Nexus Core Scene Radio`,
+            avatar: currentTrack.thumbnailUrl || (currentTrack.videoId ? `https://i.ytimg.com/vi/${currentTrack.videoId}/hqdefault.jpg` : ''),
+            image: currentTrack.thumbnailUrl || (currentTrack.videoId ? `https://i.ytimg.com/vi/${currentTrack.videoId}/hqdefault.jpg` : ''),
+            isSynthetic: true,
+            isBandProfile: true
+          };
+          setMatchedBandProfile(fallbackProf);
+
+            setIsFollowingMatched(isProfileFollowedGlobally(fallbackProf));
+        }
+      } catch (err) {
+        if (active) {
+          const rawBandName = searchArtistName.trim();
+          const fallbackProf = {
+            id: `artist-${cleanQuery.replace(/[^a-z0-9]/g, '-')}`,
+            raw_id: cleanQuery,
+            name: rawBandName,
+            role: 'Band',
+            category: 'bands',
+            genre: RADIO_PLAYLISTS[selectedRadioGenre]?.name || 'Scene Radio',
+            desc: `${rawBandName} • Featured Artist on Nexus Core Scene Radio`,
+            avatar: currentTrack.thumbnailUrl || (currentTrack.videoId ? `https://i.ytimg.com/vi/${currentTrack.videoId}/hqdefault.jpg` : ''),
+            image: currentTrack.thumbnailUrl || (currentTrack.videoId ? `https://i.ytimg.com/vi/${currentTrack.videoId}/hqdefault.jpg` : ''),
+            isSynthetic: true,
+            isBandProfile: true
+          };
+          setMatchedBandProfile(fallbackProf);
+        }
+      }
+    };
+
+    resolveMatchedProfile();
+
+    return () => {
+      active = false;
+    };
+  }, [currentVideoIndex, selectedRadioGenre]);
+
+  const [showFollowBandPopup, setShowFollowBandPopup] = useState<boolean>(false);
+
+  // Toggle follow handler for matched app band
+  const handleToggleFollowMatched = () => {
+    if (!matchedBandProfile) return;
+    const nextState = !isFollowingMatched;
+    setIsFollowingMatched(nextState);
+    saveFollowStateGlobally(matchedBandProfile, nextState);
+  };
+
+  // Re-sync follow state in real-time when global follow event fires
+  useEffect(() => {
+    const syncFollow = () => {
+      if (matchedBandProfile) {
+        setIsFollowingMatched(isProfileFollowedGlobally(matchedBandProfile));
+      }
+    };
+    syncFollow();
+    if (typeof window !== 'undefined') {
+      window.addEventListener(FOLLOW_EVENT_NAME, syncFollow);
+      window.addEventListener('storage', syncFollow);
+      return () => {
+        window.removeEventListener(FOLLOW_EVENT_NAME, syncFollow);
+        window.removeEventListener('storage', syncFollow);
+      };
+    }
+  }, [matchedBandProfile]);
   
   // Live Song Progress & Duration States
   const [currentTime, setCurrentTime] = useState(0);
@@ -123,6 +505,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
   const handleRadioVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value, 10);
     setRadioVolume(val);
+    persistentAudioService.setVolume(val / 100);
     if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === 'function') {
       try {
         ytPlayerRef.current.setVolume(val);
@@ -151,10 +534,8 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       const isLiked = next.has(videoId);
       if (isLiked) {
         next.delete(videoId);
-        triggerNotification?.(`💔 Removed "${trackTitle || 'Track'}" from favorites`);
       } else {
         next.add(videoId);
-        triggerNotification?.(`❤️ Liked "${trackTitle || 'Track'}"! Saved to favorites`);
       }
       try {
         localStorage.setItem('nexus_liked_radio_tracks', JSON.stringify(Array.from(next)));
@@ -181,23 +562,37 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     });
     window.dispatchEvent(customEvent);
 
-    // Copy direct YouTube URL to clipboard
-    const ytUrl = `https://www.youtube.com/watch?v=${track.videoId}`;
+    // Copy direct YouTube URL to clipboard with playlist context
+    const playlistId = RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId;
+    const ytUrl = playlistId
+      ? `https://www.youtube.com/watch?v=${track.videoId}&list=${playlistId}`
+      : `https://www.youtube.com/watch?v=${track.videoId}`;
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
       navigator.clipboard.writeText(ytUrl).catch(() => {});
     }
-
-    triggerNotification?.(`🚀 Track "${track.title}" loaded into Post Creator! Edit & Post to publish.`);
   };
 
   const ytPlayerRef = useRef<any>(null);
   const hasUserInteractedWithRadio = useRef(false);
+  const userInitiatedPauseRef = useRef<boolean>(false);
+  const currentNativeStreamUrlRef = useRef<string | null>(null);
 
-  // Poll current playback position & total duration from YouTube Iframe API
+  // Poll current playback position & total duration from YouTube Iframe API or Native Fallback Stream
   useEffect(() => {
     let interval: any = null;
     if (sceneRadioPlaying) {
       interval = setInterval(() => {
+        if (persistentAudioService.isPlayingNativeFallback()) {
+          const cur = persistentAudioService.getCurrentTime() || 0;
+          const dur = persistentAudioService.getDuration() || 0;
+          if (!isScrubbing) {
+            setCurrentTime(cur);
+          }
+          if (dur > 0) {
+            setDuration(dur);
+          }
+          return;
+        }
         if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
           try {
             const cur = ytPlayerRef.current.getCurrentTime() || 0;
@@ -207,6 +602,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
             }
             if (dur > 0) {
               setDuration(dur);
+              persistentAudioService.updateMediaSessionPosition(cur, dur);
             }
           } catch (e) {
             // ignore API timing glitches
@@ -229,7 +625,9 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const seekTime = parseFloat(e.target.value);
     setCurrentTime(seekTime);
-    if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+    if (persistentAudioService.isPlayingNativeFallback()) {
+      persistentAudioService.seek(seekTime);
+    } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
       ytPlayerRef.current.seekTo(seekTime, true);
     }
   };
@@ -289,6 +687,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       }
 
       if (isPlaying) {
+        userInitiatedPauseRef.current = true;
         sceneRadioPlayingRef.current = false;
         if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
           try {
@@ -297,13 +696,16 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
             // ignore
           }
         }
+        persistentAudioService.pause();
+        try {
+          (window as any).NexusNativeAudio?.pauseForegroundAudio?.();
+        } catch (_) {}
         setSceneRadioPlaying(false);
 
-        // Toast notification: alert user that scene radio has been paused for media playback
+        // Pause scene radio for media playback
         const now = Date.now();
         if (now - lastPauseToastTimeRef.current > 1200) {
           lastPauseToastTimeRef.current = now;
-          triggerNotificationRef.current?.("📻 Scene Radio paused");
           setPauseToastMessage("📻 Scene Radio paused");
           setTimeout(() => setPauseToastMessage(null), 3200);
         }
@@ -339,9 +741,11 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       console.warn("[RADIO PLAYER] Direct batch enrichment note:", e);
     }
 
-    // 2. Also attempt server-side batch route if running with active Node backend
+    // 2. Also attempt server-side batch route if running with active Node backend and authenticated session
     try {
-      const resp = await fetch(`/api/playlist/${playlistId}/enrich`, {
+      const token = await getSupabaseAccessToken();
+      if (!token) return;
+      const resp = await authFetch(`/api/playlist/${playlistId}/enrich`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ videoIds: nativeIds })
@@ -392,10 +796,13 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
            // Persist retrieved track metadata directly to cache and Supabase
            if (videoData.title && !videoData.title.startsWith("Track ")) {
              persistSingleTrackMeta(currentPlaylistId, updatedTrack);
-             fetch(`/api/playlist/${currentPlaylistId}/tracks`, {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ tracks: [updatedTrack] })
+             getSupabaseAccessToken().then((token) => {
+               if (!token) return;
+               authFetch(`/api/playlist/${currentPlaylistId}/tracks`, {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ tracks: [updatedTrack] })
+               }).catch(() => {});
              }).catch(() => {});
            }
          }
@@ -478,9 +885,49 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
           },
           onStateChange: (event: any) => {
             if (event.data === 1) { // Playing
+              userInitiatedPauseRef.current = false;
+              sceneRadioPlayingRef.current = true;
               setSceneRadioPlaying(true);
               setRadioPlayerError(null);
+              wasPlayingWhenHiddenRef.current = false;
+              persistentAudioService.restoreCarrierMode();
             } else if (event.data === 2) { // Paused
+              // If the user did NOT initiate pause, the OS / background visibility change auto-paused the iframe
+              if (!userInitiatedPauseRef.current && sceneRadioPlayingRef.current && !showVideo) {
+                console.log('[RADIO PLAYER] Background/OS auto-pause detected — maintaining continuous background playback...');
+                wasPlayingWhenHiddenRef.current = true;
+                try {
+                  if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === 'function') {
+                    ytPlayerRef.current.playVideo();
+                  }
+                } catch (_) {}
+
+                setTimeout(() => {
+                  if (!userInitiatedPauseRef.current && sceneRadioPlayingRef.current) {
+                    let ytState = -1;
+                    try {
+                      ytState = ytPlayerRef.current?.getPlayerState?.() ?? -1;
+                    } catch (_) {}
+                    if (ytState !== 1) {
+                      const curTrack = playlistVideosRef.current[currentVideoIndexRef.current];
+                      const fallbackUrl = currentNativeStreamUrlRef.current || curTrack?.audioUrl;
+                      if (fallbackUrl) {
+                        persistentAudioService.activateNativeStreamFallback(fallbackUrl, radioVolume / 100);
+                      } else if (curTrack) {
+                        resolveNativeAudioStreamUrl(curTrack).then((url) => {
+                          if (url && sceneRadioPlayingRef.current && !userInitiatedPauseRef.current) {
+                            currentNativeStreamUrlRef.current = url;
+                            persistentAudioService.activateNativeStreamFallback(url, radioVolume / 100);
+                          }
+                        }).catch(() => {});
+                      }
+                    }
+                  }
+                }, 350);
+                return;
+              }
+              wasPlayingWhenHiddenRef.current = false;
+              sceneRadioPlayingRef.current = false;
               setSceneRadioPlaying(false);
             } else if (event.data === 0) { // Track Ended
               // Continuous Random Radio: if user hasn't locked onto a specific track, pick another random track!
@@ -556,11 +1003,20 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
 
   const togglePlayPause = () => {
     hasUserInteractedWithRadio.current = true;
+    try {
+      localStorage.setItem('ft_tip_scene_radio_play', 'true');
+      localStorage.setItem('nexus_tooltip_dismissed_scene_radio_play', 'true');
+    } catch (_) {}
+    window.dispatchEvent(new CustomEvent('nexus_tooltip_dismissed', { detail: { id: 'scene_radio_play' } }));
     if (!sceneRadioPlaying) {
+      userInitiatedPauseRef.current = false;
+      sceneRadioPlayingRef.current = true;
       markSceneRadioUserActive(3000);
     }
     if (!ytPlayerRef.current || typeof ytPlayerRef.current.playVideo !== 'function') {
       const playlistId = RADIO_PLAYLISTS[selectedRadioGenre].playlistId;
+      userInitiatedPauseRef.current = false;
+      sceneRadioPlayingRef.current = true;
       setSceneRadioPlaying(true);
       initYoutubePlayer(playlistId, currentVideoIndex);
       return;
@@ -568,9 +1024,17 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
 
     try {
       if (sceneRadioPlaying) {
+        userInitiatedPauseRef.current = true;
+        sceneRadioPlayingRef.current = false;
         ytPlayerRef.current.pauseVideo();
+        persistentAudioService.pause();
+        try {
+          (window as any).NexusNativeAudio?.pauseForegroundAudio?.();
+        } catch (_) {}
         setSceneRadioPlaying(false);
       } else {
+        userInitiatedPauseRef.current = false;
+        sceneRadioPlayingRef.current = true;
         markSceneRadioUserActive(3000);
         ytPlayerRef.current.playVideo();
         setSceneRadioPlaying(true);
@@ -580,18 +1044,26 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     }
   };
 
+  // Keep playlistVideos ref synchronized for background media controls and lockscreen callbacks
+  const playlistVideosRef = useRef<any[]>([]);
+  useEffect(() => {
+    playlistVideosRef.current = playlistVideos;
+  }, [playlistVideos]);
+
   const handleNextSong = () => {
     hasUserInteractedWithRadio.current = true;
+    userInitiatedPauseRef.current = false;
     markSceneRadioUserActive(3000);
+    const list = playlistVideosRef.current;
     // In continuous random radio mode, skip to a random track
-    if (!userSelectedTrackRef.current && playlistVideos.length > 1) {
-      const nextIdx = getRandomTrackIndex(playlistVideos.length, currentVideoIndex);
+    if (!userSelectedTrackRef.current && list.length > 1) {
+      const nextIdx = getRandomTrackIndex(list.length, currentVideoIndexRef.current);
       setCurrentVideoIndex(nextIdx);
       currentVideoIndexRef.current = nextIdx;
       if (ytPlayerRef.current) {
         if (typeof ytPlayerRef.current.getPlaylist === 'function') {
           const ids = ytPlayerRef.current.getPlaylist() || [];
-          const targetId = playlistVideos[nextIdx]?.videoId;
+          const targetId = list[nextIdx]?.videoId;
           const idxInYt = ids.indexOf(targetId);
           if (idxInYt !== -1 && typeof ytPlayerRef.current.playVideoAt === 'function') {
             ytPlayerRef.current.playVideoAt(idxInYt);
@@ -607,22 +1079,24 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       if (ytPlayerRef.current && typeof ytPlayerRef.current.nextVideo === 'function') {
         ytPlayerRef.current.nextVideo();
       } else {
-        setCurrentVideoIndex(prevIndex => (prevIndex + 1) % Math.max(playlistVideos.length, 1));
+        setCurrentVideoIndex(prevIndex => (prevIndex + 1) % Math.max(list.length, 1));
       }
     }
   };
 
   const handlePrevSong = () => {
     hasUserInteractedWithRadio.current = true;
+    userInitiatedPauseRef.current = false;
     markSceneRadioUserActive(3000);
-    if (!userSelectedTrackRef.current && playlistVideos.length > 1) {
-      const prevIdx = getRandomTrackIndex(playlistVideos.length, currentVideoIndex);
+    const list = playlistVideosRef.current;
+    if (!userSelectedTrackRef.current && list.length > 1) {
+      const prevIdx = getRandomTrackIndex(list.length, currentVideoIndexRef.current);
       setCurrentVideoIndex(prevIdx);
       currentVideoIndexRef.current = prevIdx;
       if (ytPlayerRef.current) {
         if (typeof ytPlayerRef.current.getPlaylist === 'function') {
           const ids = ytPlayerRef.current.getPlaylist() || [];
-          const targetId = playlistVideos[prevIdx]?.videoId;
+          const targetId = list[prevIdx]?.videoId;
           const idxInYt = ids.indexOf(targetId);
           if (idxInYt !== -1 && typeof ytPlayerRef.current.playVideoAt === 'function') {
             ytPlayerRef.current.playVideoAt(idxInYt);
@@ -638,9 +1112,48 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       if (ytPlayerRef.current && typeof ytPlayerRef.current.previousVideo === 'function') {
         ytPlayerRef.current.previousVideo();
       } else {
-        setCurrentVideoIndex(prevIndex => (prevIndex - 1 + playlistVideos.length) % Math.max(playlistVideos.length, 1));
+        setCurrentVideoIndex(prevIndex => (prevIndex - 1 + list.length) % Math.max(list.length, 1));
       }
     }
+  };
+
+  // Pre-resolve native audio stream URL for current track so background fallback is instant
+  useEffect(() => {
+    let active = true;
+    const curTrack = playlistVideos[currentVideoIndex];
+    if (!curTrack) {
+      currentNativeStreamUrlRef.current = null;
+      return;
+    }
+    currentNativeStreamUrlRef.current = curTrack.audioUrl || null;
+    resolveNativeAudioStreamUrl(curTrack).then((url) => {
+      if (active && url) {
+        currentNativeStreamUrlRef.current = url;
+        // If already in background fallback mode (e.g. track advanced while app minimized), play new stream immediately
+        if (sceneRadioPlayingRef.current && (persistentAudioService.isPlayingNativeFallback() || (typeof document !== 'undefined' && document.hidden))) {
+          let ytState = -1;
+          try {
+            ytState = ytPlayerRef.current?.getPlayerState?.() ?? -1;
+          } catch (_) {}
+          if (ytState !== 1) {
+            persistentAudioService.activateNativeStreamFallback(url, radioVolume / 100);
+          }
+        }
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [currentVideoIndex, playlistVideos, selectedRadioGenre, radioVolume]);
+
+  const resolveTrackArtworkUrl = (track: any): string => {
+    if (track?.thumbnailUrl && typeof track.thumbnailUrl === 'string' && track.thumbnailUrl.trim().length > 5) {
+      return track.thumbnailUrl.trim();
+    }
+    if (track?.videoId) {
+      return `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+    }
+    return '/icon-512.png';
   };
 
   // Wire up native MediaSession API (Lock screen metadata, notification tray controls)
@@ -652,18 +1165,26 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       try {
         const title = curTrack?.title || `${genreName} Stream`;
         const artist = curTrack?.author || `Nexus ${genreName} Radio`;
-        const artwork = curTrack?.thumbnailUrl || '/icon-512.png';
+        const artwork = resolveTrackArtworkUrl(curTrack);
+        const lower = artwork.toLowerCase();
+        const mimeType = lower.includes('.png') || lower.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+
+        const artworkList: MediaImage[] = artwork.includes('/hqdefault.jpg')
+          ? [
+              { src: artwork.replace('/hqdefault.jpg', '/mqdefault.jpg'), sizes: '320x180', type: 'image/jpeg' },
+              { src: artwork, sizes: '480x360', type: 'image/jpeg' },
+              { src: artwork.replace('/hqdefault.jpg', '/maxresdefault.jpg'), sizes: '1280x720', type: 'image/jpeg' },
+            ]
+          : [
+              { src: artwork, sizes: '256x256', type: mimeType },
+              { src: artwork, sizes: '512x512', type: mimeType },
+            ];
 
         navigator.mediaSession.metadata = new MediaMetadata({
           title,
           artist,
-          album: `Nexus Scene Radio • ${genreName}`,
-          artwork: [
-            { src: artwork, sizes: '96x96', type: 'image/png' },
-            { src: artwork, sizes: '128x128', type: 'image/png' },
-            { src: artwork, sizes: '256x256', type: 'image/png' },
-            { src: artwork, sizes: '512x512', type: 'image/png' },
-          ]
+          album: 'Scene Radio',
+          artwork: artworkList,
         });
 
         navigator.mediaSession.setActionHandler('play', () => {
@@ -678,6 +1199,16 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         navigator.mediaSession.setActionHandler('previoustrack', () => {
           handlePrevSong();
         });
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (details.seekTime !== undefined && details.seekTime !== null) {
+            setCurrentTime(details.seekTime);
+            if (persistentAudioService.isPlayingNativeFallback()) {
+              persistentAudioService.seek(details.seekTime);
+            } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+              ytPlayerRef.current.seekTo(details.seekTime, true);
+            }
+          }
+        });
         navigator.mediaSession.setActionHandler('stop', () => {
           if (sceneRadioPlayingRef.current) togglePlayPause();
         });
@@ -687,53 +1218,146 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     }
   }, [currentVideoIndex, playlistVideos, selectedRadioGenre]);
 
-  // Synchronize playback state with MediaSession and native Android BackgroundAudioService
+  const prevPlayingRef = useRef<boolean>(false);
+  const prevGenreRef = useRef<string>(selectedRadioGenre);
+
+  // Synchronize playback state with persistentAudioService, MediaSession, and window.NexusNativeAudio
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+    const curTrack = playlistVideos[currentVideoIndex];
+    const genreName = RADIO_PLAYLISTS[selectedRadioGenre]?.name || 'Scene Radio';
+    const title = curTrack?.title || `${genreName} Radio Track`;
+    const artist = curTrack?.author || `Nexus Radio (${genreName})`;
+    const artwork = resolveTrackArtworkUrl(curTrack);
+    const nativeBridge = typeof window !== 'undefined' ? (window as any).NexusNativeAudio : null;
+
+    if (sceneRadioPlaying) {
+      const isStartingOrStationChange = !prevPlayingRef.current || prevGenreRef.current !== selectedRadioGenre;
       try {
-        navigator.mediaSession.playbackState = sceneRadioPlaying ? 'playing' : 'paused';
+        if (nativeBridge) {
+          if (typeof nativeBridge.setAudioActive === 'function') {
+            nativeBridge.setAudioActive(true);
+          }
+          if (isStartingOrStationChange) {
+            if (typeof nativeBridge.startForegroundAudioWithArtwork === 'function') {
+              nativeBridge.startForegroundAudioWithArtwork(title, artist, genreName, artwork);
+            } else if (typeof nativeBridge.startForegroundAudio === 'function') {
+              nativeBridge.startForegroundAudio(title, artist, genreName);
+            }
+          } else if (typeof nativeBridge.updateMetadataWithArtwork === 'function') {
+            nativeBridge.updateMetadataWithArtwork(title, artist, genreName, artwork);
+          } else if (typeof nativeBridge.updateMetadata === 'function') {
+            nativeBridge.updateMetadata(title, artist);
+          } else if (typeof nativeBridge.startForegroundAudio === 'function') {
+            nativeBridge.startForegroundAudio(title, artist, genreName);
+          }
+        }
+      } catch (_) {}
+
+      persistentAudioService.play({
+        id: curTrack?.videoId || `radio_${selectedRadioGenre}_${currentVideoIndex}`,
+        title: title,
+        artist: artist,
+        album: 'Scene Radio',
+        genre: genreName,
+        artworkUrl: artwork,
+        audioUrl: curTrack?.audioUrl || getSilentAudioCarrier(),
+        fallbackStreamUrl: currentNativeStreamUrlRef.current || undefined,
+        isLiveStream: true
+      }, {
+        onNext: () => handleNextSong(),
+        onPrevious: () => handlePrevSong(),
+        onPlay: () => {
+          if (!sceneRadioPlayingRef.current) togglePlayPause();
+        },
+        onPause: () => {
+          if (sceneRadioPlayingRef.current) togglePlayPause();
+        }
+      });
+    } else if (prevPlayingRef.current) {
+      persistentAudioService.pause();
+      try {
+        nativeBridge?.pauseForegroundAudio?.();
       } catch (_) {}
     }
 
-    // Forward to native Android BackgroundAudioService if running in Capacitor
-    try {
-      const nativeBridge = (window as any).NexusNativeAudio;
-      if (nativeBridge) {
-        const curTrack = playlistVideos[currentVideoIndex];
-        const genreName = RADIO_PLAYLISTS[selectedRadioGenre]?.name || 'Scene Radio';
-        const title = curTrack?.title || `${genreName} Stream`;
-        const artist = curTrack?.author || `Nexus Radio (${genreName})`;
-
-        if (sceneRadioPlaying) {
-          nativeBridge.startForegroundAudio(title, artist, genreName);
-        } else {
-          nativeBridge.pauseForegroundAudio();
-        }
-      }
-    } catch (e) {
-      console.warn('[RADIO PLAYER] Native bridge sync notice:', e);
-    }
+    prevPlayingRef.current = sceneRadioPlaying;
+    prevGenreRef.current = selectedRadioGenre;
   }, [sceneRadioPlaying, currentVideoIndex, playlistVideos, selectedRadioGenre]);
 
-  // Listen for native audio interruptions (e.g. phone call, audio focus loss, headset unplugged)
+  // Stop foreground audio on component unmount
+  useEffect(() => {
+    return () => {
+      try {
+        (window as any).NexusNativeAudio?.stopForegroundAudio?.();
+      } catch (_) {}
+    };
+  }, []);
+
+  // Listen for native audio interruptions (e.g. phone call or headset unplugged or OS media notification control)
   useEffect(() => {
     const handleNativeInterruption = (e: any) => {
       const action = e.detail?.action;
+      console.log('[RADIO PLAYER] Native audio event received:', action);
+
       if (action === 'pause' && sceneRadioPlayingRef.current) {
+        if (isSceneRadioImmune()) {
+          console.log('[RADIO PLAYER] Ignoring native pause during immunity window');
+          return;
+        }
+        userInitiatedPauseRef.current = true;
+        sceneRadioPlayingRef.current = false;
         if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
           try {
             ytPlayerRef.current.pauseVideo();
           } catch (_) {}
         }
+        persistentAudioService.pause();
+        try {
+          (window as any).NexusNativeAudio?.pauseForegroundAudio?.();
+        } catch (_) {}
         setSceneRadioPlaying(false);
-        triggerNotification?.('🎧 Audio paused due to incoming call or unplugged headset');
-      } else if (action === 'resume' && !sceneRadioPlayingRef.current) {
+      } else if ((action === 'resume' || action === 'play') && !sceneRadioPlayingRef.current) {
+        userInitiatedPauseRef.current = false;
+        sceneRadioPlayingRef.current = true;
+        markSceneRadioUserActive(3000);
+        setSceneRadioPlaying(true);
         if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === 'function') {
           try {
             ytPlayerRef.current.playVideo();
-            setSceneRadioPlaying(true);
           } catch (_) {}
         }
+        if (typeof document !== 'undefined' && document.hidden && currentNativeStreamUrlRef.current) {
+          persistentAudioService.activateNativeStreamFallback(currentNativeStreamUrlRef.current, radioVolume / 100);
+        } else {
+          persistentAudioService.resume();
+        }
+      } else if (action === 'next') {
+        handleNextSong();
+      } else if (action === 'previous') {
+        handlePrevSong();
+      } else if (action === 'seek') {
+        const seekSec = Math.max(0, (Number(e.detail?.positionMs) || 0) / 1000);
+        setCurrentTime(seekSec);
+        if (persistentAudioService.isPlayingNativeFallback()) {
+          persistentAudioService.seek(seekSec);
+        } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+          try {
+            ytPlayerRef.current.seekTo(seekSec, true);
+          } catch (_) {}
+        }
+      } else if (action === 'stop') {
+        userInitiatedPauseRef.current = true;
+        sceneRadioPlayingRef.current = false;
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+          try {
+            ytPlayerRef.current.pauseVideo();
+          } catch (_) {}
+        }
+        persistentAudioService.stop();
+        try {
+          (window as any).NexusNativeAudio?.stopForegroundAudio?.();
+        } catch (_) {}
+        setSceneRadioPlaying(false);
       }
     };
 
@@ -744,13 +1368,15 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
       handleDeviceChange = () => {
         if (sceneRadioPlayingRef.current) {
+          userInitiatedPauseRef.current = true;
+          sceneRadioPlayingRef.current = false;
           if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
             try {
               ytPlayerRef.current.pauseVideo();
             } catch (_) {}
           }
+          persistentAudioService.pause();
           setSceneRadioPlaying(false);
-          triggerNotification?.('🎧 Headset disconnected — radio paused');
         }
       };
       navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
@@ -762,7 +1388,65 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
       }
     };
-  }, [triggerNotification]);
+  }, [triggerNotification, radioVolume]);
+
+  // Keep audio playback seamless across document visibility, backgrounding, and window focus transitions
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (typeof document === 'undefined') return;
+      if (document.hidden && sceneRadioPlayingRef.current && !userInitiatedPauseRef.current) {
+        // App was minimized or screen locked while playing
+        try {
+          (window as any).NexusNativeAudio?.setAudioActive?.(true);
+          ytPlayerRef.current?.playVideo?.();
+        } catch (_) {}
+
+        setTimeout(() => {
+          if (typeof document !== 'undefined' && document.hidden && sceneRadioPlayingRef.current && !userInitiatedPauseRef.current) {
+            let ytState = -1;
+            try {
+              ytState = ytPlayerRef.current?.getPlayerState?.() ?? -1;
+            } catch (_) {}
+            if (ytState !== 1) {
+              const curTrack = playlistVideosRef.current[currentVideoIndexRef.current];
+              const fallbackUrl = currentNativeStreamUrlRef.current || curTrack?.audioUrl;
+              if (fallbackUrl) {
+                persistentAudioService.activateNativeStreamFallback(fallbackUrl, radioVolume / 100);
+              } else if (curTrack) {
+                resolveNativeAudioStreamUrl(curTrack).then((url) => {
+                  if (url && sceneRadioPlayingRef.current && !userInitiatedPauseRef.current) {
+                    currentNativeStreamUrlRef.current = url;
+                    persistentAudioService.activateNativeStreamFallback(url, radioVolume / 100);
+                  }
+                }).catch(() => {});
+              }
+            }
+          }
+        }, 400);
+      } else if (!document.hidden && (wasPlayingWhenHiddenRef.current || sceneRadioPlayingRef.current) && !userInitiatedPauseRef.current) {
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.getPlayerState === 'function') {
+          const state = ytPlayerRef.current.getPlayerState();
+          // If video was paused (2) or cued (5) while user intended playback, resume
+          if (state !== 1 && typeof ytPlayerRef.current.playVideo === 'function') {
+            try {
+              ytPlayerRef.current.playVideo();
+            } catch (_) {}
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('blur', handleVisibilityOrFocus);
+    window.addEventListener('pagehide', handleVisibilityOrFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('blur', handleVisibilityOrFocus);
+      window.removeEventListener('pagehide', handleVisibilityOrFocus);
+    };
+  }, [radioVolume]);
 
 
   // Select a specific track from the playlist queue
@@ -788,7 +1472,6 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         ytPlayerRef.current.playVideoAt(video.originalIndex);
       }
     }
-    triggerNotification?.(`🎵 Now playing: "${video.title}"`);
   };
 
   // Toggle Shuffle / Random Mode
@@ -801,14 +1484,12 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       if (ytPlayerRef.current && typeof ytPlayerRef.current.setShuffle === 'function') {
         ytPlayerRef.current.setShuffle(true);
       }
-      triggerNotification?.("🎲 Endless Random Radio Mode Active!");
     } else {
       setUserSelectedTrack(true);
       userSelectedTrackRef.current = true;
       if (ytPlayerRef.current && typeof ytPlayerRef.current.setShuffle === 'function') {
         ytPlayerRef.current.setShuffle(false);
       }
-      triggerNotification?.("🔁 Sequential Queue Mode Active");
     }
   };
 
@@ -819,46 +1500,104 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
       setUserSelectedTrack(false);
       userSelectedTrackRef.current = false;
       setSelectedRadioGenre(genreKey);
-      triggerNotification?.(`📻 Tuned into ${RADIO_PLAYLISTS[genreKey].name} Radio!`);
     }
   };
 
-  // Auto-play random track 3 seconds after feed opens only
+  // Auto-play random track within 3 seconds of the feed loading
   useEffect(() => {
-    // Do not start on app mount; only wait until 3 seconds after the feed opens
-    if (activeTab !== 'feed') return;
+    const isFeed = activeTab === 'feed' || activeTab === 'social';
+    if (!isFeed) return;
 
-    const autoPlayTimer = setTimeout(() => {
-      if (!hasUserInteractedWithRadio.current) {
-        console.log("[RADIO PLAYER] Auto-playing random track 3 seconds after feed opened...");
+    let isDisposed = false;
+    console.log("[RADIO PLAYER] Feed loaded — scheduled Scene Radio autoplay within 3 seconds...");
+
+    const executeAutoPlay = () => {
+      if (isDisposed) return;
+      if (!hasUserInteractedWithRadio.current && !sceneRadioPlayingRef.current) {
+        console.log("[RADIO PLAYER] 3 seconds elapsed since feed loading — auto-playing Scene Radio...");
+        markSceneRadioUserActive(5000);
         setSceneRadioPlaying(true);
         sceneRadioPlayingRef.current = true;
-        if (ytPlayerRef.current) {
-          try {
-            if (typeof ytPlayerRef.current.getPlaylist === 'function') {
-              const ids = ytPlayerRef.current.getPlaylist() || [];
-              if (ids.length > 0 && typeof ytPlayerRef.current.playVideoAt === 'function') {
+
+        const startAutoPlayback = () => {
+          if (ytPlayerRef.current) {
+            try {
+              if (typeof ytPlayerRef.current.unMute === 'function') {
+                ytPlayerRef.current.unMute();
+              }
+              if (typeof ytPlayerRef.current.setVolume === 'function') {
+                ytPlayerRef.current.setVolume(radioVolume);
+              }
+              if (typeof ytPlayerRef.current.getPlaylist === 'function') {
+                const ids = ytPlayerRef.current.getPlaylist() || [];
+                if (ids.length > 0 && typeof ytPlayerRef.current.playVideoAt === 'function') {
                   const targetIdx = !userSelectedTrackRef.current
                     ? (currentVideoIndexRef.current >= 0 && currentVideoIndexRef.current < ids.length ? currentVideoIndexRef.current : getRandomTrackIndex(ids.length))
                     : 0;
                   ytPlayerRef.current.playVideoAt(targetIdx);
-              } else if (typeof ytPlayerRef.current.playVideo === 'function') {
-                  ytPlayerRef.current.playVideo();
+                  return;
+                }
               }
-            } else if (typeof ytPlayerRef.current.playVideo === 'function') {
-              ytPlayerRef.current.playVideo();
+              if (typeof ytPlayerRef.current.playVideo === 'function') {
+                ytPlayerRef.current.playVideo();
+                return;
+              }
+            } catch (e) {
+              console.warn("[RADIO PLAYER] Auto-play call error:", e);
             }
-          } catch (e) {
-            console.warn("[RADIO PLAYER] Auto-play call error:", e);
           }
-        }
+
+          // If YT player is still bootstrapping, initialize it with current playlist and random track
+          const playlistId = RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId;
+          if (playlistId) {
+            initYoutubePlayer(playlistId, currentVideoIndexRef.current);
+          }
+        };
+
+        startAutoPlayback();
+
+        // Browser Autoplay Resilience:
+        // If unmuted playback is blocked before the user's first document gesture,
+        // trigger playback on the very first gesture (touch, scroll, click, keydown)
+        const handleFirstUserGesture = () => {
+          if (sceneRadioPlayingRef.current && ytPlayerRef.current) {
+            try {
+              if (typeof ytPlayerRef.current.unMute === 'function') ytPlayerRef.current.unMute();
+              if (typeof ytPlayerRef.current.playVideo === 'function') ytPlayerRef.current.playVideo();
+            } catch (_) {}
+          }
+          cleanupGestureListeners();
+        };
+
+        const cleanupGestureListeners = () => {
+          window.removeEventListener('pointerdown', handleFirstUserGesture);
+          window.removeEventListener('keydown', handleFirstUserGesture);
+          window.removeEventListener('touchstart', handleFirstUserGesture);
+        };
+
+        window.addEventListener('pointerdown', handleFirstUserGesture, { passive: true, once: true });
+        window.addEventListener('keydown', handleFirstUserGesture, { passive: true, once: true });
+        window.addEventListener('touchstart', handleFirstUserGesture, { passive: true, once: true });
       }
-    }, 3000);
+    };
+
+    const autoPlayTimer = setTimeout(executeAutoPlay, 3000);
+
+    const handleFeedLoaded = () => {
+      // Fast-path if feed explicitly signals loaded
+      if (!hasUserInteractedWithRadio.current && !sceneRadioPlayingRef.current) {
+        clearTimeout(autoPlayTimer);
+        setTimeout(executeAutoPlay, 3000);
+      }
+    };
+    window.addEventListener('nexus_feed_loaded', handleFeedLoaded);
 
     return () => {
+      isDisposed = true;
       clearTimeout(autoPlayTimer);
+      window.removeEventListener('nexus_feed_loaded', handleFeedLoaded);
     };
-  }, [activeTab]);
+  }, [activeTab, selectedRadioGenre]);
 
   useEffect(() => {
     let active = true;
@@ -909,8 +1648,77 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
     };
   }, [selectedRadioGenre]);
 
+  const isAutoTucked = isTucked || activeTab === 'reels' || (activeTab === 'messages' && Boolean(selectedChatId));
+
   return (
     <>
+      {/* 
+        PERMANENT ROOT YOUTUBE HOST ELEMENT
+        Must NEVER be unmounted. Placed at the root level outside any AnimatePresence.
+        When expanded & showVideo is true, display it floating above the footer controls.
+        When collapsed or audio-only, position it offscreen with non-zero dimensions (w-[200px] h-[200px]) so YouTube never throttles playback due to 0x0 iframe bounds.
+      */}
+      <div
+        data-scene-radio="true"
+        aria-hidden={!(isRadioExpanded && showVideo)}
+        onMouseMove={resetClipControlsTimer}
+        onTouchStart={resetClipControlsTimer}
+        onClick={() => setShowClipControls(prev => !prev)}
+        className={`fixed z-[99999] transition-all duration-300 ${
+          isRadioExpanded && showVideo
+            ? 'bottom-[185px] sm:bottom-[210px] left-1/2 -translate-x-1/2 w-[94vw] max-w-4xl h-[210px] sm:h-[310px] bg-zinc-950/95 border border-rose-500/40 rounded-2xl overflow-hidden shadow-[0_10px_50px_rgba(225,29,72,0.35)] backdrop-blur-2xl pointer-events-auto group/clip'
+            : 'left-[-9999px] top-[-9999px] w-[200px] h-[200px] opacity-0 pointer-events-none'
+        }`}
+      >
+        <div id="youtube-radio-player" data-scene-radio="true" className="w-full h-full bg-black pointer-events-auto" />
+
+        {/* Auto-Hiding Video Controls Overlay */}
+        {isRadioExpanded && showVideo && (
+          <div 
+            className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/80 flex flex-col justify-between p-3 pointer-events-none transition-opacity duration-300 z-10 ${
+              showClipControls ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {/* Top Clip Bar */}
+            <div className="flex items-center justify-between pointer-events-auto">
+              <div className="flex items-center gap-2 bg-black/80 backdrop-blur-md px-3 py-1 rounded-full border border-rose-500/40 shadow-lg">
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                <span className="text-[10px] font-mono font-bold text-white truncate max-w-[200px] sm:max-w-[340px]">
+                  {playlistVideos[currentVideoIndex]?.title || 'Scene Radio Clip'}
+                </span>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowVideo(false);
+                }}
+                className="w-8 h-8 rounded-full bg-black/80 hover:bg-rose-950 border border-zinc-700 text-white flex items-center justify-center transition-all cursor-pointer shadow-lg active:scale-95"
+                title="Close Clip View"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Bottom Clip Bar */}
+            <div className="flex items-center justify-between pointer-events-auto">
+              <span className="text-[9px] font-mono text-zinc-300 bg-black/70 px-2.5 py-1 rounded-full backdrop-blur-sm border border-zinc-800">
+                Tap clip to toggle controls
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePlayPause();
+                }}
+                className="px-3.5 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-mono font-bold text-[10.5px] flex items-center gap-1.5 shadow-lg cursor-pointer transition-all active:scale-95"
+              >
+                {sceneRadioPlaying ? <Pause className="w-3.5 h-3.5 fill-white" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+                <span>{sceneRadioPlaying ? 'Pause' : 'Play'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Toast Notification when Scene Radio automatically pauses */}
       <AnimatePresence>
         {pauseToastMessage && (
@@ -928,52 +1736,53 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
         )}
       </AnimatePresence>
 
-      {/* TUCKED MINI-PILL (Visible when user tucks radio to free 100% of bottom screen) */}
+      {/* TUCKED MINI-PILL (Visible when user tucks radio or while on reels/chat to maintain smooth playback) */}
       <AnimatePresence>
-        {showSceneRadio && isTucked && activeTab !== 'reels' && !(activeTab === 'messages' && selectedChatId) && (
+        {showSceneRadio && isAutoTucked && (
           <motion.button
             key="scene-radio-tucked-pill"
             initial={{ y: 30, opacity: 0, scale: 0.9 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 30, opacity: 0, scale: 0.9 }}
             onClick={() => setIsTucked(false)}
-            className="fixed bottom-3 right-3 sm:right-6 z-[9995] px-3.5 py-1.5 rounded-full bg-zinc-950/95 border border-rose-500/60 shadow-[0_4px_25px_rgba(225,29,72,0.4)] flex items-center gap-2 backdrop-blur-xl hover:border-rose-400 transition-all cursor-pointer group active:scale-95"
+            className="fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] right-3 sm:right-6 z-[9995] px-3.5 py-1.5 rounded-full bg-zinc-950/95 border border-rose-500/60 shadow-[0_4px_25px_rgba(225,29,72,0.4)] flex items-center gap-2 backdrop-blur-xl hover:border-rose-400 transition-all cursor-pointer group active:scale-95 overflow-hidden"
             title="Restore Scene Radio Player"
           >
-            <span className={`w-2 h-2 rounded-full ${sceneRadioPlaying ? 'bg-rose-500 animate-ping' : 'bg-zinc-500'}`} />
+            <span className={`w-2 h-2 rounded-full shrink-0 ${sceneRadioPlaying ? 'bg-rose-500 animate-ping' : 'bg-zinc-500'}`} />
             <Radio className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-            <span className="text-[11px] font-mono font-bold text-zinc-200 uppercase tracking-wide truncate max-w-[130px] sm:max-w-[200px]">
-              {playlistVideos[currentVideoIndex]?.title ? playlistVideos[currentVideoIndex].title : 'Scene Radio'}
-            </span>
-            <ChevronUp className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white transition-colors" />
+            <div className="w-[140px] sm:w-[220px] overflow-hidden whitespace-nowrap text-[11px] font-mono font-bold text-zinc-200 uppercase tracking-wide flex items-center">
+              {(() => {
+                const curTrack = playlistVideos[currentVideoIndex];
+                const author = curTrack?.author || '';
+                const title = curTrack?.title || 'Scene Radio';
+                const displayText = author && !title.toLowerCase().includes(author.toLowerCase())
+                  ? `${author} - ${title}`
+                  : title;
+                return (
+                  <span className={`inline-block whitespace-nowrap ${sceneRadioPlaying ? 'animate-marquee-slow pr-8' : 'truncate'}`}>
+                    {displayText} &nbsp;&nbsp;•&nbsp;&nbsp; {displayText}
+                  </span>
+                );
+              })()}
+            </div>
+            <ChevronUp className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white transition-colors shrink-0" />
           </motion.button>
         )}
       </AnimatePresence>
 
       <AnimatePresence>
-        {showSceneRadio && activeTab !== 'reels' && !(activeTab === 'messages' && selectedChatId) && (
+        {showSceneRadio && !isAutoTucked && (
         <motion.div
           key="scene-radio-footer-player"
           initial={{ y: 100, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
-          className={`fixed bottom-0 left-0 right-0 ${
+          className={`fixed bottom-0 left-0 right-0 pb-[env(safe-area-inset-bottom)] ${
             isRadioExpanded ? 'z-[9999]' : 'z-[9990]'
           } w-full bg-[#09090b]/95 backdrop-blur-xl border-t border-zinc-800/80 shadow-[0_-4px_30px_rgba(0,0,0,0.85)] flex flex-col group transition-all duration-300 ${
-            traysHiddenOnMobile || isTucked ? 'pointer-events-none opacity-0 translate-y-16' : 'opacity-100 translate-y-0'
+            traysHiddenOnMobile ? 'pointer-events-none opacity-0 translate-y-16' : 'opacity-100 translate-y-0'
           }`}
         >
-          {/* PERSISTENT YOUTUBE PLAYER EMBED (Kept continuously mounted so audio never stops when minimizing) */}
-          <div
-            data-scene-radio="true"
-            className={`w-full max-w-5xl mx-auto bg-black relative overflow-hidden transition-all duration-300 shrink-0 ${
-              isRadioExpanded && showVideo
-                ? 'h-[160px] opacity-100 border-b border-zinc-800'
-                : 'h-0 opacity-0 pointer-events-none'
-            }`}
-          >
-            <div id="youtube-radio-player" data-scene-radio="true" className="absolute inset-0 bg-black w-full h-full" />
-          </div>
 
           {/* EXPANDED INTERACTIVE PLAYER PANEL (Rises above footer when expanded) */}
           <AnimatePresence>
@@ -993,14 +1802,17 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       <button
                         key={`radio-genre-${genreKey}-${gIdx}`}
                         onClick={() => handleSelectGenre(genreKey)}
-                        className={`px-3.5 py-2 sm:py-2.5 rounded-lg text-[10px] sm:text-xs font-black uppercase tracking-wider font-mono shrink-0 transition-all border cursor-pointer min-h-[38px] sm:min-h-[42px] flex items-center justify-center ${
+                        className={`px-3.5 py-2 sm:py-2.5 rounded-lg text-[10px] sm:text-xs font-black uppercase tracking-wider font-mono shrink-0 transition-all border cursor-pointer min-h-[38px] sm:min-h-[42px] flex items-center justify-center gap-1.5 ${
                           isActive
-                            ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-950/60 scale-[1.02]'
+                            ? `${theme.primaryBg} ${theme.glow} scale-[1.03] animate-pulse ring-2 ${theme.ring}`
                             : 'bg-zinc-900/90 text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-850 active:scale-95'
                         }`}
                       >
+                        {isActive && (
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
+                        )}
                         {RADIO_PLAYLISTS[genreKey].name.split(' ').map((word, wIdx) => (
-                          <span key={`radio-word-${genreKey}-${wIdx}-${word}`} className={wIdx > 0 ? 'text-rose-300 ml-0.5' : ''}>{word} </span>
+                          <span key={`radio-word-${genreKey}-${wIdx}-${word}`} className={wIdx > 0 ? `${theme.textBright} ml-0.5` : ''}>{word} </span>
                         ))}
                       </button>
                     );
@@ -1008,7 +1820,6 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                   <button
                     onClick={() => {
                       persistentAudioService.requestBatteryExemption();
-                      triggerNotification?.('🔋 Requested Unrestricted Battery access for background radio');
                     }}
                     title="Allow Background Audio playback in Android system settings"
                     className="ml-auto px-2.5 py-1.5 rounded-lg text-[9px] font-mono text-zinc-400 hover:text-emerald-300 border border-zinc-800 hover:border-emerald-500/40 bg-zinc-900/60 hover:bg-emerald-950/20 transition-all flex items-center gap-1 shrink-0 cursor-pointer"
@@ -1024,7 +1835,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                   {/* Title & Artist Display */}
                   <div className="flex items-center gap-3">
                     {/* Disc / Thumbnail */}
-                    <div className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-black overflow-hidden border border-zinc-800 shrink-0 shadow-md group-hover:border-rose-500/40 transition-colors">
+                    <div className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-black overflow-hidden border border-zinc-800 shrink-0 shadow-md group-hover:border-zinc-700 transition-colors">
                       {playlistVideos[currentVideoIndex]?.thumbnailUrl ? (
                         <img
                           referrerPolicy="no-referrer"
@@ -1033,13 +1844,13 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-rose-500">
+                        <div className={`w-full h-full bg-zinc-900 flex items-center justify-center ${theme.text}`}>
                           <Radio className="w-6 h-6 animate-pulse" />
                         </div>
                       )}
                       {sceneRadioPlaying && (
                         <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center">
-                          <div className="w-3.5 h-3.5 rounded-full bg-rose-500 animate-ping" />
+                          <div className={`w-3.5 h-3.5 rounded-full animate-ping ${theme.primaryBg}`} />
                         </div>
                       )}
                     </div>
@@ -1063,9 +1874,52 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                           <div className="truncate text-zinc-500">Loading channel tracks...</div>
                         )}
                       </div>
-                      <span className="text-[10px] sm:text-xs text-rose-400/90 truncate font-mono mt-0.5">
-                        {playlistVideos[currentVideoIndex]?.author || 'Unknown Channel'}
-                      </span>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <span className={`text-[10px] sm:text-xs truncate font-mono ${theme.text}`}>
+                          {playlistVideos[currentVideoIndex]?.author || 'Unknown Channel'}
+                        </span>
+                        {matchedBandProfile && (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.dispatchEvent(new CustomEvent('nexus_open_public_profile', {
+                                  detail: { profile: matchedBandProfile }
+                                }));
+                              }}
+                              className={`px-2 py-0.5 rounded-full border text-[8px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors ${theme.subtleBg}`}
+                              title={`Open ${matchedBandProfile.name}'s App Profile`}
+                            >
+                              <User className={`w-2.5 h-2.5 ${theme.text}`} />
+                              <span className="truncate max-w-[90px]">{matchedBandProfile.name}</span>
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleFollowMatched();
+                              }}
+                              className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-black uppercase tracking-wider transition-all border flex items-center gap-1 cursor-pointer active:scale-95 shadow-sm ${
+                                isFollowingMatched
+                                  ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
+                                  : `${theme.primaryBg} animate-pulse`
+                              }`}
+                              title={isFollowingMatched ? `Following ${matchedBandProfile.name}` : `Follow ${matchedBandProfile.name} on Nexus`}
+                            >
+                              {isFollowingMatched ? (
+                                <>
+                                  <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                  <span>Following</span>
+                                </>
+                              ) : (
+                                <>
+                                  <UserPlus className="w-2.5 h-2.5 text-white" />
+                                  <span>+ Follow</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Action Buttons: Share, Like / Favorite, Open YouTube & Close */}
@@ -1081,7 +1935,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                         className="p-1.5 sm:p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white cursor-pointer transition-colors"
                         title="Share Track to Community Feed"
                       >
-                        <Share2 className="w-4 h-4 text-rose-400" />
+                        <Share2 className={`w-4 h-4 ${theme.text}`} />
                       </button>
                       <button
                         onClick={() => {
@@ -1093,22 +1947,22 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                         disabled={playlistVideos.length === 0}
                         className={`p-1.5 sm:p-2 rounded-lg border transition-all cursor-pointer ${
                           likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId)
-                            ? 'bg-rose-950/80 border-rose-500/50 text-rose-400 scale-105 shadow-sm shadow-rose-950'
+                            ? `${theme.subtleBg} ${theme.text} scale-105 shadow-sm`
                             : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300'
                         }`}
                         title={likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? "Unlike Song" : "Favorite Song"}
                       >
-                        <Heart className={`w-4 h-4 ${likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? 'fill-rose-500 text-rose-500' : ''}`} />
+                        <Heart className={`w-4 h-4 ${likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? `fill-current ${theme.text}` : ''}`} />
                       </button>
                       {playlistVideos[currentVideoIndex]?.videoId && (
                         <a
-                          href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}`}
+                          href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}&list=${RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId || ''}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="p-1.5 sm:p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-white cursor-pointer transition-colors flex items-center justify-center"
                           title="Open directly on YouTube (Bypass Age Gate)"
                         >
-                          <ExternalLink className="w-4 h-4 text-rose-400" />
+                          <ExternalLink className={`w-4 h-4 ${theme.text}`} />
                         </a>
                       )}
                       <button
@@ -1130,10 +1984,10 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       </div>
                       {playlistVideos[currentVideoIndex]?.videoId && (
                         <a
-                          href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}`}
+                          href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}&list=${RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId || ''}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1 shrink-0 transition-all shadow-md shadow-rose-950 cursor-pointer"
+                          className={`px-2.5 py-1 rounded font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1 shrink-0 transition-all shadow-md cursor-pointer ${theme.primaryBg}`}
                           title="Bypass Age Limit - Play directly on YouTube"
                         >
                           <span>Open YouTube</span>
@@ -1144,7 +1998,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                   ) : (
                     <div className="flex flex-col gap-1 w-full pt-1">
                       <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 px-0.5">
-                        <span className="text-rose-400 font-bold">{formatTime(currentTime)}</span>
+                        <span className={`${theme.text} font-bold`}>{formatTime(currentTime)}</span>
                         <span className="text-zinc-500 font-medium">{formatTime(duration)}</span>
                       </div>
                       <div className="relative w-full flex items-center h-3 group cursor-pointer">
@@ -1159,9 +2013,9 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                           onTouchStart={() => setIsScrubbing(true)}
                           onTouchEnd={() => setIsScrubbing(false)}
                           onChange={handleSeek}
-                          className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-rose-500 focus:outline-none transition-all hover:h-2"
+                          className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer focus:outline-none transition-all hover:h-2"
                           style={{
-                            background: `linear-gradient(to right, #e11d48 0%, #e11d48 ${
+                            background: `linear-gradient(to right, ${theme.accentHex} 0%, ${theme.accentHex} ${
                               duration > 0 ? (currentTime / duration) * 100 : 0
                             }%, #27272a ${
                               duration > 0 ? (currentTime / duration) * 100 : 0
@@ -1179,12 +2033,12 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       onClick={() => setShowVideo(!showVideo)}
                       className={`p-1.5 px-2.5 rounded-lg border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                         showVideo
-                          ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                          ? `${theme.subtleBg}`
                           : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
                       }`}
                       title="Toggle Video Embed View"
                     >
-                      <Video className="w-3.5 h-3.5 text-rose-400" />
+                      <Video className={`w-3.5 h-3.5 ${theme.text}`} />
                       <span>{showVideo ? 'Hide Clip' : 'View Clip'}</span>
                     </button>
 
@@ -1193,7 +2047,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       <button
                         onClick={toggleShuffleMode}
                         className={`p-1.5 rounded transition-colors cursor-pointer ${
-                          !userSelectedTrack && isShuffle ? 'text-rose-400 bg-rose-950/50 border border-rose-500/30' : 'text-zinc-500 hover:text-zinc-300'
+                          !userSelectedTrack && isShuffle ? `${theme.text} ${theme.subtleBg}` : 'text-zinc-500 hover:text-zinc-300'
                         }`}
                         title={!userSelectedTrack && isShuffle ? "Random Radio Active (Click for Sequential)" : "Sequential / Locked Track (Click for Random Radio)"}
                       >
@@ -1210,21 +2064,13 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       <button
                         onClick={togglePlayPause}
                         disabled={playlistVideos.length === 0}
-                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer disabled:opacity-50 ${
-                          isBandWorkspace
-                            ? 'bg-[#39ff14] hover:bg-[#28d00d] text-black shadow-lg shadow-[#39ff14]/30'
-                            : portalRole === 'promoter'
-                            ? 'bg-yellow-400 hover:bg-yellow-300 text-black shadow-lg shadow-yellow-500/30'
-                            : portalRole === 'fan_only'
-                            ? 'bg-cyan-400 hover:bg-cyan-300 text-black shadow-lg shadow-cyan-500/30'
-                            : 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-950/60'
-                        }`}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer disabled:opacity-50 ${theme.playButton}`}
                         title={sceneRadioPlaying ? "Pause" : "Play"}
                       >
                         {sceneRadioPlaying ? (
-                          <Pause className={`w-4 h-4 ${isBandWorkspace || portalRole === 'promoter' || portalRole === 'fan_only' ? 'fill-black text-black' : 'fill-white text-white'}`} />
+                          <Pause className={`w-4 h-4 ${theme.playIcon}`} />
                         ) : (
-                          <Play className={`w-4 h-4 ml-0.5 ${isBandWorkspace || portalRole === 'promoter' || portalRole === 'fan_only' ? 'fill-black text-black' : 'fill-white text-white'}`} />
+                          <Play className={`w-4 h-4 ml-0.5 ${theme.playIcon}`} />
                         )}
                       </button>
                       <button
@@ -1248,19 +2094,29 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                 <div className="flex-grow flex flex-col overflow-hidden min-h-0 bg-zinc-950/90 backdrop-blur-sm">
                   {/* Playlist Search/Header */}
                   <div className="px-3 py-2 border-b border-zinc-900 flex items-center justify-between bg-zinc-950 shrink-0">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <Music className="w-3.5 h-3.5 text-rose-500" />
-                      <span className="text-[9px] font-black uppercase tracking-wider text-zinc-300 font-mono">PLAYLIST QUEUE</span>
+                    <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                      <Music className={`w-3.5 h-3.5 ${theme.text} shrink-0`} />
+                      <span className="text-[9px] font-black uppercase tracking-wider text-zinc-300 font-mono shrink-0">PLAYLIST QUEUE</span>
+                      <a
+                        href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex]?.videoId || 'JCN8qkWVu1w'}&list=${RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId || ''}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-1 border transition-all cursor-pointer shrink-0 ${theme.subtleBg}`}
+                        title={`Open ${RADIO_PLAYLISTS[selectedRadioGenre].name} playlist on YouTube`}
+                      >
+                        <ExternalLink className={`w-2.5 h-2.5 ${theme.text}`} />
+                        <span>OPEN ON YOUTUBE</span>
+                      </a>
                       <button
                         onClick={toggleShuffleMode}
-                        className={`ml-1 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-1 border transition-all cursor-pointer ${
+                        className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-1 border transition-all cursor-pointer shrink-0 ${
                           !userSelectedTrack && isShuffle
-                            ? 'bg-rose-950/80 text-rose-300 border-rose-500/40'
+                            ? `${theme.subtleBg}`
                             : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
                         }`}
                         title={!userSelectedTrack && isShuffle ? "Endless Random Radio Mode Active. Click to switch to sequential mode." : "Track Locked. Click to switch to endless random mode."}
                       >
-                        <Sparkles className="w-2.5 h-2.5 text-rose-400" />
+                        <Sparkles className={`w-2.5 h-2.5 ${theme.text}`} />
                         <span>{!userSelectedTrack && isShuffle ? 'RANDOM RADIO' : 'LOCKED TRACK'}</span>
                       </button>
                     </div>
@@ -1271,7 +2127,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                         placeholder="Search songs..."
                         value={searchPlaylistQuery}
                         onChange={(e) => setSearchPlaylistQuery(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5 text-[9.5px] text-zinc-300 focus:outline-none focus:border-rose-500/50 font-mono"
+                        className={`w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5 text-[9.5px] text-zinc-300 focus:outline-none focus:${theme.border} font-mono`}
                       />
                     </div>
                   </div>
@@ -1280,7 +2136,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                   <div className="flex-grow overflow-y-auto min-h-0 p-2 space-y-1 custom-scrollbar max-h-[180px] sm:max-h-[220px]">
                     {isLoadingPlaylist ? (
                       <div className="flex flex-col items-center justify-center py-6 gap-2 text-zinc-500 font-mono text-[9.5px]">
-                        <RefreshCw className="w-4 h-4 animate-spin text-rose-500" />
+                        <RefreshCw className={`w-4 h-4 animate-spin ${theme.text}`} />
                         <span>Loading scene tracks...</span>
                       </div>
                     ) : playlistVideos.length === 0 ? (
@@ -1309,7 +2165,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                               }}
                               className={`w-full flex items-center gap-2 p-1.5 rounded-lg text-left transition-all cursor-pointer border ${
                                 isCurrent
-                                  ? 'bg-rose-950/40 border-rose-500/30 text-rose-200'
+                                  ? `${theme.subtleBg}`
                                   : 'bg-zinc-900/30 hover:bg-zinc-900/80 border-transparent text-zinc-400 hover:text-zinc-200'
                               }`}
                             >
@@ -1317,9 +2173,9 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                               <div className="w-4 text-center shrink-0">
                                 {isCurrent && sceneRadioPlaying ? (
                                   <span className="flex items-center justify-center gap-0.5">
-                                    <span className="w-0.5 h-2.5 bg-rose-500 animate-[bounce_0.6s_infinite]" />
-                                    <span className="w-0.5 h-3 bg-rose-400 animate-[bounce_0.8s_infinite_0.1s]" />
-                                    <span className="w-0.5 h-1.5 bg-rose-500 animate-[bounce_0.5s_infinite_0.2s]" />
+                                    <span className={`w-0.5 h-2.5 ${theme.primaryBg} animate-[bounce_0.6s_infinite]`} />
+                                    <span className={`w-0.5 h-3 ${theme.primaryBg} animate-[bounce_0.8s_infinite_0.1s]`} />
+                                    <span className={`w-0.5 h-1.5 ${theme.primaryBg} animate-[bounce_0.5s_infinite_0.2s]`} />
                                   </span>
                                 ) : (
                                   <span className="text-[9px] font-mono font-bold text-zinc-600">
@@ -1356,7 +2212,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                                     e.stopPropagation();
                                     handleShareTrackPost(video);
                                   }}
-                                  className="p-1 rounded text-zinc-600 hover:text-rose-400 transition-colors"
+                                  className={`p-1 rounded text-zinc-600 hover:${theme.text} transition-colors`}
                                   title="Share track as post"
                                 >
                                   <Share2 className="w-3.5 h-3.5" />
@@ -1367,11 +2223,11 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                                     toggleLikeTrack(video.videoId, video.title);
                                   }}
                                   className={`p-1 rounded transition-colors ${
-                                    likedTrackIds.has(video.videoId) ? 'text-rose-500 scale-110' : 'text-zinc-600 hover:text-zinc-400'
+                                    likedTrackIds.has(video.videoId) ? `${theme.text} scale-110` : 'text-zinc-600 hover:text-zinc-400'
                                   }`}
                                   title={likedTrackIds.has(video.videoId) ? "Unlike song" : "Favorite song"}
                                 >
-                                  <Heart className={`w-3.5 h-3.5 ${likedTrackIds.has(video.videoId) ? 'fill-rose-500 text-rose-500' : ''}`} />
+                                  <Heart className={`w-3.5 h-3.5 ${likedTrackIds.has(video.videoId) ? `fill-current ${theme.text}` : ''}`} />
                                 </button>
                               </div>
                             </div>
@@ -1389,15 +2245,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
             {/* Live Progress Bar on Top Border of Docked Footer */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-zinc-900/90 overflow-hidden">
               <div
-                className={`h-full transition-all duration-300 ${
-                  isBandWorkspace
-                    ? 'bg-gradient-to-r from-[#39ff14] via-[#00ffcc] to-emerald-400'
-                    : portalRole === 'promoter'
-                    ? 'bg-gradient-to-r from-yellow-500 via-amber-400 to-yellow-300'
-                    : portalRole === 'fan_only'
-                    ? 'bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-400'
-                    : 'bg-gradient-to-r from-rose-600 via-rose-500 to-rose-400'
-                }`}
+                className={`h-full transition-all duration-300 bg-gradient-to-r ${theme.progressFromTo}`}
                 style={{
                   width: duration > 0 ? `${Math.min(100, Math.max(0, (currentTime / duration) * 100))}%` : (sceneRadioPlaying ? '100%' : '0%')
                 }}
@@ -1411,7 +2259,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
               title="Click to toggle Queue & Channels"
             >
               {/* Currently Playing Track Artwork Thumbnail */}
-              <div className="relative w-8 h-8 sm:w-10 sm:h-10 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden shadow-sm group-hover:border-rose-500/50 transition-colors">
+              <div className="relative w-8 h-8 sm:w-10 sm:h-10 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden shadow-sm group-hover:border-zinc-700 transition-colors">
                 {(() => {
                   const currentTrack = playlistVideos[currentVideoIndex];
                   const thumb = currentTrack?.thumbnailUrl || (currentTrack?.videoId ? `https://i.ytimg.com/vi/${currentTrack.videoId}/hqdefault.jpg` : null);
@@ -1426,7 +2274,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                     );
                   }
                   return (
-                    <Disc className={`w-4 h-4 ${isBandWorkspace ? 'text-[#39ff14]' : portalRole === 'promoter' ? 'text-yellow-400' : portalRole === 'fan_only' ? 'text-cyan-400' : 'text-rose-500'} ${sceneRadioPlaying ? 'animate-spin' : ''}`} />
+                    <Disc className={`w-4 h-4 ${theme.text} ${sceneRadioPlaying ? 'animate-spin' : ''}`} />
                   );
                 })()}
               </div>
@@ -1434,12 +2282,8 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
               {/* Title & Channel Marquee */}
               <div className="min-w-0 flex flex-col justify-center">
                 <div className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full animate-ping shrink-0 ${
-                    isBandWorkspace ? 'bg-[#39ff14]' : portalRole === 'promoter' ? 'bg-yellow-400' : portalRole === 'fan_only' ? 'bg-cyan-400' : 'bg-rose-500'
-                  }`} />
-                  <span className={`text-[8.5px] sm:text-[9.5px] font-black uppercase tracking-wider font-mono truncate ${
-                    isBandWorkspace ? 'text-[#39ff14]' : portalRole === 'promoter' ? 'text-yellow-400' : portalRole === 'fan_only' ? 'text-cyan-400' : 'text-rose-400'
-                  }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full animate-ping shrink-0 ${theme.text}`} />
+                  <span className={`text-[8.5px] sm:text-[9.5px] font-black uppercase tracking-wider font-mono truncate ${theme.text}`}>
                     SCENE RADIO • {RADIO_PLAYLISTS[selectedRadioGenre].name} {duration > 0 && `[${formatTime(currentTime)} / ${formatTime(duration)}]`}
                   </span>
                 </div>
@@ -1451,9 +2295,9 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
               </div>
             </div>
 
-            {/* Center Section: Quick Channel Selector (Hidden on mobile, visible on md+) */}
-            <div className="hidden lg:flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0 max-w-[30%]">
-              {(Object.keys(RADIO_PLAYLISTS) as Array<keyof typeof RADIO_PLAYLISTS>).slice(0, 4).map((genreKey, gIdx) => {
+            {/* Center Section: Quick Channel Selector (Hidden on mobile, visible on lg+) */}
+            <div className="hidden lg:flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0 max-w-[35%]">
+              {(Object.keys(RADIO_PLAYLISTS) as Array<keyof typeof RADIO_PLAYLISTS>).slice(0, 5).map((genreKey, gIdx) => {
                 const isActive = selectedRadioGenre === genreKey;
                 return (
                   <button
@@ -1462,12 +2306,15 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                       e.stopPropagation();
                       handleSelectGenre(genreKey);
                     }}
-                    className={`px-2 py-0.5 rounded text-[8.5px] font-black uppercase tracking-wider font-mono shrink-0 transition-all border cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-md text-[8.5px] font-black uppercase tracking-wider font-mono shrink-0 transition-all border cursor-pointer flex items-center gap-1.5 ${
                       isActive
-                        ? 'bg-rose-600/90 text-white border-rose-500'
+                        ? `${theme.primaryBg} animate-pulse ring-1 ${theme.ring}`
                         : 'bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 border-zinc-800'
                     }`}
                   >
+                    {isActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" />
+                    )}
                     {RADIO_PLAYLISTS[genreKey].name.split(' ')[0]}
                   </button>
                 );
@@ -1490,28 +2337,30 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
               </button>
 
               {/* Play / Pause Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePlayPause();
-                }}
-                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer ${
-                  isBandWorkspace
-                    ? 'bg-[#39ff14] hover:bg-[#28d00d] text-black shadow-md shadow-[#39ff14]/30'
-                    : portalRole === 'promoter'
-                    ? 'bg-yellow-400 hover:bg-yellow-300 text-black shadow-md shadow-yellow-500/30'
-                    : portalRole === 'fan_only'
-                    ? 'bg-cyan-400 hover:bg-cyan-300 text-black shadow-md shadow-cyan-500/30'
-                    : 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-950/60'
-                }`}
-                title={sceneRadioPlaying ? "Pause" : "Play"}
+              <FirstTimeTooltip
+                id="scene_radio_play"
+                title="Scene Radio"
+                tip="Play heavy underground metal streams that continue in the background while you browse."
+                position="top"
+                accentColor="rose"
+                autoShow={true}
+                autoShowDelay={1800}
               >
-                {sceneRadioPlaying ? (
-                  <Pause className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isBandWorkspace || portalRole === 'promoter' || portalRole === 'fan_only' ? 'fill-black text-black' : 'fill-white text-white'}`} />
-                ) : (
-                  <Play className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ml-0.5 ${isBandWorkspace || portalRole === 'promoter' || portalRole === 'fan_only' ? 'fill-black text-black' : 'fill-white text-white'}`} />
-                )}
-              </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePlayPause();
+                  }}
+                  className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer ${theme.playButton}`}
+                  title={sceneRadioPlaying ? "Pause" : "Play"}
+                >
+                  {sceneRadioPlaying ? (
+                    <Pause className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${theme.playIcon}`} />
+                  ) : (
+                    <Play className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ml-0.5 ${theme.playIcon}`} />
+                  )}
+                </button>
+              </FirstTimeTooltip>
 
               {/* Next Song */}
               <button
@@ -1537,10 +2386,10 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                     }
                   }}
                   disabled={playlistVideos.length === 0}
-                  className="p-1 sm:p-1.5 text-zinc-500 hover:text-rose-400 disabled:opacity-30 cursor-pointer transition-colors"
+                  className={`p-1 sm:p-1.5 text-zinc-500 hover:${theme.text} disabled:opacity-30 cursor-pointer transition-colors`}
                   title="Share Track as Feed Post"
                 >
-                  <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" />
+                  <Share2 className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${theme.text}`} />
                 </button>
               )}
 
@@ -1556,13 +2405,35 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                 disabled={playlistVideos.length === 0}
                 className={`p-1 sm:p-1.5 transition-colors cursor-pointer ${
                   likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId)
-                    ? 'text-rose-500 scale-110'
+                    ? `${theme.text} scale-110`
                     : 'text-zinc-500 hover:text-zinc-300'
                 }`}
                 title={likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? "Unlike Track" : "Favorite Track"}
               >
-                <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? 'fill-rose-500 text-rose-500' : ''}`} />
+                <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${likedTrackIds.has(playlistVideos[currentVideoIndex]?.videoId) ? `fill-current ${theme.text}` : ''}`} />
               </button>
+
+              {/* Discreet Follow Band Button (Opens Follow Modal) */}
+              {matchedBandProfile && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowFollowBandPopup(true);
+                  }}
+                  className={`p-1 sm:p-1.5 rounded-lg transition-all cursor-pointer ${
+                    isFollowingMatched
+                      ? 'text-emerald-400 hover:text-emerald-300'
+                      : `text-zinc-500 hover:${theme.text}`
+                  }`}
+                  title={isFollowingMatched ? `Following ${matchedBandProfile.name} (Click for Band Profile)` : `Follow ${matchedBandProfile.name} on Nexus`}
+                >
+                  {isFollowingMatched ? (
+                    <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
+                  ) : (
+                    <UserPlus className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${theme.text}`} />
+                  )}
+                </button>
+              )}
 
               {/* Volume Slider Control */}
               <div className="hidden sm:flex items-center gap-1.5 ml-1 pl-2 border-l border-zinc-800">
@@ -1578,7 +2449,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                   className="text-zinc-400 hover:text-white cursor-pointer transition-colors"
                   title={radioVolume > 0 ? "Mute Volume" : "Unmute Volume"}
                 >
-                  {radioVolume > 0 ? <Volume2 className="w-3.5 h-3.5 text-zinc-400" /> : <VolumeX className="w-3.5 h-3.5 text-rose-500" />}
+                  {radioVolume > 0 ? <Volume2 className="w-3.5 h-3.5 text-zinc-400" /> : <VolumeX className={`w-3.5 h-3.5 ${theme.text}`} />}
                 </button>
                 <input
                   type="range"
@@ -1590,7 +2461,8 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                     handleRadioVolumeChange(e);
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="w-16 sm:w-20 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-rose-500"
+                  className="w-16 sm:w-20 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
+                  style={{ accentColor: theme.accentHex }}
                   title={`Volume: ${radioVolume}%`}
                 />
               </div>
@@ -1598,14 +2470,14 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
               {/* Open directly on YouTube Button (Visible when player expanded) */}
               {isRadioExpanded && playlistVideos[currentVideoIndex]?.videoId && (
                 <a
-                  href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}`}
+                  href={`https://www.youtube.com/watch?v=${playlistVideos[currentVideoIndex].videoId}&list=${RADIO_PLAYLISTS[selectedRadioGenre]?.playlistId || ''}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="p-1 sm:p-1.5 text-zinc-500 hover:text-rose-400 transition-colors flex items-center justify-center cursor-pointer"
+                  className={`p-1 sm:p-1.5 text-zinc-500 hover:${theme.text} transition-colors flex items-center justify-center cursor-pointer`}
                   title="Open on YouTube (Bypass Age Gate)"
                 >
-                  <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" />
+                  <ExternalLink className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${theme.text}`} />
                 </a>
               )}
 
@@ -1618,12 +2490,12 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                 }}
                 className={`p-1.5 rounded-lg border text-[10px] font-mono font-bold hidden sm:flex items-center gap-1 transition-all cursor-pointer ${
                   showVideo
-                    ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                    ? theme.activeBadge
                     : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
                 }`}
                 title="Toggle Clip Video View"
               >
-                <Video className="w-3.5 h-3.5 text-rose-400" />
+                <Video className={`w-3.5 h-3.5 ${theme.text}`} />
                 <span className="hidden md:inline">{showVideo ? 'Hide Clip' : 'Clip'}</span>
               </button>
 
@@ -1648,7 +2520,7 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                 }}
                 className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center border transition-colors cursor-pointer ${
                   isRadioExpanded
-                    ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                    ? theme.activeBadge
                     : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border-zinc-800'
                 }`}
                 title={isRadioExpanded ? "Collapse Queue" : "Expand Queue & Channels"}
@@ -1660,21 +2532,129 @@ export const SceneRadioPlayer: React.FC<SceneRadioPlayerProps> = ({
                 )}
               </button>
 
-              {/* Close/Hide Scene Radio Footer (Visible when player expanded) */}
+              {/* Close/Tuck Scene Radio Footer (Visible when player expanded) */}
               {isRadioExpanded && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setShowSceneRadio(false);
+                    setIsTucked(true);
+                    setIsRadioExpanded(false);
                   }}
-                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-zinc-900 hover:bg-rose-950/80 text-zinc-500 hover:text-rose-300 flex items-center justify-center border border-zinc-800 hover:border-rose-800/50 transition-colors cursor-pointer"
-                  title="Hide Scene Radio Footer"
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-500 hover:text-white flex items-center justify-center border border-zinc-800 transition-colors cursor-pointer"
+                  title="Tuck Scene Radio Player to Mini-Pill"
                 >
                   <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
               )}
             </div>
           </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+
+    {/* Follow Band Interactive Popup Modal */}
+    <AnimatePresence>
+      {showFollowBandPopup && matchedBandProfile && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[10000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 select-none"
+          onClick={() => setShowFollowBandPopup(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0, y: 15 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.9, opacity: 0, y: 15 }}
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-md bg-zinc-950 border ${theme.border} rounded-2xl p-5 sm:p-6 ${theme.glow} flex flex-col gap-4 text-left relative overflow-hidden`}
+          >
+            {/* Ambient background glow */}
+            <div
+              className="absolute -top-16 -right-16 w-36 h-36 rounded-full blur-3xl pointer-events-none opacity-30"
+              style={{ backgroundColor: theme.accentHex }}
+            />
+
+            <div className="flex items-center justify-between border-b border-zinc-850 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className={`w-4 h-4 ${theme.text} animate-pulse`} />
+                <span className={`text-xs font-black font-mono uppercase tracking-widest ${theme.text}`}>
+                  Follow Band on Nexus Core
+                </span>
+              </div>
+              <button
+                onClick={() => setShowFollowBandPopup(false)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-start gap-3.5 pt-1">
+              <img
+                src={matchedBandProfile.avatar || matchedBandProfile.image}
+                alt={matchedBandProfile.name}
+                className={`w-16 h-16 rounded-xl object-cover border-2 ${theme.border} shrink-0 shadow-lg`}
+              />
+              <div className="flex flex-col min-w-0">
+                <span className="text-base sm:text-lg font-black text-white font-mono truncate tracking-tight">
+                  {matchedBandProfile.name}
+                </span>
+                <span className={`text-xs ${theme.text} font-mono font-semibold`}>
+                  {matchedBandProfile.genre || 'Scene Radio Featured Artist'}
+                </span>
+                <p className="text-[11px] text-zinc-400 font-mono line-clamp-2 mt-1 leading-relaxed">
+                  {matchedBandProfile.desc || `Official band profile for ${matchedBandProfile.name} on the Nexus Core network.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-3 border-t border-zinc-850">
+              <button
+                onClick={() => {
+                  handleToggleFollowMatched();
+                }}
+                className={`w-full py-3 rounded-xl text-xs font-mono font-black uppercase tracking-wider transition-all border flex items-center justify-center gap-2 cursor-pointer active:scale-95 shadow-lg ${
+                  isFollowingMatched
+                    ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60 shadow-emerald-950/40'
+                    : `${theme.primaryBg} border-transparent animate-pulse`
+                }`}
+              >
+                {isFollowingMatched ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>Following {matchedBandProfile.name} on Nexus</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-4 h-4" />
+                    <span>+ Follow {matchedBandProfile.name} on Nexus</span>
+                  </>
+                )}
+              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setShowFollowBandPopup(false);
+                    window.dispatchEvent(new CustomEvent('nexus_open_public_profile', {
+                      detail: { profile: matchedBandProfile }
+                    }));
+                  }}
+                  className="py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <User className={`w-3.5 h-3.5 ${theme.text}`} />
+                  <span>Public Profile</span>
+                </button>
+                <button
+                  onClick={() => setShowFollowBandPopup(false)}
+                  className="py-2.5 rounded-xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-850 text-zinc-400 hover:text-zinc-200 text-xs font-mono font-bold flex items-center justify-center cursor-pointer transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </motion.div>
       )}
     </AnimatePresence>

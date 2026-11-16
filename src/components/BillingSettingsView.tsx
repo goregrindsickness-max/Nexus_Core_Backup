@@ -3,6 +3,8 @@ import { UserProfile, BILLING_TIER_LIMITS, SubscriptionTier } from '../types';
 import { PROMOTER_BILLING_MATRIX } from '../config/promoterBilling';
 import { ArrowLeft, ChevronLeft, Check, Lock, RefreshCw, Sparkles, Building, Landmark, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
+import { safeSetLocalStorageItem } from '../utils/safeStorage';
+import { authFetch } from '../utils/apiConfig';
 
 interface BillingSettingsViewProps {
   userProfile: UserProfile;
@@ -56,7 +58,7 @@ export default function BillingSettingsView({
       const stripeCustomerId = profileAny?.promoter_metadata?.stripe_customer_id || profileAny?.stripe_customer_id || null;
       const stripeAccountId = profileAny?.promoter_metadata?.stripe_connect_id || profileAny?.stripe_connect_id || null;
 
-      const response = await fetch('/api/payments/create-billing-checkout', {
+      const response = await authFetch('/api/payments/create-billing-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -108,7 +110,7 @@ export default function BillingSettingsView({
         const parsed = JSON.parse(stored);
         parsed.subscription_status = 'canceled';
         parsed.sub_tier = 'free_for_life';
-        localStorage.setItem('nexus_core_user_profile', JSON.stringify(parsed));
+        safeSetLocalStorageItem('nexus_core_user_profile', parsed);
         
         window.dispatchEvent(new CustomEvent('nexus_core_user_profile_updated', { detail: parsed }));
       }

@@ -24,7 +24,8 @@ import {
   AlertTriangle,
   ZoomIn,
   ZoomOut,
-  RotateCcw
+  RotateCcw,
+  ChevronDown
 } from 'lucide-react';
 import { usePinchZoom } from '../../hooks/usePinchZoom';
 import { getSupabase, testPhotoPitStorageConnection } from '../../supabase';
@@ -245,6 +246,7 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
   const [folderToDelete, setFolderToDelete] = useState<string | null>(null);
   const [photoToDelete, setPhotoToDelete] = useState<any | null>(null);
   const [showFolderCreator, setShowFolderCreator] = useState(false);
+  const [isFoldersExpanded, setIsFoldersExpanded] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [gallerySearchQuery, setGallerySearchQuery] = useState('');
   const [galleryLimit, setGalleryLimit] = useState(24);
@@ -270,17 +272,8 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
       if (pProfileId && pProfileId === currentUserId) return true;
       if (pUserId && pUserId === currentUserId) return true;
       if (pAuthorId && pAuthorId === currentUserId) return true;
-
-      // If explicit other user IDs are attached, reject
-      if (pProfileId && pProfileId !== currentUserId) return false;
-      if (pUserId && pUserId !== currentUserId) return false;
-      if (pAuthorId && pAuthorId !== currentUserId) return false;
-
-      // Author marked isYou
-      if (post.author?.isYou === true || post.isYou === true) return true;
       return false;
     } else {
-      if (post.author?.isYou === true || post.isYou === true) return true;
       return false;
     }
   }, [currentUserId]);
@@ -365,7 +358,7 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
 
               const pProfileId = post.profile_id || post.data?.profile_id || post.data?.postedBy || post.author?.id;
               const pUserId = post.user_id || post.data?.user_id;
-              const isMatch = pProfileId === currentUserId || pUserId === currentUserId || post.author?.isYou === true || post.isYou === true;
+              const isMatch = Boolean((pProfileId && pProfileId === currentUserId) || (pUserId && pUserId === currentUserId));
 
               if (isMatch) {
                 const media = post.media_url || post.image || (post.images && post.images[0]);
@@ -690,8 +683,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    triggerNotification?.(`⏳ Compressing and loading ${files.length} image${files.length > 1 ? 's' : ''}...`);
-
     const fileList = Array.from(files);
     const compressedList: string[] = [];
     let processedCount = 0;
@@ -714,7 +705,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
             setPendingPhotos(compressedList);
             setPendingFolder(selectedFolder !== 'All Photos' ? selectedFolder : 'Profile Pics');
             setPendingCaption('');
-            triggerNotification?.(`⚡ ${compressedList.length} image${compressedList.length > 1 ? 's' : ''} ready! Please set folder & feed options.`);
           }
         }
       };
@@ -736,7 +726,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
         let finalImage = photo;
         if (uploadBase64ToStorage) {
           try {
-            triggerNotification?.(`⏳ Uploading memory ${i + 1}/${pendingPhotos.length} to storage...`);
             const publicUrl = await uploadBase64ToStorage(
               photo,
               'photo-pit',
@@ -839,11 +828,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
 
       setPendingPhotos([]);
       setPendingCaption('');
-      triggerNotification?.(
-        postToFeed
-          ? `⚡ ${uploadedUrls.length} photo(s) filed in "${pendingFolder}" & broadcast to feed!`
-          : `🔒 ${uploadedUrls.length} photo(s) quietly saved to Photo Pit vault "${pendingFolder}"!`
-      );
     } catch (err) {
       console.error("Failed to submit photo pit items:", err);
       triggerNotification?.("⚠️ Error uploading photos. Please try again.");
@@ -876,8 +860,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
       const targetCreativeId = userProfile?.creative_id || (userProfile as any)?.registered_creative_id || currentUserId || 'creative_vault';
       const creativeName = userProfile?.creative_metadata?.business_name || (userProfile as any)?.creative_name || (userProfile as any)?.creative_business_name || userProfile?.name || 'Creative Studio';
       const creativeAvatar = userProfile?.creative_avatar || userProfile?.creative_metadata?.creative_avatar || profileAvatarUrl || userProfile?.avatar || userProfile?.avatar_url || '';
-
-      triggerNotification?.(`⏳ Duplicating ${sourcePhotos.length} photo(s) to Creative Workspace under "${targetFolder}"...`);
 
       const supabase = getSupabase();
       const duplicatedPostObjs: any[] = [];
@@ -960,7 +942,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
       }
 
       setAlbumToDuplicate(null);
-      triggerNotification?.(`✨ Successfully duplicated ${sourcePhotos.length} photo(s) into Creative Workspace folder "${targetFolder}"!`);
     } catch (err) {
       console.error("Failed to duplicate album to Creative Workspace:", err);
       triggerNotification?.("⚠️ Error duplicating album to Creative Workspace.");
@@ -994,7 +975,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     }
 
     setFolderToDelete(null);
-    triggerNotification?.(`🗑️ Deleted folder "${folderName}". Photos remain safely in All Photos.`);
   };
 
   // Delete individual photo function
@@ -1172,7 +1152,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     }
 
     setPhotoToDelete(null);
-    triggerNotification?.('🗑️ Photo permanently removed.');
   };
 
   // Replace / Re-upload a photo on an existing post without losing captions or metadata
@@ -1181,7 +1160,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     if (!file || !selectedGalleryItem) return;
 
     setIsReplacingPhoto(true);
-    triggerNotification?.('⏳ Uploading replacement photo to photo-pit storage...');
 
     try {
       const reader = new FileReader();
@@ -1353,9 +1331,7 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
         setSelectedGalleryItem((prev: any) => (prev ? { ...prev, url: newImageUrl } : null));
         
         const isRemoteUrl = newImageUrl && (newImageUrl.startsWith('http://') || newImageUrl.startsWith('https://'));
-        if (isRemoteUrl) {
-          triggerNotification?.('✨ Photo successfully uploaded to photo-pit storage bucket! Caption and folder preserved.');
-        } else {
+        if (!isRemoteUrl) {
           triggerNotification?.('⚠️ Supabase Storage permissions blocked direct bucket upload. Image saved as local fallback. Check storage connection.');
         }
         setIsReplacingPhoto(false);
@@ -1388,14 +1364,12 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     setSelectedFolder(trimmed);
     setNewFolderName('');
     setShowFolderCreator(false);
-    triggerNotification?.(`📁 Created new folder: "${trimmed}"`);
   };
 
   // Full re-sync of Photo Pit & Profile Card gallery with Supabase database
   const [isResyncingProfile, setIsResyncingProfile] = useState<boolean>(false);
   const handleFullResyncWithProfile = async () => {
     setIsResyncingProfile(true);
-    triggerNotification?.('⏳ Synchronizing Photo Pit and Public Profile Card with Supabase...');
     try {
       const supabase = getSupabase();
       const userProfileId = currentUserId || userProfile?.id || userProfile?.uuid || 'guest';
@@ -1448,7 +1422,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('nexus_photos_updated'));
       }
-      triggerNotification?.('✨ Photo Pit and Public Profile Card re-synchronized with latest photos!');
     } catch (err) {
       console.warn('[handleFullResyncWithProfile] Sync error:', err);
       triggerNotification?.('⚠️ Sync completed with local cache.');
@@ -1457,48 +1430,187 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
     }
   };
 
-  return (
-    <div className="max-w-5xl mx-auto px-4 py-6 pb-24 animate-in fade-in duration-300">
-      {/* Photo Pit Intro Header */}
-      <div className="mb-8 flex flex-col items-center justify-center text-center gap-4 border-b border-zinc-900 pb-6">
-        <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-wider text-white [text-shadow:0_0_15px_rgba(59,130,246,0.85),0_0_30px_rgba(37,99,235,0.5),0_0_45px_rgba(29,78,216,0.3)]">
-          Welcome to your Photo Pit
-        </h2>
+  const heroBackdropPhotos = useMemo(
+    () =>
+      galleryItems
+        .map((item: any) => item?.url)
+        .filter((url: unknown): url is string => typeof url === 'string' && url.length > 0)
+        .slice(0, 3),
+    [galleryItems]
+  );
 
-        {/* Action buttons: Search photos bar and +Add Photos */}
-        <div className="w-full flex flex-col sm:flex-row items-center justify-center gap-3 max-w-xl">
-          {/* Search Bar */}
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
-            <input
-              type="text"
-              placeholder="Search photos..."
-              value={gallerySearchQuery}
-              onChange={(e) => setGallerySearchQuery(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800/80 focus:border-blue-500/50 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none transition-all"
-            />
-            {gallerySearchQuery && (
-              <button
-                onClick={() => setGallerySearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+  return (
+    <div className="max-w-5xl mx-auto px-6 sm:px-8 py-5 pb-24 animate-in fade-in duration-300">
+      {/* Option 1: Live Blurred Photo Backdrop Hero */}
+      <div className="relative mb-6 rounded-3xl bg-[#07080d] border border-white/15 p-4 sm:p-6 overflow-hidden shadow-[0_16px_48px_rgba(0,0,0,0.6)]">
+        {/* Dynamic blurred collage from user's latest vault photos */}
+        {heroBackdropPhotos.length > 0 && (
+          <div
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-0 grid ${
+              heroBackdropPhotos.length === 1
+                ? 'grid-cols-1'
+                : heroBackdropPhotos.length === 2
+                  ? 'grid-cols-2'
+                  : 'grid-cols-3'
+            } gap-0 opacity-45 blur-xl scale-110 saturate-150`}
+          >
+            {heroBackdropPhotos.map((src, bIdx) => (
+              <img
+                key={`pit_hero_bg_${bIdx}`}
+                src={src}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Cinematic dark gradient scrim & teal/purple top rim */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#07080d]/65 via-[#080910]/80 to-[#06070b]/95 backdrop-blur-sm"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-purple-400/50 via-teal-300/65 to-purple-400/50"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-24 right-0 w-56 h-56 rounded-full bg-teal-400/15 blur-3xl"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-24 -left-10 w-56 h-56 rounded-full bg-purple-600/20 blur-3xl"
+        />
+
+        <div className="relative z-10">
+          {/* Hero Title + Live Preview Stack */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-teal-300 mb-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_8px_rgba(45,212,191,0.9)]" />
+                <span>Live Media Vault</span>
+                <span className="text-zinc-500">·</span>
+                <span className="text-zinc-300">
+                  {galleryItems.length} Asset{galleryItems.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.7)]">
+                Photo{' '}
+                <span className="bg-gradient-to-r from-teal-300 via-cyan-200 to-purple-300 bg-clip-text text-transparent">
+                  Pit
+                </span>
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+              {selectedFolder !== 'All Photos' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedFolder('All Photos')}
+                  className="text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-zinc-200 hover:text-white hover:border-teal-400/50 transition-colors cursor-pointer"
+                >
+                  <span className="text-teal-300">{selectedFolder}</span> ×
+                </button>
+              )}
+
+              {/* Stacked miniature thumbnail cluster from latest vault photos */}
+              {heroBackdropPhotos.length > 0 && (
+                <div className="flex items-center -space-x-2.5">
+                  {heroBackdropPhotos.map((src, idx) => (
+                    <div
+                      key={`pit_hero_thumb_${idx}`}
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden border border-white/25 bg-zinc-900 shadow-lg ring-1 ring-black/50"
+                      style={{
+                        transform:
+                          idx === 0
+                            ? 'rotate(-6deg)'
+                            : idx === 2
+                              ? 'rotate(6deg)'
+                              : 'translateY(-2px)',
+                        zIndex: 3 - idx,
+                      }}
+                    >
+                      <img
+                        src={src}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Upload Trigger Button */}
-          <label className="flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-[11px] uppercase tracking-widest px-4 py-2 rounded-xl transition duration-150 cursor-pointer text-center shrink-0 shadow-lg shadow-rose-950/40">
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Photos</span>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleImageUploadInit}
-              className="hidden"
-            />
-          </label>
+          {/* Unified Single-Row Search & Upload Command Bar */}
+          <div className="mt-4 flex items-center gap-2">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search vault photos..."
+                value={gallerySearchQuery}
+                onChange={(e) => setGallerySearchQuery(e.target.value)}
+                className="w-full bg-black/55 backdrop-blur-md border border-white/15 focus:border-teal-400/70 rounded-2xl pl-9 pr-8 py-2.5 text-xs text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-400/25 transition-all"
+              />
+              {gallerySearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setGallerySearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white cursor-pointer"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <label className="flex items-center justify-center gap-1.5 bg-gradient-to-r from-purple-600/95 via-fuchsia-600/85 to-teal-500/90 hover:brightness-110 border border-teal-300/50 text-white font-black text-[11px] uppercase tracking-wider px-3.5 sm:px-4 py-2.5 rounded-2xl transition-all duration-150 cursor-pointer shrink-0 shadow-[0_0_18px_rgba(20,184,166,0.28),0_0_14px_rgba(168,85,247,0.24)]">
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add</span>
+              <span className="hidden sm:inline">Photos</span>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageUploadInit}
+                className="sr-only"
+              />
+            </label>
+          </div>
+
+          {/* Horizontal Quick-Filter Folder Pills */}
+          <div className="mt-3.5 pt-3 border-t border-white/10 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+            {foldersList.map((folder, idx) => {
+              const count = folderCounts[folder] || 0;
+              const isActive = selectedFolder.toLowerCase() === folder.toLowerCase();
+              return (
+                <button
+                  key={`pit_chip_${folder}_${idx}`}
+                  type="button"
+                  onClick={() => setSelectedFolder(folder)}
+                  className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-bold uppercase tracking-wider backdrop-blur-md transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-teal-500/20 border-teal-300/60 text-teal-100 shadow-[0_0_14px_rgba(20,184,166,0.22)]'
+                      : 'bg-black/45 border-white/10 text-zinc-300 hover:text-white hover:border-white/25'
+                  }`}
+                >
+                  <span className="truncate max-w-[130px]">{folder}</span>
+                  <span
+                    className={`font-mono text-[9px] ${
+                      isActive ? 'text-teal-200' : 'text-zinc-400'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -1551,63 +1663,82 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
         </div>
       )}
 
-      {/* FOLDER SELECTION GRID (Only shown when viewing all directories or navigating back) */}
+      {/* FOLDER SELECTION GRID (Collapsed by default when viewing All Photos) */}
       {selectedFolder === 'All Photos' && (
-        <div className="mb-8 space-y-4 animate-in fade-in duration-300">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-black uppercase tracking-widest text-zinc-400 flex items-center gap-2">
-              <Folder className="w-4 h-4 text-rose-500" />
-              <span>Memory Folders Directory</span>
-            </h3>
+        <div className="mb-6 space-y-3 animate-in fade-in duration-300">
+          <div className="flex items-center justify-between gap-2 bg-zinc-950/60 border border-zinc-900 rounded-2xl px-3.5 py-2.5">
+            <button
+              type="button"
+              onClick={() => setIsFoldersExpanded((prev) => !prev)}
+              aria-expanded={isFoldersExpanded}
+              className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-zinc-300 hover:text-white transition-colors cursor-pointer min-w-0"
+            >
+              <Folder className="w-4 h-4 text-rose-500 shrink-0" />
+              <span className="truncate">Memory Folders</span>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 shrink-0">
+                {foldersList.length}
+              </span>
+              <ChevronDown
+                className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform duration-200 ${
+                  isFoldersExpanded ? 'rotate-180 text-rose-400' : ''
+                }`}
+              />
+            </button>
 
             {/* Create Custom Folder Toggle */}
             <button
-              onClick={() => setShowFolderCreator((prev) => !prev)}
-              className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 flex items-center gap-1 transition-colors animate-pulse"
+              type="button"
+              onClick={() => {
+                setIsFoldersExpanded(true);
+                setShowFolderCreator((prev) => !prev);
+              }}
+              className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
             >
               <Plus className="w-3 h-3" />
-              <span>Create Custom Folder</span>
+              <span>New Folder</span>
             </button>
           </div>
 
-          {/* Inline Folder Creator Form */}
-          {showFolderCreator && (
-            <form
-              onSubmit={handleCreateFolderSubmit}
-              className="bg-zinc-950/80 border border-zinc-900 p-4 rounded-2xl flex flex-col sm:flex-row gap-3 items-stretch sm:items-center animate-in slide-in-from-top duration-205"
-            >
-              <div className="flex-1">
-                <label className="block text-[8px] font-mono text-zinc-500 uppercase tracking-widest mb-1">New Album Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Seattle Concert June 26, Backstage Tour..."
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-850 focus:border-rose-900 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-600 focus:outline-none"
-                  required
-                  maxLength={40}
-                />
-              </div>
-              <div className="flex gap-2 self-end w-full sm:w-auto">
-                <button
-                  type="button"
-                  onClick={() => setShowFolderCreator(false)}
-                  className="flex-1 sm:flex-initial px-4 py-2 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 rounded-xl text-xs uppercase font-bold"
+          {isFoldersExpanded && (
+            <div className="space-y-4 pt-1">
+              {/* Inline Folder Creator Form */}
+              {showFolderCreator && (
+                <form
+                  onSubmit={handleCreateFolderSubmit}
+                  className="bg-zinc-950/80 border border-zinc-900 p-4 rounded-2xl flex flex-col sm:flex-row gap-3 items-stretch sm:items-center animate-in slide-in-from-top duration-205"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 sm:flex-initial px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs uppercase font-black tracking-wider transition-colors"
-                >
-                  Create & View
-                </button>
-              </div>
-            </form>
-          )}
+                  <div className="flex-1">
+                    <label className="block text-[8px] font-mono text-zinc-500 uppercase tracking-widest mb-1">New Album Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Seattle Concert June 26, Backstage Tour..."
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-850 focus:border-rose-900 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-600 focus:outline-none"
+                      required
+                      maxLength={40}
+                    />
+                  </div>
+                  <div className="flex gap-2 self-end w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowFolderCreator(false)}
+                      className="flex-1 sm:flex-initial px-4 py-2 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 rounded-xl text-xs uppercase font-bold"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 sm:flex-initial px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs uppercase font-black tracking-wider transition-colors"
+                    >
+                      Create & View
+                    </button>
+                  </div>
+                </form>
+              )}
 
-          {/* Grid of Folder Directories */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+              {/* Grid of Folder Directories */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
             {foldersList.map((folder, fIdx) => {
               const latestImg = getLatestImageForFolder(folder);
               const count = folderCounts[folder] || 0;
@@ -1681,7 +1812,9 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                 </div>
               );
             })}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1723,9 +1856,8 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                       caption: item.content || undefined,
                     });
                   }
-                  setSelectedGalleryItem(item);
                 }}
-                className="group relative aspect-square bg-[#0b0c10] border border-zinc-900 hover:border-rose-500/50 rounded-xl overflow-hidden cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(244,63,94,0.06)]"
+                className="group relative aspect-square bg-[#0b0c10] border border-zinc-900 hover:border-teal-400/50 ring-1 ring-inset ring-white/[0.06] rounded-xl overflow-hidden cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_4px_18px_rgba(20,184,166,0.12)]"
               >
                 <img
                   src={item.url}
@@ -1739,9 +1871,11 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                   className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 group-hover:brightness-110"
                 />
 
-                <span className="absolute top-2 right-2 text-[8px] font-mono font-bold bg-black/75 text-rose-300 border border-zinc-800/80 px-2 py-0.5 rounded-full z-10 uppercase truncate max-w-[100px]">
-                  {item.folder}
-                </span>
+                {selectedFolder === 'All Photos' && item.folder && (
+                  <span className="absolute top-2 right-2 text-[8px] font-mono font-bold bg-black/75 backdrop-blur-sm text-zinc-200 border border-white/10 px-2 py-0.5 rounded-full z-10 uppercase truncate max-w-[100px]">
+                    {item.folder}
+                  </span>
+                )}
 
                 <button
                   type="button"
@@ -1755,9 +1889,22 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
 
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end">
-                  <span className="text-[10px] font-bold text-white truncate font-display">{item.authorName}</span>
-                  <span className="text-[8px] font-mono text-zinc-400 mt-0.5 truncate">{item.timestamp}</span>
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/60 to-transparent p-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end gap-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[10px] font-bold text-white truncate font-display">{item.authorName}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedGalleryItem(item);
+                      }}
+                      className="px-2 py-0.5 bg-zinc-900/90 hover:bg-zinc-800 text-amber-300 hover:text-white border border-zinc-700 rounded text-[8px] font-mono font-bold uppercase cursor-pointer shrink-0 shadow"
+                      title="Manage / Info (Memory Saver Health, Replace, Delete)"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                  <span className="text-[8px] font-mono text-zinc-400 truncate">{item.timestamp}</span>
                 </div>
               </div>
             ))}
@@ -2154,7 +2301,7 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                   type="file"
                   accept="image/*"
                   onChange={handleReplacePhotoFile}
-                  className="hidden"
+                  className="sr-only"
                 />
 
                 <div className="pt-5 border-t border-zinc-900 mt-6 flex flex-col gap-2">
@@ -2189,9 +2336,7 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        triggerNotification?.("❤️ Marked photo as favorite!");
-                      }}
+                      onClick={() => {}}
                       className="flex-1 bg-zinc-900 hover:bg-zinc-850 border border-zinc-850 text-white rounded-xl py-2.5 text-xs font-black uppercase tracking-wider transition-colors cursor-pointer"
                     >
                       Like
@@ -2201,7 +2346,6 @@ export const PhotoPitView: React.FC<PhotoPitViewProps> = ({
                       onClick={() => {
                         setSelectedGalleryItem(null);
                         if (setActiveTab) setActiveTab('feed');
-                        triggerNotification?.("Navigating to source thread...");
                       }}
                       className="flex-1 bg-rose-600 hover:bg-rose-500 text-white rounded-xl py-2.5 text-xs font-black uppercase tracking-wider transition-all cursor-pointer"
                     >

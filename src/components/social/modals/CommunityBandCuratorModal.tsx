@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Plus,
@@ -31,7 +31,8 @@ import {
   ShieldAlert,
   AlertCircle,
   Database,
-  RefreshCw
+  RefreshCw,
+  Camera
 } from 'lucide-react';
 import {
   communityBandManager,
@@ -41,13 +42,53 @@ import {
   DiscographyTrack,
   saveBandDiscographyToCache,
   loadBandDiscographyFromCache,
+  clearBandDiscographyFromCache,
   deduplicateDiscography,
-  markReleaseDeletedInStorage
+  deduplicateLineup,
+  markReleaseDeletedInStorage,
+  resolveAuthenticReleaseYear,
+  findMasterReleaseCover,
+  isValidCoverUrl,
+  isValidBandImageUrl,
+  pickBestBandImage,
+  resolveCanonicalBandLogo,
+  resolveCanonicalBandCover,
+  isGorgasmBand,
+  isStaleGorgasmLineup,
+  parseBandLineup,
+  GORGASM_OFFICIAL_LOGO,
+  GORGASM_OFFICIAL_LINEUP
 } from '../../../lib/communityBands';
 import { deleteReleaseFromDatabase } from '../../../services/releasesService';
+import { parseDiscographyFromImageOrText } from '../../../services/metalArchivesScraper';
 import { uploadBase64ToStorage, generateUUID, ensureUUID } from '../../../supabase';
 import { MASTER_GENRES } from '../../../constants/genres';
 import { MetalArchivesImportModal } from './MetalArchivesImportModal';
+
+const getReleaseCoverUrl = (r: any, bandName?: string): string => {
+  if (!r) return '';
+  const candidateKeys = [
+    'cover_url', 'cover_image', 'coverUrl', 'coverImage',
+    'image_url', 'imageUrl', 'artwork_url', 'artworkUrl',
+    'artwork', 'cover', 'image'
+  ];
+  for (const k of candidateKeys) {
+    const val = r[k];
+    if (typeof val === 'string' && val.trim().length > 0 && !val.includes('undefined') && !val.includes('null')) {
+      if (isValidCoverUrl(val)) {
+        return val.trim();
+      }
+    }
+  }
+  if (r.title) {
+    const fallback = findMasterReleaseCover(r.title, bandName || r.artist || r.band_name);
+    if (fallback) return fallback;
+  }
+  return '';
+};
+import { resolvePublicBandData, enrichBandMetadataAsync } from '../../../services/bandEnrichmentService';
+import { getSupabase } from '../../../services/clientService';
+import { BandActivityStatus, resolveBandStatus, getBandStatusLabel, getBandStatusBadgeClass } from '../../../utils/bandProfileUtils';
 
 interface CommunityBandCuratorModalProps {
   isOpen: boolean;
@@ -104,6 +145,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const [genre, setGenre] = useState('Extreme Metal');
   const [microGenres, setMicroGenres] = useState<string[]>([]);
   const [foundedYear, setFoundedYear] = useState('');
+  const [bandStatus, setBandStatus] = useState<BandActivityStatus>('active');
   const [city, setCity] = useState('');
   const [stateProvince, setStateProvince] = useState('');
   const [country, setCountry] = useState('USA');
@@ -153,8 +195,77 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingAlbumImg, setIsUploadingAlbumImg] = useState(false);
+  const [isScanningTracklistImg, setIsScanningTracklistImg] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [failedLogoKeys, setFailedLogoKeys] = useState<Record<string, boolean>>({});
   const [syncStatusText, setSyncStatusText] = useState('');
+
+  const handleScanReleaseScreenshot = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (fileArr.length === 0) return;
+
+    setIsScanningTracklistImg(true);
+    try {
+      const dataUrls: string[] = [];
+      for (const f of fileArr.slice(0, 4)) {
+        const url = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = reject;
+          reader.readAsDataURL(f);
+        });
+        if (url) dataUrls.push(url);
+      }
+
+      const parsed = await parseDiscographyFromImageOrText({
+        images: dataUrls,
+        bandName: name.trim() || selectedBand?.name || 'Artist',
+        defaultAlbumTitle: releaseTitle.trim() || undefined,
+        defaultYear: releaseYear.trim() || undefined,
+        defaultType: releaseType,
+        defaultLabel: releaseLabel.trim() || undefined,
+      });
+
+      const firstRel = parsed.releases?.[0];
+      if (firstRel) {
+        if (!releaseTitle.trim() && firstRel.title && firstRel.title !== 'Untitled Release') {
+          setReleaseTitle(firstRel.title);
+        }
+        const extractedYr = firstRel.releaseDate || (firstRel as any).release_date || (firstRel as any).year;
+        if (!releaseYear.trim() && extractedYr) {
+          setReleaseYear(String(extractedYr).slice(0, 4));
+        }
+        if (!releaseLabel.trim() && firstRel.label && firstRel.label !== 'Metal Archives Verified') {
+          setReleaseLabel(firstRel.label);
+        }
+        if (!releaseCatalogId.trim() && firstRel.catalogId && !firstRel.catalogId.startsWith('CAT-')) {
+          setReleaseCatalogId(firstRel.catalogId);
+        }
+        const cUrl = firstRel.coverUrl || firstRel.coverImage || (firstRel as any).cover_url;
+        if (!releaseImageUrl.trim() && cUrl) {
+          setReleaseImageUrl(cUrl);
+        }
+        if (firstRel.tracks && firstRel.tracks.length > 0) {
+          const mappedTracks: DiscographyTrack[] = firstRel.tracks.map((t, idx) => ({
+            number: idx + 1,
+            title: t.title || `Track ${idx + 1}`,
+            duration: t.duration || '3:30',
+          }));
+          setReleaseTracks(mappedTracks);
+          triggerNotification?.(`📸 Extracted ${mappedTracks.length} tracks from screenshot!`);
+        } else {
+          triggerNotification?.('📸 Extracted album details from screenshot!');
+        }
+      } else {
+        triggerNotification?.('⚠️ Could not detect a tracklist in that screenshot.');
+      }
+    } catch (err: any) {
+      triggerNotification?.(`❌ Screenshot scan failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setIsScanningTracklistImg(false);
+    }
+  };
 
   const handleSyncAllToSupabase = async () => {
     if (isSyncingAll) return;
@@ -230,31 +341,93 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   const loadBands = () => {
     const list = communityBandManager.getAll();
     setBandsList(list);
-    communityBandManager.fetchFromSupabase().then((remoteList) => {
+    communityBandManager.fetchFromSupabase({ authoritative: true }).then((remoteList) => {
       if (remoteList && remoteList.length > 0) {
+        setFailedLogoKeys({});
         setBandsList(remoteList);
       }
     }).catch(() => {});
   };
 
+  const prevIsOpenRef = useRef(false);
+  const prevBandKeyRef = useRef<string | null>(null);
+  const populateReqIdRef = useRef(0);
+  const isOpenRef = useRef(isOpen);
+  const isSavingRef = useRef(false);
+  const activePageRef = useRef(activePage);
+  const selectedBandRef = useRef<CommunityBandRecord | null>(selectedBand);
+  const lineupDirtyRef = useRef(false);
+
+  isOpenRef.current = isOpen;
+  activePageRef.current = activePage;
+  selectedBandRef.current = selectedBand;
+
   useEffect(() => {
     if (isOpen) {
-      loadBands();
-      if (initialBand) {
-        populateForm(initialBand);
-        setActivePage('editor');
-      } else {
-        resetForm();
-        setActivePage('list');
+      // Ensure real-time listener is actively connected to Supabase
+      communityBandManager.setupRealtimeListener();
+
+      const isOpening = !prevIsOpenRef.current;
+      const currentBandKey = initialBand ? `${initialBand.id || ''}:${initialBand.name || ''}` : null;
+      const isDifferentBand = currentBandKey !== prevBandKeyRef.current;
+
+      if (isOpening) {
+        loadBands();
       }
+
+      if (isOpening || isDifferentBand) {
+        const currentSelected = selectedBandRef.current;
+        const curSelName = (currentSelected?.name || (currentSelected as any)?.band_name || '').toLowerCase().trim();
+        const initBandName = (initialBand?.name || (initialBand as any)?.band_name || '').toLowerCase().trim();
+        const isSameActiveBand = !isOpening && activePageRef.current === 'editor' && Boolean(
+          initialBand && currentSelected && (
+            (initialBand.id && currentSelected.id && ensureUUID(initialBand.id) === ensureUUID(currentSelected.id)) ||
+            (initBandName && curSelName && initBandName === curSelName)
+          )
+        );
+
+        prevBandKeyRef.current = currentBandKey;
+        if (!isSameActiveBand) {
+          if (initialBand) {
+            populateForm(initialBand);
+            setActivePage('editor');
+          } else {
+            resetForm();
+            setActivePage('list');
+          }
+        }
+      }
+    } else {
+      prevBandKeyRef.current = null;
+      populateReqIdRef.current++;
     }
-  }, [isOpen, initialBand]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, initialBand?.id, initialBand?.name]);
 
   useEffect(() => {
     const handleUpdate = () => {
       const freshList = communityBandManager.getAll();
       if (freshList && freshList.length > 0) {
         setBandsList(freshList);
+      }
+
+      // Update selectedBand reference without clobbering active unsaved editor inputs
+      const curSelected = selectedBandRef.current;
+      if (curSelected && !isSavingRef.current) {
+        const curId = curSelected.id;
+        const curName = (curSelected.name || (curSelected as any).band_name || '').toLowerCase().trim();
+        const matched = freshList.find(b => b.id === curId || (b.name || (b as any).band_name || '').toLowerCase().trim() === curName);
+        if (matched) {
+          setSelectedBand(matched);
+          selectedBandRef.current = matched;
+          if (activePageRef.current !== 'editor') {
+            const matchedLineup = parseBandLineup(matched.lineup);
+            if (matchedLineup.length > 0) setLineup(matchedLineup);
+            if (matched.discography && Array.isArray(matched.discography) && matched.discography.length > 0) {
+              setAlbums([...matched.discography].sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0')));
+            }
+          }
+        }
       }
     };
 
@@ -267,13 +440,18 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
             const existingIdx = merged.findIndex(
               (m) => m.id === r.id || (m.title && r.title && m.title.toLowerCase().trim() === r.title.toLowerCase().trim())
             );
-            const cover = r.cover_url || r.coverUrl || r.cover_image || r.coverImage || r.image_url || '';
+            const cover = getReleaseCoverUrl(r);
             const newAlb: DiscographyRelease = {
               id: r.id || `rel-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
               title: r.title || 'Untitled',
-              year: r.releaseDate || r.year || String(new Date().getFullYear()),
+              year: resolveAuthenticReleaseYear(r) || String(new Date().getFullYear()),
               type: (['album', 'ep', 'single', 'demo'].includes((r.type || '').toLowerCase()) ? (r.type.toLowerCase() as any) : 'album'),
               image_url: cover,
+              cover_url: cover,
+              cover_image: cover,
+              coverUrl: cover,
+              coverImage: cover,
+              image: cover,
               label: r.label || '',
               release_info: r.label || '',
               catalog_id: r.catalogId || r.catalog_id || '',
@@ -285,10 +463,17 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
               }))
             };
             if (existingIdx >= 0) {
+              const existingCover = getReleaseCoverUrl(merged[existingIdx]);
+              const finalCover = cover || existingCover;
               merged[existingIdx] = {
                 ...merged[existingIdx],
                 ...newAlb,
-                image_url: cover || merged[existingIdx].image_url
+                image_url: finalCover,
+                cover_url: finalCover,
+                cover_image: finalCover,
+                coverUrl: finalCover,
+                coverImage: finalCover,
+                image: finalCover
               };
             } else {
               merged.push(newAlb);
@@ -310,58 +495,61 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   }, []);
 
   const populateForm = (band: CommunityBandRecord) => {
+    const reqId = ++populateReqIdRef.current;
+    lineupDirtyRef.current = false;
+    const publicDetails = resolvePublicBandData(band.name || (band as any).band_name, band);
     setSelectedBand(band);
+    selectedBandRef.current = band;
     setIsCreatingNew(false);
-    setName(band.name);
-    const bandMicro = band.micro_genres || band.subgenres || [];
+    setName(band.name || (band as any).band_name || '');
+    const bandMicro = band.micro_genres || band.subgenres || publicDetails.micro_genres || [];
     setMicroGenres(bandMicro);
-    const matchedCluster = MASTER_GENRES.find(c => c.name.toLowerCase() === (band.genre || '').toLowerCase() || c.tags.some(t => bandMicro.includes(t.label)))?.name || MASTER_GENRES[0]?.name || 'Extreme Metal';
+    const targetGenreName = band.genre || publicDetails.genre || '';
+    const matchedCluster = MASTER_GENRES.find(c => c.name.toLowerCase() === targetGenreName.toLowerCase() || c.tags.some(t => bandMicro.includes(t.label)))?.name || MASTER_GENRES[0]?.name || 'Extreme Metal';
     setGenre(matchedCluster);
-    setFoundedYear(band.founded_year || '');
-    setCity(band.city || '');
-    setStateProvince(band.state_province || band.state || '');
-    setCountry(band.country || 'USA');
-    setRecordLabel(band.record_label || band.label || '');
-    setBio(band.bio || (band as any).description || '');
-    setAvatarUrl(band.avatar_url || band.logo_url || (band as any).avatar || (band as any).image || '');
-    setCoverUrl(band.cover_url || band.banner_url || (band as any).cover || (band as any).banner || '');
-    setSpotifyUrl(band.spotify_url || '');
+    setFoundedYear(band.founded_year || publicDetails.founded_year || '');
+    setBandStatus(resolveBandStatus(band));
+    setCity(band.city || publicDetails.city || '');
+    setStateProvince(band.state_province || band.state || publicDetails.state_province || '');
+    setCountry(band.country || publicDetails.country || 'USA');
+    setRecordLabel(band.record_label || band.label || publicDetails.record_label || publicDetails.label || '');
+
+    const userBio = userProfile?.bio || userProfile?.profileBlurb;
+    const rawBio = band.bio || (band as any).description || publicDetails.bio || '';
+    const isUserBio = Boolean(userBio && (rawBio === userBio || rawBio === (userProfile as any)?.profileBlurb));
+    const validBio = (rawBio && !isUserBio && !rawBio.startsWith('Community-curated archive')) ? rawBio : 'Not written yet.';
+    setBio(validBio);
+    const bandNameOrId = band.id || band.name || (band as any).band_name || '';
+    const resolvedAvatar =
+      resolveCanonicalBandLogo(band) ||
+      (isGorgasmBand(bandNameOrId, (band as any).custom_slug) ? GORGASM_OFFICIAL_LOGO : '');
+    setAvatarUrl(resolvedAvatar);
+    const resolvedCover = resolveCanonicalBandCover(band);
+    setCoverUrl(resolvedCover);
+    setSpotifyUrl(band.spotify_url || publicDetails.spotify_url || '');
     setBandcampUrl(band.bandcamp_url || '');
-    setMetalArchivesUrl(band.metal_archives_url || '');
-    setYoutubeUrl(band.youtube_url || band.featured_youtube_url || '');
+    setMetalArchivesUrl(band.metal_archives_url || publicDetails.metal_archives_url || '');
+    setYoutubeUrl(band.youtube_url || band.featured_youtube_url || publicDetails.youtube_url || '');
     setCuratorHandle(band.curated_by || (userProfile?.console_handle || userProfile?.handle || '@community_archivist'));
 
-    // Resilient lineup resolution
-    let loadedLineup: LineupMember[] = [];
-    if (Array.isArray(band.lineup) && band.lineup.length > 0) {
-      loadedLineup = band.lineup;
-    } else if (typeof band.lineup === 'string' && (band.lineup as string).trim()) {
-      try {
-        const parsed = JSON.parse(band.lineup);
-        if (Array.isArray(parsed) && parsed.length > 0) loadedLineup = parsed;
-      } catch {
-        const parts = (band.lineup as string).split(',').map(s => s.trim()).filter(Boolean);
-        loadedLineup = parts.map((part, idx) => {
-          const match = part.match(/^(.*?)\s*\((.*?)\)$/);
-          if (match) {
-            return {
-              id: `mem-${idx}`,
-              name: match[1].trim(),
-              role: match[2].trim() || 'Musician',
-              status: 'active' as const,
-              years: 'Present'
-            };
-          }
-          return {
-            id: `mem-${idx}`,
-            name: part,
-            role: 'Musician',
-            status: 'active' as const,
-            years: 'Present'
-          };
-        });
-      }
+    // Asynchronous background prefill for any remaining empty fields
+    if (!band.founded_year || !band.record_label || !band.city) {
+      enrichBandMetadataAsync(band.name || (band as any).band_name).then(asyncDetails => {
+        if (!isOpenRef.current || populateReqIdRef.current !== reqId || isSavingRef.current) return;
+        if (asyncDetails) {
+          if (asyncDetails.founded_year) setFoundedYear(prev => prev || asyncDetails.founded_year || '');
+          if (asyncDetails.record_label) setRecordLabel(prev => prev || asyncDetails.record_label || '');
+          if (asyncDetails.city) setCity(prev => prev || asyncDetails.city || '');
+          if (asyncDetails.state_province) setStateProvince(prev => prev || asyncDetails.state_province || '');
+          if (asyncDetails.country) setCountry(prev => prev || asyncDetails.country || 'USA');
+          if (asyncDetails.genre) setGenre(prev => prev || asyncDetails.genre || 'Extreme Metal');
+          if (asyncDetails.bio) setBio(prev => (prev === 'Not written yet.' || !prev) ? (asyncDetails.bio || 'Not written yet.') : prev);
+        }
+      }).catch(() => {});
     }
+
+    // Resilient lineup resolution
+    let loadedLineup: LineupMember[] = parseBandLineup(band.lineup);
     if (loadedLineup.length === 0) {
       const bId = band.id || '';
       const bUUID = bId ? ensureUUID(bId) : '';
@@ -375,21 +563,172 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
           if (Array.isArray(parsed) && parsed.length > 0) loadedLineup = parsed;
         } catch {}
       }
+      if (loadedLineup.length === 0) {
+        const enriched = resolvePublicBandData(band.name || (band as any).band_name || '');
+        if (Array.isArray(enriched.lineup) && enriched.lineup.length > 0) {
+          loadedLineup = enriched.lineup;
+        }
+      }
     }
-    setLineup(loadedLineup);
+    // Sanitize lineup with deduplicateLineup to strip any legacy mock/fake names
+    const cleanLineup = deduplicateLineup(loadedLineup);
+    const bandNameLower = (band.name || (band as any).band_name || '').toLowerCase().trim();
+    const isBirdflesh = bandNameLower.includes('birdflesh');
+    const isGorgasm = isGorgasmBand(band.id || bandNameLower, (band as any).custom_slug);
+    if (isBirdflesh && (cleanLineup.length === 0 || cleanLineup.some(m => m.name === 'Smögen' || m.name === 'Smogen' || m.name === 'Barra'))) {
+      setLineup([
+        { id: 'bf-1', name: 'Adde Mitroulis', role: 'Drums, Vocals', status: 'active', years: '1997–present' },
+        { id: 'bf-2', name: 'Joakim Svensson', role: 'Bass, Vocals', status: 'active', years: '2007–present' },
+        { id: 'bf-3', name: 'Elis Edin Markskog', role: 'Guitars, Vocals', status: 'active', years: '2011–present' }
+      ]);
+    } else if (isGorgasm && isStaleGorgasmLineup(cleanLineup)) {
+      setLineup(GORGASM_OFFICIAL_LINEUP);
+    } else {
+      setLineup(cleanLineup);
+    }
 
-    let loadedAlbums = (band.discography && band.discography.length > 0) ? band.discography : [];
+    let initialAlbums = (band.discography && band.discography.length > 0) ? band.discography : [];
     const cached = loadBandDiscographyFromCache(band.id, band.name);
-    const combined = deduplicateDiscography([...loadedAlbums, ...(cached || [])]);
+    const enriched = resolvePublicBandData(band.name || (band as any).band_name || '');
+    const combined = deduplicateDiscography([...initialAlbums, ...(cached || []), ...(enriched.discography || [])]);
     if (combined.length > 0) {
-      loadedAlbums = combined;
+      initialAlbums = combined;
     }
+
+    const loadedAlbums = initialAlbums.map((alb: any) => {
+      const cover = getReleaseCoverUrl(alb);
+      return {
+        ...alb,
+        image_url: cover,
+        cover_url: cover,
+        cover_image: cover,
+        coverUrl: cover,
+        coverImage: cover,
+        image: cover
+      };
+    });
 
     setAlbums([...loadedAlbums].sort((a, b) => parseInt(b.year || '0') - parseInt(a.year || '0')));
     setEditingAlbumIdx(null);
     setEditingMemberIdx(null);
     resetReleaseInputs();
     setActivePage('editor');
+
+    // Live Supabase Direct Sync: fetch live bands & releases rows to guarantee 100% cloud parity
+    try {
+      const client = getSupabase();
+      const bandName = (band.name || (band as any).band_name || '').trim();
+      const validUUID = band.id ? ensureUUID(band.id) : null;
+      
+      if (client && (validUUID || bandName)) {
+        let bQuery = client.from('bands').select('*');
+        if (validUUID) {
+          bQuery = bQuery.eq('id', validUUID);
+        } else if (bandName) {
+          bQuery = bQuery.ilike('band_name', `%${bandName}%`);
+        }
+
+        const bIdForRel = validUUID || band.id;
+        let rQuery = client.from('releases').select('*');
+        if (validUUID && band.id && validUUID !== band.id) {
+          rQuery = rQuery.or(`band_id.eq.${validUUID},band_id.eq.${band.id}`);
+        } else if (bIdForRel) {
+          rQuery = rQuery.eq('band_id', bIdForRel);
+        }
+
+        Promise.all([
+          Promise.resolve(bQuery.maybeSingle()).catch(() => ({ data: null })),
+          Promise.resolve(rQuery).catch(() => ({ data: [] }))
+        ]).then(([{ data: liveBand }, { data: liveReleases }]: any) => {
+          if (!isOpenRef.current || populateReqIdRef.current !== reqId || isSavingRef.current) return;
+
+          let parsedLiveLineup: LineupMember[] = [];
+          if (liveBand) {
+            if (liveBand.founded_year) setFoundedYear(String(liveBand.founded_year));
+            if (liveBand.record_label) setRecordLabel(liveBand.record_label);
+            if (liveBand.city) setCity(liveBand.city);
+            if (liveBand.state_province) setStateProvince(liveBand.state_province);
+            if (liveBand.country) setCountry(liveBand.country);
+            if (liveBand.bio && liveBand.bio !== 'Not written yet.') setBio(liveBand.bio);
+            if (liveBand.status) setBandStatus(resolveBandStatus(liveBand));
+            if (liveBand.micro_genres && Array.isArray(liveBand.micro_genres) && liveBand.micro_genres.length > 0) {
+              setMicroGenres(liveBand.micro_genres);
+            }
+            const liveLogo = resolveCanonicalBandLogo(liveBand);
+            if (liveLogo) setAvatarUrl(liveLogo);
+            const liveCover = resolveCanonicalBandCover(liveBand);
+            if (liveCover) setCoverUrl(liveCover);
+            if (liveBand.spotify) setSpotifyUrl(liveBand.spotify);
+            if (liveBand.bandcamp) setBandcampUrl(liveBand.bandcamp);
+            if (liveBand.metal_archives_url) setMetalArchivesUrl(liveBand.metal_archives_url);
+            if (liveBand.featured_youtube_url) setYoutubeUrl(liveBand.featured_youtube_url);
+
+            parsedLiveLineup = parseBandLineup(liveBand.lineup);
+            if (!lineupDirtyRef.current) {
+              if (isGorgasm && isStaleGorgasmLineup(parsedLiveLineup)) {
+                setLineup(GORGASM_OFFICIAL_LINEUP);
+              } else if (parsedLiveLineup.length > 0) {
+                setLineup(parsedLiveLineup);
+              } else if (isBirdflesh) {
+                setLineup([
+                  { id: 'bf-1', name: 'Adde Mitroulis', role: 'Drums, Vocals', status: 'active', years: '1997–present' },
+                  { id: 'bf-2', name: 'Joakim Svensson', role: 'Bass, Vocals', status: 'active', years: '2007–present' },
+                  { id: 'bf-3', name: 'Elis Edin Markskog', role: 'Guitars, Vocals', status: 'active', years: '2011–present' }
+                ]);
+              }
+            }
+          }
+
+          if (liveReleases && Array.isArray(liveReleases) && liveReleases.length > 0) {
+            const mappedReleases: DiscographyRelease[] = liveReleases.map((r: any) => {
+              const cover = getReleaseCoverUrl(r);
+              return {
+                id: r.id,
+                title: r.title,
+                year: resolveAuthenticReleaseYear(r) || r.year || '',
+                type: r.type || 'album',
+                image_url: cover,
+                cover_url: cover,
+                cover_image: cover,
+                coverUrl: cover,
+                coverImage: cover,
+                image: cover,
+                release_info: r.label || '',
+                catalog_id: r.catalog_id || '',
+                label: r.label || '',
+                tracks: Array.isArray(r.tracks) ? r.tracks : []
+              };
+            });
+            const mergedReleases = deduplicateDiscography([...initialAlbums, ...mappedReleases], bandName);
+            setAlbums(mergedReleases.sort((a: any, b: any) => parseInt(b.year || '0') - parseInt(a.year || '0')));
+            if (band.id) saveBandDiscographyToCache(band.id, band.name, mergedReleases);
+            if (liveBand?.id) saveBandDiscographyToCache(liveBand.id, liveBand.band_name, mergedReleases);
+          }
+
+          if (liveBand) {
+            const effectiveLineup = parsedLiveLineup.length > 0 ? parsedLiveLineup : cleanLineup;
+            const liveLogo = resolveCanonicalBandLogo(liveBand) || resolveCanonicalBandLogo(band);
+            const liveCover = resolveCanonicalBandCover(liveBand) || resolveCanonicalBandCover(band);
+            const refreshedBand: CommunityBandRecord = {
+              ...band,
+              ...liveBand,
+              name: liveBand.band_name || liveBand.name || band.name,
+              band_name: liveBand.band_name || liveBand.name || band.name,
+              avatar_url: liveLogo,
+              logo_url: liveLogo,
+              cover_url: liveCover,
+              banner_url: liveCover,
+              status: liveBand.status || ((liveBand as any).is_split_up ? 'split-up' : band.status),
+              lineup: (isGorgasm && isStaleGorgasmLineup(effectiveLineup)) ? GORGASM_OFFICIAL_LINEUP : effectiveLineup,
+              discography: (liveReleases && liveReleases.length > 0) ? deduplicateDiscography([...initialAlbums, ...liveReleases], bandName) : band.discography
+            };
+            communityBandManager.upsertBand(refreshedBand, { isNew: false, skipRemoteSync: true });
+            setSelectedBand(refreshedBand);
+            selectedBandRef.current = refreshedBand;
+          }
+        }).catch(() => {});
+      }
+    } catch (_) {}
   };
 
   // Delete Community Band Archive with clean in-app confirmation
@@ -427,19 +766,23 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   };
 
   const resetForm = () => {
+    populateReqIdRef.current++;
+    lineupDirtyRef.current = false;
     setSelectedBand(null);
+    selectedBandRef.current = null;
     setIsCreatingNew(true);
     setName('');
     setGenre('Extreme Metal');
     setMicroGenres(['Death Metal']);
     setFoundedYear('');
+    setBandStatus('active');
     setCity('');
     setStateProvince('');
     setCountry('USA');
     setRecordLabel('');
-    setBio('');
-    setAvatarUrl('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400');
-    setCoverUrl('https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200');
+    setBio('Not written yet.');
+    setAvatarUrl('');
+    setCoverUrl('');
     setSpotifyUrl('');
     setBandcampUrl('');
     setMetalArchivesUrl('');
@@ -471,6 +814,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   // Lineup Handlers
   const handleAddOrUpdateMember = () => {
     if (!newMemberName.trim()) return;
+    lineupDirtyRef.current = true;
 
     if (editingMemberIdx !== null) {
       const updated = [...lineup];
@@ -510,6 +854,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
   };
 
   const handleRemoveMember = (idx: number) => {
+    lineupDirtyRef.current = true;
     setLineup(lineup.filter((_, i) => i !== idx));
     if (editingMemberIdx === idx) {
       setEditingMemberIdx(null);
@@ -528,7 +873,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
     setReleaseType((['album', 'ep', 'single', 'demo'].includes((alb.type || '').toLowerCase()) ? (alb.type.toLowerCase() as any) : 'album'));
     setReleaseLabel(alb.label || alb.release_info || '');
     setReleaseCatalogId(alb.catalog_id || '');
-    setReleaseImageUrl(alb.image_url || '');
+    setReleaseImageUrl(getReleaseCoverUrl(alb));
     setReleaseTracks(alb.tracks || []);
     setNewTrackTitle('');
     setNewTrackDuration('');
@@ -541,12 +886,18 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
       ? (albums[editingAlbumIdx]?.id ? ensureUUID(albums[editingAlbumIdx].id) : generateUUID())
       : generateUUID();
 
+    const coverVal = releaseImageUrl.trim() || undefined;
     const releaseData: DiscographyRelease = {
       id: releaseId,
       title: releaseTitle.trim(),
       year: releaseYear.trim() || new Date().getFullYear().toString(),
       type: releaseType,
-      image_url: releaseImageUrl.trim() || undefined,
+      image_url: coverVal,
+      cover_url: coverVal,
+      cover_image: coverVal,
+      coverUrl: coverVal,
+      coverImage: coverVal,
+      image: coverVal,
       label: releaseLabel.trim() || undefined,
       release_info: releaseLabel.trim() || undefined,
       catalog_id: releaseCatalogId.trim() || undefined,
@@ -605,9 +956,11 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
   // Full Save to Supabase and Local Storage
   const handleSave = async () => {
-    if (isSaving || !name.trim()) return;
+    if (isSaving || isSavingRef.current || !name.trim()) return;
 
+    isSavingRef.current = true;
     setIsSaving(true);
+    populateReqIdRef.current++;
 
     try {
       // Auto-commit any currently typed lineup member in the input fields
@@ -640,12 +993,18 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         const releaseId = editingAlbumIdx !== null && albums[editingAlbumIdx]?.id
           ? ensureUUID(albums[editingAlbumIdx].id)
           : generateUUID();
+        const coverVal = releaseImageUrl.trim() || undefined;
         const pendingRelease: DiscographyRelease = {
           id: releaseId,
           title: releaseTitle.trim(),
           year: releaseYear.trim() || new Date().getFullYear().toString(),
           type: releaseType,
-          image_url: releaseImageUrl.trim() || undefined,
+          image_url: coverVal,
+          cover_url: coverVal,
+          cover_image: coverVal,
+          coverUrl: coverVal,
+          coverImage: coverVal,
+          image: coverVal,
           label: releaseLabel.trim() || undefined,
           release_info: releaseLabel.trim() || undefined,
           catalog_id: releaseCatalogId.trim() || undefined,
@@ -671,6 +1030,13 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         ? generateUUID()
         : (selectedBand?.id ? ensureUUID(selectedBand.id) : generateUUID());
 
+      const rawLineupToSave = (finalLineup.length === 0 && !lineupDirtyRef.current && selectedBand?.lineup)
+        ? parseBandLineup(selectedBand.lineup)
+        : finalLineup;
+      const finalLineupToSave = deduplicateLineup(rawLineupToSave);
+      const isExplicitLineupClear = Boolean(lineupDirtyRef.current && finalLineupToSave.length === 0);
+      const finalAlbumsToSave = finalAlbums;
+
       const bandPayload: Partial<CommunityBandRecord> & { band_name: string } = {
         id: bandId,
         band_name: name.trim(),
@@ -679,6 +1045,8 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         micro_genres: microGenres.length > 0 ? microGenres : (genre ? [genre] : ['Extreme Metal']),
         subgenres: microGenres.length > 0 ? microGenres : (genre ? [genre] : ['Extreme Metal']),
         founded_year: validFoundedYear !== undefined ? String(validFoundedYear) : undefined,
+        status: bandStatus,
+        is_split_up: bandStatus === 'split-up',
         city: city.trim(),
         state_province: stateProvince.trim(),
         country: country.trim(),
@@ -696,52 +1064,72 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         metal_archives_url: metalArchivesUrl.trim() || undefined,
         youtube_url: youtubeUrl.trim() || undefined,
         featured_youtube_url: youtubeUrl.trim() || undefined,
-        lineup: finalLineup,
-        discography: finalAlbums,
+        lineup: finalLineupToSave,
+        discography: finalAlbumsToSave,
         creator_id: resolvedCreatorId,
         curated_by: curatorHandle || userProfile?.console_handle || userProfile?.handle || '@fan_archivist',
         curator_name: userProfile?.full_name || userProfile?.name || 'Community Archivist',
         verification_status: selectedBand?.verification_status || 'community_archive'
       };
 
-      const savedRecord = communityBandManager.upsertCommunityBand(bandPayload, { isNew: isCreatingNew });
+      // Update local state/cache immediately without triggering a competing background Supabase sync
+      const savedRecord = communityBandManager.upsertCommunityBand(bandPayload, {
+        isNew: isCreatingNew,
+        skipRemoteSync: true,
+        allowEmptyLineup: isExplicitLineupClear
+      });
 
-      // Cache lineup to localStorage for immediate cross-portal availability
+      // Cache or clear lineup in localStorage for immediate cross-portal availability
       try {
-        const serializedLineup = JSON.stringify(finalLineup);
-        localStorage.setItem(`nexus_core_band_lineup_${bandId}`, serializedLineup);
-        localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(bandId)}`, serializedLineup);
-        if (savedRecord?.id) {
-          localStorage.setItem(`nexus_core_band_lineup_${savedRecord.id}`, serializedLineup);
-          localStorage.setItem(`nexus_core_band_lineup_${ensureUUID(savedRecord.id)}`, serializedLineup);
-        }
-        if (name.trim()) {
-          localStorage.setItem(`nexus_core_band_lineup_${name.trim().toLowerCase()}`, serializedLineup);
+        const nameKey = name.trim().toLowerCase();
+        const lineupKeys = Array.from(new Set([
+          `nexus_core_band_lineup_${bandId}`,
+          `nexus_core_band_lineup_${ensureUUID(bandId)}`,
+          savedRecord?.id ? `nexus_core_band_lineup_${savedRecord.id}` : null,
+          savedRecord?.id ? `nexus_core_band_lineup_${ensureUUID(savedRecord.id)}` : null,
+          nameKey ? `nexus_core_band_lineup_${nameKey}` : null,
+          nameKey ? `nexus_core_band_lineup_${nameKey.replace(/[^a-z0-9]/g, '_')}` : null,
+          nameKey ? `nexus_core_band_lineup_${nameKey.replace(/[^a-z0-9]/g, '-')}` : null
+        ].filter(Boolean) as string[]));
+
+        if (finalLineupToSave.length > 0) {
+          const serializedLineup = JSON.stringify(finalLineupToSave);
+          lineupKeys.forEach(k => localStorage.setItem(k, serializedLineup));
+        } else if (isExplicitLineupClear) {
+          lineupKeys.forEach(k => localStorage.setItem(k, '[]'));
         }
         window.dispatchEvent(new CustomEvent('nexus_band_lineup_updated', {
-          detail: { bandId: savedRecord?.id || bandId, lineup: finalLineup }
+          detail: { bandId: savedRecord?.id || bandId, lineup: finalLineupToSave }
         }));
       } catch {}
 
       // Cache discography to localStorage and memory for permanent resilience
       try {
-        saveBandDiscographyToCache(bandId, name, finalAlbums);
+        saveBandDiscographyToCache(bandId, name, finalAlbumsToSave);
         if (savedRecord?.id) {
-          saveBandDiscographyToCache(savedRecord.id, name, finalAlbums);
+          saveBandDiscographyToCache(savedRecord.id, name, finalAlbumsToSave);
         }
         window.dispatchEvent(new CustomEvent('nexus_band_discography_updated', {
-          detail: { bandId: savedRecord?.id || bandId, discography: finalAlbums }
+          detail: { bandId: savedRecord?.id || bandId, discography: finalAlbumsToSave }
         }));
       } catch {}
 
-      // Attempt Supabase sync with explicit isNew configuration
+      // Single serialized Supabase sync (awaits completion with explicit lineup intent)
       try {
-        const syncRes = await communityBandManager.syncToSupabaseTables(savedRecord, { isNew: isCreatingNew });
+        const syncPayload: CommunityBandRecord = {
+          ...savedRecord,
+          lineup: finalLineupToSave,
+          discography: finalAlbumsToSave
+        };
+        const syncRes = await communityBandManager.syncToSupabaseTables(syncPayload, {
+          isNew: isCreatingNew,
+          allowEmptyLineup: isExplicitLineupClear
+        });
         if (!syncRes.success && syncRes.error) {
           console.error('[CommunityBandCuratorModal] Remote Supabase sync error:', syncRes.error);
           triggerNotification?.(`⚠️ Saved locally, cloud sync notice: ${syncRes.error}`);
         } else {
-          triggerNotification?.(`⚡ Saved & synchronized "${savedRecord.name}" (${finalLineup.length} members, ${finalAlbums.length} releases) to cloud archive!`);
+          triggerNotification?.(`⚡ Saved & synchronized "${savedRecord.name}" (${finalLineupToSave.length} members, ${finalAlbumsToSave.length} releases) to cloud archive!`);
         }
       } catch (syncErr: any) {
         console.warn('[CommunityBandCuratorModal] Remote Supabase sync deferred (offline / offline queue active):', syncErr);
@@ -751,16 +1139,27 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
       setSavedFeedback(true);
       setTimeout(() => setSavedFeedback(false), 3000);
 
+      // Re-fetch authoritative record ID/fields after sync without re-running populateForm's racy async re-clobber
+      const canonicalSaved = communityBandManager.findByName(savedRecord.name || name.trim()) || savedRecord;
+      const normalizedSaved: CommunityBandRecord = {
+        ...canonicalSaved,
+        lineup: finalLineupToSave,
+        discography: finalAlbumsToSave
+      };
+      setIsCreatingNew(false);
+      setSelectedBand(normalizedSaved);
+      selectedBandRef.current = normalizedSaved;
+      lineupDirtyRef.current = false;
+      prevBandKeyRef.current = `${normalizedSaved.id || ''}:${normalizedSaved.name || ''}`;
+      setLineup(finalLineupToSave);
+      setAlbums(finalAlbumsToSave);
       loadBands();
-      populateForm({
-        ...savedRecord,
-        lineup: finalLineup
-      });
-      onSaved?.(savedRecord);
+      onSaved?.(normalizedSaved);
     } catch (error) {
       console.error('Failed to save archive:', error);
       triggerNotification?.(`❌ Failed to save band archive: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -769,14 +1168,14 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
   const filteredBands = bandsList
     .filter((b) =>
-      b.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      b.genre.toLowerCase().includes(searchQuery.toLowerCase())
+      (b.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (b.genre || '').toLowerCase().includes(searchQuery.toLowerCase())
     )
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base', numeric: true }));
 
   return (
-    <div className="fixed inset-0 z-[1000005] bg-black/90 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 md:p-6 pb-20 sm:pb-6 overflow-y-auto animate-in fade-in duration-200">
-      <div className="w-full max-w-4xl bg-[#090a0f] border border-zinc-800 rounded-none sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full max-h-[calc(100dvh-4.75rem)] sm:max-h-[88vh] sm:h-[88vh]">
+    <div className="fixed inset-0 z-[1000005] bg-black/90 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 md:p-6 pb-0 sm:pb-6 overflow-y-auto animate-in fade-in duration-200">
+      <div className="w-full max-w-4xl bg-[#090a0f] border border-zinc-800 rounded-none sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full max-h-[100dvh] sm:max-h-[88vh] sm:h-[88vh]">
         
         {/* Global Modal Header - Compact on mobile */}
         <div className="px-3 py-2 sm:px-5 sm:py-3.5 border-b border-zinc-850 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-zinc-950 flex items-center justify-between shrink-0 gap-2">
@@ -852,7 +1251,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
         {/* PAGE 1: EXISTING ARCHIVES LIST (Explorer) */}
         {activePage === 'list' && (
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-28 sm:pb-20 space-y-4 bg-zinc-950/40">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-8 sm:pb-6 space-y-4 bg-zinc-950/40">
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               <div>
                 <h4 className="text-sm font-mono font-bold text-white uppercase tracking-wider">
@@ -886,6 +1285,38 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
 
                 <button
                   type="button"
+                  disabled={isSyncingCloud}
+                  onClick={async () => {
+                    if (isSyncingCloud) return;
+                    setIsSyncingCloud(true);
+                    setFailedLogoKeys({});
+                    triggerNotification?.('🔄 Syncing all community bands from Supabase cloud...');
+                    try {
+                      const remote = await communityBandManager.fetchFromSupabase({ authoritative: true });
+                      const nextList = remote && remote.length > 0 ? remote : communityBandManager.getAll();
+                      setBandsList(nextList);
+                      if (remote && remote.length > 0) {
+                        triggerNotification?.(`✅ Synced ${remote.length} community bands from Supabase cloud!`);
+                      } else {
+                        triggerNotification?.(`✅ Loaded ${nextList.length} community bands from local archives.`);
+                      }
+                    } catch (err: any) {
+                      const fallbackList = communityBandManager.getAll();
+                      setBandsList(fallbackList);
+                      triggerNotification?.(`✅ Loaded ${fallbackList.length} community bands.`);
+                    } finally {
+                      setIsSyncingCloud(false);
+                    }
+                  }}
+                  className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-sky-400 hover:text-sky-300 border border-sky-500/30 font-mono font-bold text-xs uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow active:scale-95 disabled:opacity-50"
+                  title="Fetch latest updates from Supabase cloud"
+                >
+                  <RefreshCw className={`w-4 h-4 text-sky-400 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingCloud ? 'Syncing...' : 'Sync Cloud'}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={resetForm}
                   className="px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-mono font-bold text-xs uppercase flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow active:scale-95"
                   title="Start a blank profile from scratch"
@@ -915,14 +1346,55 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                   onClick={() => populateForm(band)}
                   className="w-full text-left p-3.5 sm:p-4 rounded-xl border bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/50 hover:bg-zinc-900 transition-all flex items-center gap-3.5 cursor-pointer shadow-sm group"
                 >
-                  <img
-                    src={band.avatar_url || band.logo_url || (band as any).avatar || (band as any).image || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=120'}
-                    alt={band.name}
-                    className="w-14 h-14 rounded-xl object-cover border border-zinc-750 shrink-0 group-hover:scale-105 transition-transform"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=120';
-                    }}
-                  />
+                  {(() => {
+                    const cardKey = String(band.id || band.name || bIdx);
+                    const isGorg = isGorgasmBand(band.id || band.name || (band as any).band_name, (band as any).custom_slug);
+                    const bestAvatar = resolveCanonicalBandLogo(band) || (isGorg ? GORGASM_OFFICIAL_LOGO : '');
+                    const showMonogram = !bestAvatar || Boolean(failedLogoKeys[cardKey]);
+                    const initials = (band.name || (band as any).band_name || 'BD')
+                      .trim()
+                      .split(/\s+/)
+                      .slice(0, 2)
+                      .map((w: string) => w[0] || '')
+                      .join('')
+                      .toUpperCase() || 'BD';
+
+                    if (showMonogram) {
+                      return (
+                        <div
+                          aria-label={`${band.name} monogram placeholder`}
+                          className="w-14 h-14 rounded-xl bg-zinc-950 border border-zinc-700/80 shrink-0 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform"
+                        >
+                          <svg
+                            viewBox="0 0 56 56"
+                            className="absolute inset-0 w-full h-full pointer-events-none opacity-45"
+                            aria-hidden="true"
+                          >
+                            <circle cx="28" cy="28" r="22" fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="4 3" />
+                          </svg>
+                          <span className="relative z-10 font-mono font-black text-sm tracking-wider text-zinc-200">
+                            {initials}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <img
+                        src={bestAvatar}
+                        alt={band.name}
+                        className="w-14 h-14 rounded-xl object-cover border border-zinc-750 shrink-0 group-hover:scale-105 transition-transform"
+                        onError={(e) => {
+                          const imgEl = e.currentTarget as HTMLImageElement;
+                          if (isGorg && imgEl.src !== GORGASM_OFFICIAL_LOGO) {
+                            imgEl.src = GORGASM_OFFICIAL_LOGO;
+                          } else {
+                            setFailedLogoKeys(prev => (prev[cardKey] ? prev : { ...prev, [cardKey]: true }));
+                          }
+                        }}
+                      />
+                    );
+                  })()}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold text-white truncate font-display group-hover:text-amber-300 transition-colors">
@@ -940,19 +1412,30 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                       </div>
                     </div>
 
-                    <div className="text-xs text-zinc-400 truncate font-mono mt-1">
-                      {band.genre} • {band.city || band.country || 'Global'}
+                    <div className="text-xs text-zinc-400 truncate font-mono mt-1 flex items-center gap-1.5 flex-wrap">
+                      <span>{band.genre} • {band.city || band.country || 'Global'}</span>
+                      {(() => {
+                        const bStatus = resolveBandStatus(band);
+                        const label = getBandStatusLabel(bStatus);
+                        const badgeCls = getBandStatusBadgeClass(bStatus);
+                        return (
+                          <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${badgeCls}`}>
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     <div className="text-[10px] text-zinc-500 font-mono mt-1.5 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-3">
                         {(() => {
-                          const discoCount = (band.discography && band.discography.length > 0)
-                            ? band.discography.length
-                            : (loadBandDiscographyFromCache(band.id, band.name)?.length || 0);
+                          const cached = loadBandDiscographyFromCache(band.id, band.name) || [];
+                          const direct = band.discography || [];
+                          const combined = deduplicateDiscography([...direct, ...cached], band.name);
+                          const discoCount = combined.length;
                           return <span>💿 {discoCount} {discoCount === 1 ? 'release' : 'releases'}</span>;
                         })()}
-                        <span>👥 {band.lineup?.length || 0} members</span>
+                        <span>👥 {parseBandLineup(band.lineup).length} members</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <span className="text-amber-400 font-bold group-hover:underline text-xs">Edit →</span>
@@ -1044,14 +1527,14 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
             </div>
 
             {/* Scrollable Editor Content */}
-            <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-32 sm:pb-24 space-y-3.5">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-10 sm:pb-8 space-y-3.5">
               
               {/* TAB 1: OVERVIEW & MEDIA */}
               {activeTab === 'overview' && (
                 <div className="space-y-3 animate-in fade-in duration-150">
 
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <div className="space-y-1 sm:col-span-1">
                       <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase">Band / Artist Name *</label>
                       <input
@@ -1072,6 +1555,20 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                         onChange={(e) => setFoundedYear(e.target.value)}
                         className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:border-amber-500 outline-none shadow-inner"
                       />
+                    </div>
+
+                    <div className="space-y-1 sm:col-span-1">
+                      <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase">Activity Status</label>
+                      <select
+                        value={bandStatus}
+                        onChange={(e) => setBandStatus(e.target.value as BandActivityStatus)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:border-amber-500 outline-none shadow-inner"
+                      >
+                        <option value="active">Active Band (displays &quot;(active)&quot;)</option>
+                        <option value="split-up">Split-Up / Disbanded (displays &quot;(split-up)&quot;)</option>
+                        <option value="on-hold">On Hold / Hiatus (displays &quot;(on-hold)&quot;)</option>
+                        <option value="unknown">Unknown Activity (displays &quot;(unknown)&quot;)</option>
+                      </select>
                     </div>
                   </div>
 
@@ -1276,25 +1773,34 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                       <div className="flex items-center gap-2.5">
                         <div className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 shadow-inner">
                           {avatarUrl ? (
-                            <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                            <img
+                              src={avatarUrl}
+                              alt="Avatar"
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.style.display = 'none';
+                              }}
+                            />
                           ) : (
                             <span className="text-zinc-600 font-mono text-[9px]">NO IMG</span>
                           )}
                         </div>
 
                         <div className="flex-1 flex flex-col gap-1">
-                          <label className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-mono font-bold text-[10px] uppercase cursor-pointer transition-colors shadow-sm">
-                            <Upload className="w-3 h-3" />
-                            <span>Upload Avatar</span>
+                          <label className="relative inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-mono font-bold text-[10px] uppercase cursor-pointer transition-colors shadow-sm overflow-hidden">
+                            <Upload className="w-3 h-3 pointer-events-none" />
+                            <span className="pointer-events-none">Upload Avatar</span>
                             <input
                               type="file"
                               accept="image/*"
-                              className="hidden"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   handleDeviceFileUpload(file, 'community-bands', 'community-avatar', (url) => setAvatarUrl(url), setIsUploadingAvatar);
                                 }
+                                if (e.target) e.target.value = '';
                               }}
                             />
                           </label>
@@ -1334,18 +1840,19 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                         </div>
 
                         <div className="flex-1 flex flex-col gap-1">
-                          <label className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-mono font-bold text-[10px] uppercase cursor-pointer transition-colors shadow-sm">
-                            <Upload className="w-3 h-3" />
-                            <span>Upload Banner</span>
+                          <label className="relative inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-mono font-bold text-[10px] uppercase cursor-pointer transition-colors shadow-sm overflow-hidden">
+                            <Upload className="w-3 h-3 pointer-events-none" />
+                            <span className="pointer-events-none">Upload Banner</span>
                             <input
                               type="file"
                               accept="image/*"
-                              className="hidden"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
                                   handleDeviceFileUpload(file, 'community-bands', 'community-banner', (url) => setCoverUrl(url), setIsUploadingCover);
                                 }
+                                if (e.target) e.target.value = '';
                               }}
                             />
                           </label>
@@ -1730,7 +2237,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                             <input
                               type="file"
                               accept="image/*"
-                              className="hidden"
+                              className="sr-only"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
@@ -1744,10 +2251,62 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                     </div>
 
                     {/* Tracklist Builder */}
-                    <div className="pt-2 border-t border-zinc-850 space-y-2">
-                      <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase flex items-center justify-between">
-                        <span>Tracklist ({releaseTracks.length} tracks)</span>
-                      </label>
+                    <div
+                      onPaste={(e) => {
+                        const items = e.clipboardData?.items;
+                        if (!items) return;
+                        const files: File[] = [];
+                        for (let i = 0; i < items.length; i++) {
+                          if (items[i].type.startsWith('image/')) {
+                            const f = items[i].getAsFile();
+                            if (f) files.push(f);
+                          }
+                        }
+                        if (files.length > 0) {
+                          e.preventDefault();
+                          handleScanReleaseScreenshot(files);
+                        }
+                      }}
+                      className="pt-2 border-t border-zinc-850 space-y-2"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-[10px] font-mono font-bold text-zinc-300 uppercase flex items-center gap-1.5">
+                          <span>Tracklist ({releaseTracks.length} tracks)</span>
+                        </label>
+                        <label
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-mono font-bold uppercase cursor-pointer transition-colors ${
+                            isScanningTracklistImg
+                              ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                              : 'bg-red-600/15 hover:bg-red-600/25 border-red-500/30 text-red-300'
+                          }`}
+                          title="Upload or paste (Ctrl+V) a screenshot of a Metal-Archives tracklist to auto-fill all songs and album info"
+                        >
+                          {isScanningTracklistImg ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              <span>Scanning Screenshot...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Camera className="w-3 h-3" />
+                              <span>Scan Screenshot to Fill Tracklist</span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={isScanningTracklistImg}
+                            className="sr-only"
+                            onChange={(e) => {
+                              if (e.target.files?.length) {
+                                handleScanReleaseScreenshot(e.target.files);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
 
                       {/* Song Title Input Full Width */}
                       <div className="space-y-2 bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-850">
@@ -1849,14 +2408,21 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                         {albums.length > 0 && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setAlbums([]);
-                              resetReleaseInputs();
-                              triggerNotification?.('Cleared all releases from form.');
+                            onClick={async () => {
+                              if (window.confirm(`Wipe all ${albums.length} albums for ${name || 'this band'} from local cache and database to get a clean start?`)) {
+                                setAlbums([]);
+                                resetReleaseInputs();
+                                const targetId = selectedBand?.id;
+                                if (targetId) {
+                                  await communityBandManager.wipeBandDiscography(targetId, name);
+                                }
+                                triggerNotification?.(`Wiped all releases for ${name || 'band'}! Ready for fresh import.`);
+                              }
                             }}
                             className="px-2.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-500/40 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                            title="Wipe all albums from local storage and database for a clean start"
                           >
-                            <Trash2 className="w-3.5 h-3.5" /> Clear All Releases
+                            <Trash2 className="w-3.5 h-3.5" /> Wipe All Albums (Fresh Start)
                           </button>
                         )}
                         <button
@@ -1887,11 +2453,27 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
                           >
                             <div className="flex items-center gap-3.5 min-w-0">
                               <div className="w-12 h-12 rounded-xl bg-black border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0 shadow">
-                                {alb.image_url ? (
-                                  <img src={alb.image_url} alt={alb.title} className="w-full h-full object-cover" />
-                                ) : (
-                                  <Disc className="w-5 h-5 text-zinc-600" />
-                                )}
+                                {(() => {
+                                  const coverSrc = getReleaseCoverUrl(alb, name || selectedBand?.name);
+                                  return coverSrc ? (
+                                    <img
+                                      src={coverSrc}
+                                      alt={alb.title}
+                                      className="w-full h-full object-cover"
+                                      onError={(e) => {
+                                        const target = e.currentTarget;
+                                        const fallback = findMasterReleaseCover(alb.title, name || selectedBand?.name);
+                                        if (fallback && target.src !== fallback) {
+                                          target.src = fallback;
+                                          target.style.display = 'block';
+                                        } else {
+                                          target.style.display = 'none';
+                                        }
+                                      }}
+                                    />
+                                  ) : null;
+                                })()}
+                                <Disc className="fallback-disc-icon w-5 h-5 text-zinc-600 hidden" />
                               </div>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
@@ -2078,7 +2660,7 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
               </div>
 
               <p className="text-xs text-zinc-300 font-mono leading-relaxed bg-red-950/20 border border-red-900/30 rounded-xl p-3">
-                Permanently delete <strong className="text-white font-bold">&quot;{confirmDeleteBand.name}&quot;</strong> ({confirmDeleteBand.discography?.length || 0} releases, {confirmDeleteBand.lineup?.length || 0} members)? This will remove it from all community band archives.
+                Permanently delete <strong className="text-white font-bold">&quot;{confirmDeleteBand.name}&quot;</strong> ({confirmDeleteBand.discography?.length || 0} releases, {parseBandLineup(confirmDeleteBand.lineup).length} members)? This will remove it from all community band archives.
               </p>
 
               <div className="flex items-center justify-end gap-3 pt-2">
@@ -2107,10 +2689,36 @@ export const CommunityBandCuratorModal: React.FC<CommunityBandCuratorModalProps>
         <MetalArchivesImportModal
           isOpen={showImporterModal}
           onClose={() => setShowImporterModal(false)}
-          bandId={selectedBand?.id || 'band-1'}
+          bandId={selectedBand?.id ? ensureUUID(selectedBand.id) : (name.trim() ? ensureUUID(name.trim().toLowerCase()) : 'band-1')}
           bandName={name}
-          onImportSuccess={(count) => {
+          onImportSuccess={(count, importedReleases) => {
             setShowImporterModal(false);
+            if (importedReleases && importedReleases.length > 0) {
+              setAlbums((prev) => {
+                const merged = [...prev];
+                for (const nr of importedReleases) {
+                  const normTitle = (nr.title || '').toLowerCase().trim();
+                  const existingIdx = merged.findIndex(
+                    (d) => (d.title || '').toLowerCase().trim() === normTitle || (d.id && d.id === nr.id)
+                  );
+                  if (existingIdx >= 0) {
+                    merged[existingIdx] = {
+                      ...merged[existingIdx],
+                      ...nr,
+                      tracks:
+                        nr.tracks && nr.tracks.length > 0 && nr.tracks.length >= (merged[existingIdx].tracks?.length || 0)
+                          ? nr.tracks
+                          : merged[existingIdx].tracks
+                    };
+                  } else {
+                    merged.push(nr);
+                  }
+                }
+                return deduplicateDiscography(merged, name || selectedBand?.id).sort(
+                  (a, b) => parseInt(b.year || '0', 10) - parseInt(a.year || '0', 10)
+                );
+              });
+            }
             triggerNotification?.(`⚡ Successfully imported ${count} releases into catalog!`);
           }}
         />

@@ -1,5 +1,5 @@
 import { initialForumThreads } from '../data/forumMockData';
-import { getSupabase } from '../supabase';
+import { getSupabase } from './clientService';
 
 export interface ForumComment {
   id: string;
@@ -33,8 +33,121 @@ export interface ForumHighlightThread {
 
 export const FORUM_CACHE_KEY = 'nexus_forum_threads_cache';
 
-// Known IDs for hardcoded mock discussion templates
-export const MOCK_THREAD_IDS = new Set(['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']);
+// Pre-seeded mock templates (retired non-extreme posts are purged; active extreme metal seeds stay in ForumsView until 10 real posts exist, never in Timeline Highlight Section)
+export const LEGACY_MOCK_THREAD_IDS = new Set([
+  't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8',
+  't9', 't10', 't11', 't12', 't13', 't14',
+]);
+
+export const RETIRED_NON_EXTREME_TITLES = new Set([
+  'bell witch live is a colossal, crushing, slow-motion experience',
+  'knocked loose & gel tour is absolutely unhinged live',
+  'd-beat drum patterns: favorite crust punk bands keeping it raw?',
+  'the ultimate shoegaze guitar: jazzmaster vs. jaguar for tremolo arm glide',
+  'this will destroy you - self titled: 15 year anniversary appreciation',
+  'mortiis dungeon synth - classic medieval ambient masterpieces',
+  'dark ambient starter pack: where to begin after lustmord?',
+]);
+
+export const LEGACY_MOCK_TITLES = new Set([
+  "close to a world below's album art is a masterpiece. who is the artist?",
+  'immolation - close to a world below: decades later',
+  'maryland deathfest 2026 predictions and wishlist',
+  'what gear did cryptopsy use on none so vile for that extreme speed?',
+  "cosmic black metal: paysage d'hiver vs. alcest vs. darkspace",
+  'the vintage 4-track raw tape sound of early norwegian black metal',
+  'is electric wizard\'s "dopethrone" the heaviest record ever recorded?',
+  'suffocation tearing through effigy of the forgotten live — unmatched tight picking',
+  'last night in the basement pit — zero barricade grindcore & death metal chaos',
+  "napalm death's scum vs. terrorizer's world downfall: purest grindcore blast blueprint",
+  'basement rig check: peavey 5150 into a beat-up 4x12 + boss hm-2 chainsaw grind',
+  'first-press black metal vinyl & xeroxed cassette demos on the table tonight',
+  "carcass 'symphonies of sickness' vs. repulsion 'horrified': filthiest goregrind essential?",
+  'raw 2nd-wave black metal tremolos: darkthrone, gorgoroth & bathory essentials',
+  ...RETIRED_NON_EXTREME_TITLES,
+]);
+
+// Known IDs for all hardcoded pre-seeded templates & fallback BDM highlights
+export const MOCK_THREAD_IDS = new Set([
+  ...LEGACY_MOCK_THREAD_IDS,
+  'bdm-h1',
+  'bdm-h2',
+]);
+
+export const MAX_CURATED_HIGHLIGHTS = 3;
+export const MAX_OTHER_HIGHLIGHTS = 2;
+
+export const BRUTAL_DEATH_METAL_HIGHLIGHTS: ForumHighlightThread[] = [
+  {
+    id: 'bdm-h1',
+    title: "Suffocation — Pierced From Within snare ping vs. Effigy's raw cavern mix",
+    content:
+      "Nothing touches that mid-90s Long Island / Morrisound brutality. Between Doug Cerrito's surgical dissonant sweeps and Mike Smith's blistering blasts, which mix crushes heavier in a live basement pit?",
+    category: 'Gear & Rig',
+    genre: 'Brutal Death Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@SlamVault',
+    timeAgo: '3h ago',
+    votes: 134,
+    userVote: null,
+    comments: [
+      {
+        id: 'bdm-c1',
+        author: '@GraveRiff',
+        text: 'That brass snare crack on Pierced cuts straight through drop-G mud every single time.',
+        timeAgo: '1h ago',
+        replies: [],
+      },
+    ],
+  },
+  {
+    id: 'bdm-h2',
+    title: 'Defeated Sanity & Devourment: guttural slam riff architecture breakdown',
+    content:
+      "From Molesting the Decapitated's sub-bass slam drops to Lille Gruber's unhinged time signatures—drop your heaviest brutal death metal pressings, snare-ping tones, or underground pit clips.",
+    category: 'Album Reviews',
+    genre: 'Brutal Death Metal',
+    primaryGenre: 'Extreme Metal',
+    author: '@GutturalPit',
+    timeAgo: '5h ago',
+    votes: 118,
+    userVote: null,
+    comments: [
+      {
+        id: 'bdm-c2',
+        author: '@SubterraneanBlast',
+        text: 'The tempo drop on Babykiller still caves in concrete. Pure primal slam weight.',
+        timeAgo: '2h ago',
+        replies: [],
+      },
+    ],
+  },
+];
+
+export function isRetiredNonExtremeMock(thread: any): boolean {
+  if (!thread || thread.isUserCreated === true) return false;
+  const title = String(thread.title || '').trim().toLowerCase();
+  if (RETIRED_NON_EXTREME_TITLES.has(title)) return true;
+  // Also catch stale cached copies of old t8-t14 IDs when their title isn't one of the new extreme metal titles
+  const id = String(thread.id || '');
+  if (['t8', 't9', 't10', 't11', 't12', 't13', 't14'].includes(id)) {
+    const newSeed = initialForumThreads.find((s) => String(s.id) === id);
+    if (newSeed && String(newSeed.title || '').trim().toLowerCase() !== title) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isLegacyNonBdmMock(thread: any): boolean {
+  if (!thread) return false;
+  if (thread.isUserCreated === true) return false;
+  const id = String(thread.id || '');
+  if (LEGACY_MOCK_THREAD_IDS.has(id)) return true;
+  const title = String(thread.title || '').trim().toLowerCase();
+  if (LEGACY_MOCK_TITLES.has(title)) return true;
+  return false;
+}
 
 /**
  * Checks if a forum thread was created by the active user
@@ -69,6 +182,7 @@ export function isUserForumThread(
       'goregrind',
       'goregrinder',
       'goregrindsickness',
+      'bdmceo',
       'miguel',
       'you',
       'fan', // Default fallback user handle assigned when posting in ForumView without a custom handle
@@ -84,7 +198,7 @@ export function isUserForumThread(
   }
 
   // 4. Any newly created thread (UUID format, not in mock set) where user voted up initially
-  if (!MOCK_THREAD_IDS.has(String(thread.id)) && thread.userVote === 'up') {
+  if (!MOCK_THREAD_IDS.has(String(thread.id)) && !isLegacyNonBdmMock(thread) && thread.userVote === 'up') {
     return true;
   }
 
@@ -92,14 +206,15 @@ export function isUserForumThread(
 }
 
 /**
- * Checks if a thread is a genuine forum post (not a static mock template)
+ * Checks if a thread is a genuine forum post (never true for t1-t14 or bdm-h1/h2 mock templates)
  */
 export function isRealForumThread(thread: ForumHighlightThread | any): boolean {
   if (!thread || !thread.id) return false;
+  if (isLegacyNonBdmMock(thread)) return false;
   return !MOCK_THREAD_IDS.has(String(thread.id));
 }
 
-// Load forum threads from localStorage or fallback to initial mock data
+// Load forum threads from localStorage or fallback to initial extreme metal mock data
 export function loadCachedForumThreads(): ForumHighlightThread[] {
   if (typeof window === 'undefined') return initialForumThreads as ForumHighlightThread[];
   try {
@@ -107,7 +222,8 @@ export function loadCachedForumThreads(): ForumHighlightThread[] {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const cleaned = parsed.filter((t) => t && !isRetiredNonExtremeMock(t));
+        if (cleaned.length > 0) return cleaned;
       }
     }
   } catch (err) {
@@ -203,34 +319,36 @@ export async function syncForumHighlightsFromSupabase(): Promise<ForumHighlightT
 }
 
 /**
- * Get curated highlights with STRICT PRIORITIZATION:
+ * Get curated highlights strictly capped to the user's post(s) + max 2 Brutal Death Metal others (<= 3 total):
  * Tier 1: Real posts made by the active user (ALWAYS #1 Spotlight!)
- * Tier 2: Real community posts created in the forum
- * Tier 3: Curated mock templates
+ * Tier 2: Up to 2 other real community threads (prioritizing Death/Brutal Death Metal)
+ * Tier 3: Up to 2 Brutal Death Metal highlights when total real threads < 10
  */
 export function getCuratedForumHighlights(
-  limit = 8,
+  limit = MAX_CURATED_HIGHLIGHTS,
   userProfile?: any,
   currentUserName?: string,
   currentUserId?: string
 ): ForumHighlightThread[] {
+  const effectiveLimit = Math.max(1, Math.min(limit, MAX_CURATED_HIGHLIGHTS));
   const threads = loadCachedForumThreads();
-  if (!threads || threads.length === 0) return [];
+  if (!threads || threads.length === 0) {
+    return BRUTAL_DEATH_METAL_HIGHLIGHTS.slice(0, Math.min(MAX_OTHER_HIGHLIGHTS, effectiveLimit));
+  }
 
   // Filter out any invalid items
   const validThreads = threads.filter((t) => t && t.id && t.title);
 
   const userRealThreads: ForumHighlightThread[] = [];
   const otherRealThreads: ForumHighlightThread[] = [];
-  const mockThreads: ForumHighlightThread[] = [];
 
   validThreads.forEach((t) => {
+    const isReal = isRealForumThread(t);
+    if (!isReal) return;
     if (isUserForumThread(t, userProfile, currentUserName, currentUserId)) {
       userRealThreads.push(t);
-    } else if (isRealForumThread(t)) {
-      otherRealThreads.push(t);
     } else {
-      mockThreads.push(t);
+      otherRealThreads.push(t);
     }
   });
 
@@ -242,23 +360,39 @@ export function getCuratedForumHighlights(
     return (b.votes || 0) - (a.votes || 0);
   });
 
-  // Sort other real posts (newest / engagement)
+  // Sort other real posts (prioritizing Death/Brutal Death Metal, then engagement)
+  const isBdmOrDeath = (t: ForumHighlightThread) => {
+    const g = `${t.genre || ''} ${t.title || ''}`.toLowerCase();
+    return g.includes('brutal death') || g.includes('death metal') || g.includes('slam');
+  };
   otherRealThreads.sort((a, b) => {
+    const aBdm = isBdmOrDeath(a) ? 1 : 0;
+    const bBdm = isBdmOrDeath(b) ? 1 : 0;
+    if (bBdm !== aBdm) return bBdm - aBdm;
     const scoreA = (a.votes || 0) * 1.5 + (a.comments?.length || 0) * 4;
     const scoreB = (b.votes || 0) * 1.5 + (b.comments?.length || 0) * 4;
     return scoreB - scoreA;
   });
 
-  // Sort mock templates by engagement
-  mockThreads.sort((a, b) => {
-    const scoreA = (a.votes || 0) * 1.5 + (a.comments?.length || 0) * 4;
-    const scoreB = (b.votes || 0) * 1.5 + (b.comments?.length || 0) * 4;
-    return scoreB - scoreA;
-  });
+  const totalRealCount = userRealThreads.length + otherRealThreads.length;
+  const userSlots = userRealThreads.slice(0, effectiveLimit);
+  const maxOtherSlots = Math.min(MAX_OTHER_HIGHLIGHTS, Math.max(0, effectiveLimit - userSlots.length));
 
-  // Concatenate strictly: User's real post(s) first, then real community threads, then mock templates
-  const curated = [...userRealThreads, ...otherRealThreads, ...mockThreads];
-  return curated.slice(0, limit);
+  const otherSlots: ForumHighlightThread[] = otherRealThreads.slice(0, maxOtherSlots);
+
+  // Only pad with Brutal Death Metal highlights while total real posts < 10
+  if (totalRealCount < 10 && otherSlots.length < maxOtherSlots) {
+    const usedIds = new Set([...userSlots, ...otherSlots].map((t) => String(t.id)));
+    for (const bdmThread of BRUTAL_DEATH_METAL_HIGHLIGHTS) {
+      if (otherSlots.length >= maxOtherSlots) break;
+      if (!usedIds.has(String(bdmThread.id))) {
+        otherSlots.push(bdmThread);
+        usedIds.add(String(bdmThread.id));
+      }
+    }
+  }
+
+  return [...userSlots, ...otherSlots].slice(0, effectiveLimit);
 }
 
 // Cast upvote/downvote directly from feed card
@@ -267,8 +401,13 @@ export function voteForumHighlight(
   targetVote: 'up' | 'down'
 ): { updatedVotes: number; newUserVote: 'up' | 'down' | null } | null {
   const threads = loadCachedForumThreads();
-  const index = threads.findIndex((t) => String(t.id) === String(threadId));
-  if (index === -1) return null;
+  let index = threads.findIndex((t) => String(t.id) === String(threadId));
+  if (index === -1) {
+    const fallbackBdm = BRUTAL_DEATH_METAL_HIGHLIGHTS.find((b) => String(b.id) === String(threadId));
+    if (!fallbackBdm) return null;
+    threads.push({ ...fallbackBdm });
+    index = threads.length - 1;
+  }
 
   const currentThread = threads[index];
   const currentVote = currentThread.userVote;
@@ -315,8 +454,13 @@ export function addQuickCommentToThread(
   if (!commentText || !commentText.trim()) return null;
 
   const threads = loadCachedForumThreads();
-  const index = threads.findIndex((t) => String(t.id) === String(threadId));
-  if (index === -1) return null;
+  let index = threads.findIndex((t) => String(t.id) === String(threadId));
+  if (index === -1) {
+    const fallbackBdm = BRUTAL_DEATH_METAL_HIGHLIGHTS.find((b) => String(b.id) === String(threadId));
+    if (!fallbackBdm) return null;
+    threads.push({ ...fallbackBdm });
+    index = threads.length - 1;
+  }
 
   const newComment: ForumComment = {
     id: `fc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,

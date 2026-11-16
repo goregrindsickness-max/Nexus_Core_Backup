@@ -5,6 +5,8 @@ import { getSupabase, subscribeToTable } from '../../../supabase';
 import { extractYouTubeId } from '../utils/postSyncUtils';
 import { mergePostWithReactions } from '../utils/reactionStore';
 import { isMiguelNameOrProfile } from '../utils/profileUtils';
+import { fetchGlobalInteractions } from '../../../services/postInteractionsService';
+import { MIGUEL_DEFAULT_AVATAR, DEFAULT_PERSONAL_AVATAR } from '../../../utils/bandProfileUtils';
 
 interface UseFeedLocalCacheOptions {
   portalRole: string;
@@ -50,11 +52,12 @@ export function useFeedLocalCache({
         let finalFeed = (storedFeed || []).map(post => {
           const rawPost = post as any;
           const isPostSelf = Boolean(
-            post.author?.isYou ||
-            rawPost.isYou ||
-            (userProfile?.id && (post.author?.id === userProfile.id || rawPost.profile_id === userProfile.id || rawPost.user_id === userProfile.id)) ||
-            (userProfile?.console_handle && post.author?.name && post.author.name.toLowerCase().includes(userProfile.console_handle.toLowerCase().replace(/^@/, ''))) ||
-            (userProfile?.name && post.author?.name && post.author.name.toLowerCase().includes(userProfile.name.toLowerCase()))
+            (userProfile?.id && (post.author?.id === userProfile.id || rawPost.profile_id === userProfile.id || rawPost.user_id === userProfile.id || rawPost.author_id === userProfile.id)) ||
+            (userProfile?.console_handle && userProfile.console_handle !== '@user' && userProfile.console_handle !== 'user' && post.author?.name && (
+              post.author.name.toLowerCase() === userProfile.console_handle.toLowerCase().replace(/^@/, '') ||
+              post.author.name.toLowerCase() === userProfile.console_handle.toLowerCase()
+            )) ||
+            (userProfile?.name && userProfile.name !== 'User' && userProfile.name !== 'New User' && userProfile.name !== 'Nexus Member' && post.author?.name && post.author.name.toLowerCase() === userProfile.name.toLowerCase())
           );
           const postWorkspace = (rawPost.workspace_type || rawPost.workspaceType || post.author?.workspace_type || post.author?.workspaceType || '').toLowerCase();
           const isEntityPost = postWorkspace === 'band' || postWorkspace === 'creative' || postWorkspace === 'promoter' || postWorkspace === 'label' ||
@@ -322,7 +325,53 @@ export function useFeedLocalCache({
                   finalFeed = remoteFeed.filter(p => !isBrokenOrDeletedPost(p)).map(p => mergePostWithReactions(p, userProfile?.id));
                 }
 
-                // Query comments
+                // Query global comments and reactions from persistent backend
+                try {
+                  const globalInteractions = await fetchGlobalInteractions();
+                  if (globalInteractions) {
+                    const activeUserId = userProfile?.id || (typeof window !== 'undefined' ? localStorage.getItem('nexus_active_profile_id') || localStorage.getItem('nexus_user_profile_id') : null);
+
+                    finalFeed = finalFeed.map(p => {
+                      const serverComments = globalInteractions.comments?.[p.id] || [];
+                      const existingComments = Array.isArray(p.comments) ? p.comments : [];
+                      const cMap = new Map();
+                      existingComments.forEach((c: any) => { if (c?.id) cMap.set(c.id, c); });
+                      serverComments.forEach((c: any) => {
+                        if (c?.id) {
+                          const prev = cMap.get(c.id);
+                          if (!prev) {
+                            cMap.set(c.id, c);
+                          } else {
+                            if (prev.edited && !c.edited) {
+                              cMap.set(c.id, { ...c, ...prev, edited: true });
+                            } else if (!prev.edited && c.edited) {
+                              cMap.set(c.id, { ...prev, ...c });
+                            } else {
+                              cMap.set(c.id, { ...prev, ...c });
+                            }
+                          }
+                        }
+                      });
+                      const mergedComments = Array.from(cMap.values());
+
+                      const serverRx = globalInteractions.reactions?.[p.id];
+                      const userReacts = (serverRx?.user_reactions && activeUserId ? serverRx.user_reactions[activeUserId] : null) || p.user_reactions || {};
+
+                      return {
+                        ...p,
+                        comments: mergedComments.length > 0 ? mergedComments : p.comments || [],
+                        reactions: serverRx?.reactions || p.reactions,
+                        likes_count: serverRx?.likes_count ?? p.likes_count,
+                        user_reactions: userReacts,
+                        user_liked: Boolean(userReacts?.likes)
+                      };
+                    });
+                  }
+                } catch (gErr) {
+                  console.warn("Notice querying global interactions in feed cache:", gErr);
+                }
+
+                // Best-effort query Supabase comments
                 try {
                   const { data: commentsRows } = await supabaseClient
                     .from('nexus_post_comments')
@@ -334,13 +383,19 @@ export function useFeedLocalCache({
                     commentsRows.forEach((c: any) => {
                       if (!c.post_id) return;
                       if (!commentsByPost[c.post_id]) commentsByPost[c.post_id] = [];
+                      const isMiguel = c.user_id === '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+                      const isCurrentViewer = Boolean(userProfile?.id && c.user_id === userProfile.id);
+                      const commAuthor = isMiguel ? 'Miguel Goregrinder Medina' : (isCurrentViewer ? (userProfile?.full_name || userProfile?.name || 'You') : 'Scene Member');
+                      const commAvatar = isMiguel ? MIGUEL_DEFAULT_AVATAR : (isCurrentViewer ? (userProfile?.avatar_url || userProfile?.avatar || DEFAULT_PERSONAL_AVATAR) : DEFAULT_PERSONAL_AVATAR);
                       commentsByPost[c.post_id].push({
                         id: c.id,
                         post_id: c.post_id,
                         user_id: c.user_id,
                         parent_comment_id: c.parent_comment_id || null,
-                        username: c.user_id || 'Fan',
-                        author: c.user_id || 'Fan',
+                        username: commAuthor,
+                        author: commAuthor,
+                        avatar: commAvatar,
+                        userAvatar: commAvatar,
                         text: c.content,
                         content: c.content,
                         time: c.created_at ? new Date(c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
@@ -348,14 +403,30 @@ export function useFeedLocalCache({
                       });
                     });
 
-                    finalFeed = finalFeed.map(p => ({
-                      ...p,
-                      comments: commentsByPost[p.id] || p.comments || []
-                    }));
+                    finalFeed = finalFeed.map(p => {
+                      const sbComms = commentsByPost[p.id] || [];
+                      if (sbComms.length === 0) return p;
+                      const currentComms = Array.isArray(p.comments) ? p.comments : [];
+                      const cMap = new Map();
+                      currentComms.forEach((c: any) => { if (c?.id) cMap.set(c.id, c); });
+                      sbComms.forEach((sbC: any) => {
+                        if (sbC?.id) {
+                          const existing = cMap.get(sbC.id);
+                          if (!existing) {
+                            cMap.set(sbC.id, sbC);
+                          } else {
+                            if (existing.edited) {
+                              cMap.set(sbC.id, { ...sbC, ...existing, text: existing.text || existing.content, content: existing.text || existing.content });
+                            } else {
+                              cMap.set(sbC.id, { ...existing, ...sbC, text: sbC.text || existing.text, content: sbC.content || existing.content });
+                            }
+                          }
+                        }
+                      });
+                      return { ...p, comments: Array.from(cMap.values()) };
+                    });
                   }
-                } catch (commErr) {
-                  console.warn("Notice querying nexus_post_comments:", commErr);
-                }
+                } catch (_) {}
 
                 // Query polls
                 try {
@@ -667,13 +738,19 @@ export function useFeedLocalCache({
         if (!c.post_id) return;
         setFeed(prev => prev.map(post => {
           if (post.id === c.post_id || post.id === `nexus_post_${c.post_id}`) {
+            const isMiguel = c.user_id === '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+            const isCurrentViewer = Boolean(userProfile?.id && c.user_id === userProfile.id);
+            const commAuthor = isMiguel ? 'Miguel Goregrinder Medina' : (isCurrentViewer ? (userProfile?.full_name || userProfile?.name || 'You') : 'Scene Member');
+            const commAvatar = isMiguel ? MIGUEL_DEFAULT_AVATAR : (isCurrentViewer ? (userProfile?.avatar_url || userProfile?.avatar || DEFAULT_PERSONAL_AVATAR) : DEFAULT_PERSONAL_AVATAR);
             const newComm = {
               id: c.id,
               post_id: c.post_id,
               user_id: c.user_id,
               parent_comment_id: c.parent_comment_id || null,
-              username: c.user_id || 'Fan',
-              author: c.user_id || 'Fan',
+              username: commAuthor,
+              author: commAuthor,
+              avatar: commAvatar,
+              userAvatar: commAvatar,
               text: c.content,
               content: c.content,
               time: c.created_at ? new Date(c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
@@ -741,15 +818,11 @@ export function useFeedLocalCache({
 
         const isMatch = Boolean(
           (targetId && postAuthorId === targetId) ||
-          (targetName && (
+          (targetName && targetName !== 'user' && targetName !== 'anonymous' && (
             postAuthorName === targetName ||
-            postAuthorName.includes(targetName) ||
-            targetName.includes(postAuthorName) ||
             (targetName.includes('miguel') && postAuthorName.includes('bdmceo')) ||
             (targetName.includes('bdmceo') && postAuthorName.includes('miguel'))
-          )) ||
-          post.author?.isYou ||
-          rawPost.isYou
+          ))
         );
 
         // Update post avatar for all matching author posts (skip purely band posts only if this update is not for a band)

@@ -27,6 +27,7 @@ import {
   Layers
 } from 'lucide-react';
 import { getSupabase, generateUUID } from '../../../supabase';
+import { pushManager } from '../../../lib/pushNotifications';
 
 export interface BandBookingModalProps {
   isOpen: boolean;
@@ -237,16 +238,25 @@ export const BandBookingModal: React.FC<BandBookingModalProps> = ({
         const supabase = getSupabase();
         if (supabase) {
           // Send notification entry
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+          const targetUserId = targetProfile?.id && uuidRegex.test(targetProfile.id)
+            ? targetProfile.id
+            : '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+
           await supabase.from('nexus_notifications').insert([{
             id: generateUUID(),
-            user_id: targetProfile?.id || 'band_inbox',
-            sender_id: userProfile?.id || null,
-            sender_name: formData.promoterName || 'Promoter / Booker',
+            user_id: targetUserId,
+            actor_id: (userProfile?.id && uuidRegex.test(userProfile.id)) ? userProfile.id : null,
             title: `📅 Booking Offer: ${formData.eventName}`,
             message: `${formData.promoterName} sent a formal offer for ${formData.venueName} in ${formData.city} on ${formData.performanceDate} (${formData.guaranteeAmount} ${formData.currency}).`,
             type: 'booking_offer',
-            category: 'GIGS',
-            data: bookingRecord,
+            data: {
+              ...bookingRecord,
+              category: 'GIGS',
+              sender_id: userProfile?.id || null,
+              sender_name: formData.promoterName || 'Promoter / Booker',
+              actor_email: userProfile?.email || null,
+            },
             is_read: false,
             created_at: timestamp
           }]).select();
@@ -256,6 +266,21 @@ export const BandBookingModal: React.FC<BandBookingModalProps> = ({
             await supabase.from('nexus_booking_requests').insert([bookingRecord]).select();
           } catch (insertErr) {
             // Non-blocking if table is not yet provisioned
+          }
+
+          if (targetUserId && targetUserId !== userProfile?.id) {
+            pushManager.sendPushToServer({
+              userId: targetUserId,
+              userEmail: targetProfile?.email,
+              excludeUserId: userProfile?.id,
+              excludeUserEmail: userProfile?.email,
+              title: `📅 Booking Offer: ${formData.eventName}`,
+              body: `${formData.promoterName} sent a formal offer for ${formData.venueName} in ${formData.city} (${formData.guaranteeAmount} ${formData.currency}).`,
+              category: 'booking_deals',
+              targetTab: 'social',
+              priority: 'P0',
+              data: { type: 'booking_offer', eventName: formData.eventName, promoterName: formData.promoterName },
+            }).catch(() => {});
           }
         }
       } catch (err) {

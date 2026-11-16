@@ -4,8 +4,15 @@ import { loadDiscoverProfilesCache, saveDiscoverProfilesCache } from '../utils/f
 import { extractUUID } from '../../../utils/socialFeedUtils';
 import { getSupabase, executeWithSchemaResilience, sanitizeBandPayload } from '../../../supabase';
 import { isMiguelNameOrProfile } from '../utils/profileUtils';
-import { communityBandManager, isDeletedOrZombieBand } from '../../../lib/communityBands';
-import { isCommunityBandRecord } from '../../../lib/seedBandsData';
+import { communityBandManager, isDeletedOrZombieBand, isCommunityBandRecord } from '../../../lib/communityBands';
+import {
+  isProfileFollowedGlobally,
+  saveFollowStateGlobally,
+  FOLLOW_EVENT_NAME,
+  getScopedFollowsMap,
+  syncScopedFollowsFromServer,
+  isEntityTargetObject
+} from '../../../utils/followSyncService';
 
 const isValidUUID = (str: string | null | undefined): boolean => {
   return typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
@@ -63,7 +70,12 @@ export function useSocialFollowsAndProfiles({
           return prev.map(p => {
             const saved = data.find((d: any) => d.id === p.id);
             if (saved) {
-              return { ...p, followed: saved.followed, followedBack: saved.followedBack, notificationsEnabled: saved.notificationsEnabled };
+              return {
+                ...p,
+                followed: isProfileFollowedGlobally({ ...p, followed: undefined, isFollowed: undefined, isFollowedByMe: undefined }, undefined, userProfile?.id),
+                followedBack: saved.followedBack,
+                notificationsEnabled: saved.notificationsEnabled
+              };
             }
             return p;
           });
@@ -85,10 +97,9 @@ export function useSocialFollowsAndProfiles({
       let whoFollowsUs: string[] = [];
       const supabaseClient = getSupabase();
 
-      let localFollows: Record<string, boolean> = {};
-      try {
-        localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
-      } catch (e) {}
+      let localFollows: Record<string, boolean> = getScopedFollowsMap(userProfile?.id);
+      let resolvedFollowerUid: string | undefined = extractUUID(userProfile?.id) || undefined;
+      let authoritativeFollowsForCheck: any[] | undefined = undefined;
 
       if (supabaseClient && userProfile) {
         try {
@@ -107,12 +118,25 @@ export function useSocialFollowsAndProfiles({
           }
 
           if (extractedUid) {
-            const { data: followsData } = await supabaseClient
+            resolvedFollowerUid = extractedUid;
+            const { data: followsData, error: fErr } = await supabaseClient
               .from('follows')
-              .select('followed_id')
+              .select('follower_id, followed_id')
               .eq('follower_id', extractedUid);
-            if (followsData) {
-              followedArtistIds = followsData.map((f: any) => String(f.followed_id || '').toLowerCase().trim());
+            if (!fErr && followsData) {
+              followedArtistIds = followsData
+                .map((f: any) => String(f.followed_id || '').toLowerCase().trim())
+                .filter(Boolean);
+              syncScopedFollowsFromServer(followedArtistIds, extractedUid);
+              localFollows = getScopedFollowsMap(extractedUid);
+              const mappedFollows = followsData.map((f: any) => ({
+                follower_id: f.follower_id || extractedUid,
+                followed_id: f.followed_id,
+                fan_profile_id: f.follower_id || extractedUid,
+                artist_id: f.followed_id
+              }));
+              authoritativeFollowsForCheck = mappedFollows;
+              setAllFollows(mappedFollows);
             }
 
             const myNames = [
@@ -144,10 +168,13 @@ export function useSocialFollowsAndProfiles({
         }
       }
 
+      const followsPoolForCheck = authoritativeFollowsForCheck ?? allFollows;
+
       setDiscoverProfiles(prev => prev.map(dp => {
         const dpNameLower = (dp?.name || "User").toLowerCase().trim();
         const dpIdLower = String(dp.id || '').toLowerCase().trim();
-        const isFollowed = followedArtistIds.includes(dpIdLower) || followedArtistIds.includes(dpNameLower) || !!localFollows[dp.id] || !!localFollows[dpNameLower];
+        const cleanDp = { ...dp, followed: undefined, isFollowed: undefined, isFollowedByMe: undefined };
+        const isFollowed = isProfileFollowedGlobally(cleanDp, followsPoolForCheck, resolvedFollowerUid);
         const isFollowedBack = whoFollowsUs.includes(dpNameLower) || whoFollowsUs.includes(dpIdLower);
         return { ...dp, followed: isFollowed, followedBack: isFollowedBack };
       }));
@@ -187,10 +214,12 @@ export function useSocialFollowsAndProfiles({
                 name: bandName.trim(),
                 role: 'Band',
                 category: 'bands',
+                type: 'band',
+                isBandProfile: true,
                 desc: 'Official roster artist signed to our label',
                 avatar: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=200',
                 image: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=200',
-                followed: true,
+                followed: isProfileFollowedGlobally({ name: bandName.trim(), role: 'Band', type: 'band', isBandProfile: true }, followsPoolForCheck, resolvedFollowerUid),
                 isYou: false
               });
             }
@@ -229,34 +258,96 @@ export function useSocialFollowsAndProfiles({
               let profileRole = p.role || p.account_type || 'Member';
               let category = 'friends';
 
-              if (p.account_type === 'label' || p.label_company_name) {
+              const isMiguel = (p.email || '').toLowerCase().trim() === 'goregrindsickness@gmail.com' || (p.email || '').toLowerCase().trim() === 'admin@nexus.com' || String(p.id || '').toLowerCase().trim() === '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+
+              const accTypeLower = String(p.account_type || '').toLowerCase().trim();
+              const activeWsLower = String(p.active_workspace || '').toLowerCase().trim();
+              const isExplicitIndustryPro =
+                accTypeLower === 'industry_pro' ||
+                accTypeLower === 'industry pro' ||
+                activeWsLower === 'industry_pro';
+              const rawBandName = String(p.bandName || p.band_name || '').trim();
+              const isBandEntityRow =
+                !isExplicitIndustryPro &&
+                !isMiguel &&
+                (
+                  (!p.full_name && (Boolean(rawBandName) || accTypeLower === 'band')) ||
+                  (accTypeLower === 'band' && Boolean(rawBandName) && p.full_name?.trim().toLowerCase() === rawBandName.toLowerCase())
+                );
+
+              if (accTypeLower === 'label' || p.label_company_name) {
                 profileName = p.label_company_name || profileName;
                 profileAvatar = p.label_avatar || profileAvatar;
                 profileBanner = p.label_banner || profileBanner;
                 profileRole = 'Label';
                 category = 'labels';
-              } else if (p.account_type === 'band' || (!p.full_name && p.bandName)) {
-                profileName = p.bandName || profileName;
+              } else if (isBandEntityRow) {
+                profileName = rawBandName || profileName;
                 profileAvatar = p.avatar_url || profileAvatar;
                 profileBanner = p.banner_url || profileBanner;
                 profileRole = 'Band';
                 category = 'bands';
-              } else if (p.account_type === 'creative') {
+              } else if (accTypeLower === 'creative') {
                 profileName = p.creative_name || p.creative_metadata?.business_name || profileName;
                 profileAvatar = p.creative_avatar || profileAvatar;
                 profileBanner = p.creative_banner || profileBanner;
                 profileRole = 'Creative';
                 category = 'creatives';
-              } else if (p.account_type === 'promoter') {
-                profileName = p.promoter_name || p.promoter_metadata?.brand_name || profileName;
-                profileAvatar = p.promoter_logo || profileAvatar;
-                profileBanner = p.promoter_cover_image || profileBanner;
-                profileRole = 'Promoter';
-                category = 'venues';
+              } else if (accTypeLower === 'promoter') {
+                if (isMiguel) {
+                  profileRole = 'Member';
+                  category = 'friends';
+                } else {
+                  let brand = p.promoter_name || p.promoter_metadata?.brand_name;
+                  if (brand && brand.toLowerCase().includes('nexus live')) {
+                    brand = `${profileName} Productions`;
+                  }
+                  profileName = brand || `${profileName} Productions`;
+                  profileAvatar = p.promoter_logo || profileAvatar;
+                  profileBanner = p.promoter_cover_image || profileBanner;
+                  profileRole = 'Promoter';
+                  category = 'venues';
+                }
+              } else if (
+                isExplicitIndustryPro ||
+                ((accTypeLower === 'band' || String(p.role || '').toLowerCase().trim() === 'band') && Boolean(p.full_name))
+              ) {
+                profileRole = 'Industry Pro';
+                category = 'friends';
               }
+
+              const rawRegWs = Array.isArray(p.registered_workspaces) ? p.registered_workspaces : [];
+              const hasPollutedPromoter = !isMiguel && [
+                p.promoter_name,
+                p.promoter_agency,
+                p.promoter_brand,
+                p.promoter_metadata?.brand_name,
+                p.promoter_metadata?.agency_name,
+              ].some((v: any) => typeof v === 'string' && v.toLowerCase().includes('nexus live'));
+
+              const cleanRegWs = hasPollutedPromoter
+                ? rawRegWs.filter((w: any) => {
+                    const t = typeof w === 'string' ? w.toLowerCase().trim() : String(w?.type || w?.key || '').toLowerCase().trim();
+                    return t !== 'promoter';
+                  })
+                : rawRegWs;
+
+              const cleanProfFields = hasPollutedPromoter
+                ? {
+                    promoter_id: undefined,
+                    promoter_name: undefined,
+                    promoter_agency: undefined,
+                    promoter_brand: undefined,
+                    promoter_logo: undefined,
+                    promoter_cover_image: undefined,
+                    promoter_bio: undefined,
+                    promoter_metadata: undefined,
+                  }
+                : {};
 
               list.push({
                 ...p,
+                ...cleanProfFields,
                 id: p.id || `real-p-${p.email}`,
                 raw_id: p.id,
                 user_id: p.id,
@@ -272,11 +363,13 @@ export function useSocialFollowsAndProfiles({
                 avatar: profileAvatar,
                 image: profileAvatar,
                 banner: profileBanner,
-                followed: followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(profileName.toLowerCase()) || !!localFollows[p.id] || !!localFollows[profileName.toLowerCase()],
+                followed: authoritativeFollowsForCheck !== undefined
+                  ? (followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(profileName.toLowerCase()))
+                  : (followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(profileName.toLowerCase()) || !!localFollows[p.id] || !!localFollows[profileName.toLowerCase()]),
                 isYou: false,
                 email: p.email,
-                registered_workspaces: p.registered_workspaces || p.allowed_workspaces || p.workspaces || [],
-                allowed_workspaces: p.allowed_workspaces || p.registered_workspaces || []
+                registered_workspaces: cleanRegWs,
+                allowed_workspaces: p.allowed_workspaces || []
               });
             });
           }
@@ -325,7 +418,9 @@ export function useSocialFollowsAndProfiles({
                 cover_url: b.cover_url || b.banner_url || '',
                 banner_url: b.banner_url || b.cover_url || '',
                 banner: b.cover_url || b.banner_url || '',
-                followed: followedArtistIds.includes(String(b.id || '').toLowerCase().trim()) || followedArtistIds.includes(bName.toLowerCase()) || !!localFollows[b.id] || !!localFollows[bName.toLowerCase()],
+                followed: authoritativeFollowsForCheck !== undefined
+                  ? (followedArtistIds.includes(String(b.id || '').toLowerCase().trim()) || followedArtistIds.includes(bName.toLowerCase()))
+                  : (followedArtistIds.includes(String(b.id || '').toLowerCase().trim()) || followedArtistIds.includes(bName.toLowerCase()) || !!localFollows[b.id] || !!localFollows[bName.toLowerCase()]),
                 isYou: false
               });
             });
@@ -369,7 +464,9 @@ export function useSocialFollowsAndProfiles({
               followers_count: cb.followers_count || 120,
               discography: cb.discography || [],
               curated_by: cb.curated_by,
-              followed: !!localFollows[cb.id] || !!localFollows[cb.name.toLowerCase()],
+              followed: authoritativeFollowsForCheck !== undefined
+                ? (followedArtistIds.includes(String(cb.id || '').toLowerCase().trim()) || followedArtistIds.includes(cb.name.toLowerCase()))
+                : (!!localFollows[cb.id] || !!localFollows[cb.name.toLowerCase()]),
               isYou: false
             });
           });
@@ -415,7 +512,9 @@ export function useSocialFollowsAndProfiles({
                 creative_avatar: cAvatar,
                 banner: cBanner,
                 creative_banner: cBanner,
-                followed: followedArtistIds.includes(String(c.id || '').toLowerCase().trim()) || followedArtistIds.includes(cName.toLowerCase()) || !!localFollows[c.id] || !!localFollows[cName.toLowerCase()],
+                followed: authoritativeFollowsForCheck !== undefined
+                  ? (followedArtistIds.includes(String(c.id || '').toLowerCase().trim()) || followedArtistIds.includes(cName.toLowerCase()))
+                  : (followedArtistIds.includes(String(c.id || '').toLowerCase().trim()) || followedArtistIds.includes(cName.toLowerCase()) || !!localFollows[c.id] || !!localFollows[cName.toLowerCase()]),
                 isYou: false
               });
             });
@@ -459,7 +558,9 @@ export function useSocialFollowsAndProfiles({
                 image: lAvatar,
                 label_avatar: lAvatar,
                 banner: lBanner,
-                followed: followedArtistIds.includes(String(l.id || '').toLowerCase().trim()) || followedArtistIds.includes(lName.toLowerCase()) || !!localFollows[l.id] || !!localFollows[lName.toLowerCase()],
+                followed: authoritativeFollowsForCheck !== undefined
+                  ? (followedArtistIds.includes(String(l.id || '').toLowerCase().trim()) || followedArtistIds.includes(lName.toLowerCase()))
+                  : (followedArtistIds.includes(String(l.id || '').toLowerCase().trim()) || followedArtistIds.includes(lName.toLowerCase()) || !!localFollows[l.id] || !!localFollows[lName.toLowerCase()]),
                 isYou: false
               });
             });
@@ -503,7 +604,9 @@ export function useSocialFollowsAndProfiles({
                 avatar: pAvatar,
                 image: pAvatar,
                 banner: pBanner,
-                followed: followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(pName.toLowerCase()) || !!localFollows[p.id] || !!localFollows[pName.toLowerCase()],
+                followed: authoritativeFollowsForCheck !== undefined
+                  ? (followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(pName.toLowerCase()))
+                  : (followedArtistIds.includes(String(p.id || '').toLowerCase().trim()) || followedArtistIds.includes(pName.toLowerCase()) || !!localFollows[p.id] || !!localFollows[pName.toLowerCase()]),
                 isYou: false
               });
             });
@@ -554,9 +657,13 @@ export function useSocialFollowsAndProfiles({
     };
     window.addEventListener('nexus_community_bands_updated', handleUpdate);
     window.addEventListener('nexus_avatar_updated', handleUpdate);
+    window.addEventListener(FOLLOW_EVENT_NAME, handleUpdate);
+    window.addEventListener('storage', handleUpdate);
     return () => {
       window.removeEventListener('nexus_community_bands_updated', handleUpdate);
       window.removeEventListener('nexus_avatar_updated', handleUpdate);
+      window.removeEventListener(FOLLOW_EVENT_NAME, handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
     };
   }, [userProfile?.id, userProfile?.email]);
 
@@ -571,15 +678,23 @@ export function useSocialFollowsAndProfiles({
       const extracted = extractUUID(target);
       if (extracted && isValidUUID(extracted)) return extracted;
     } else if (typeof target === 'object') {
-      const candidateFields = [
-        target.raw_id,
-        target.band_id,
-        target.user_id,
-        target.profile_id,
-        target.creator_id,
-        target.owner_id,
-        target.id
-      ];
+      const isEntity = isEntityTargetObject(target);
+      const candidateFields = isEntity
+        ? [
+            target.raw_id,
+            target.band_id,
+            target.label_id,
+            target.promoter_id,
+            target.creative_id,
+            target.id
+          ]
+        : [
+            target.raw_id,
+            target.band_id,
+            target.user_id,
+            target.profile_id,
+            target.id
+          ];
       for (const field of candidateFields) {
         if (field) {
           const extracted = extractUUID(String(field));
@@ -656,23 +771,37 @@ export function useSocialFollowsAndProfiles({
       followerId = generateDeterministicUUID(`user-${userSeed}`);
     }
 
-    // 2. Identify if target is a Band
-    const isBand = (
+    // 2. Identify if target is a Band (Guard against fan/personal accounts being misidentified)
+    const isTargetFan = typeof targetInput === 'object' && (
+      targetInput?.account_type === 'fan' ||
+      targetInput?.account_type === 'fan_only' ||
+      targetInput?.role === 'Fan Listener' ||
+      targetInput?.role === 'FAN' ||
+      targetInput?.isPersonal === true
+    ) && !targetInput?.isBandProfile && targetInput?.account_type !== 'band';
+
+    const isBand = !isTargetFan && ((
       typeof targetInput === 'object' && (
-        targetInput?.isBandProfile ||
+        targetInput?.isBandProfile === true ||
         targetInput?.type === 'band' ||
         targetInput?.role === 'Band' ||
         targetInput?.role === 'band' ||
         targetInput?.portalRole === 'band' ||
         targetInput?.account_type === 'band' ||
-        !!targetInput?.band_name ||
-        !!targetInput?.bandName ||
-        !!targetInput?.band_id
+        (!!targetInput?.band_name && targetInput?.account_type === 'band') ||
+        (!!targetInput?.bandName && targetInput?.account_type === 'band')
       )
-    ) || (typeof targetInput === 'string' && targetInput.startsWith('real-b-'));
+    ) || (typeof targetInput === 'string' && targetInput.startsWith('real-b-')));
 
-    // 3. Resolve Target ID and Name
-    let targetUserId = extractUUID(typeof targetInput === 'object' ? (targetInput?.band_id || targetInput?.raw_id || targetInput?.id || targetInput?.user_id || targetInput?.creator_id || targetInput?.owner_id) : targetInput) || resolveProfileUUID(targetInput, allProfiles);
+    // 3. Resolve Target ID and Name (never use creator_id / owner_id / user_id on band/entity objects)
+    const isEntity = isBand || isEntityTargetObject(targetInput);
+    let targetUserId = extractUUID(
+      typeof targetInput === 'object'
+        ? (isEntity
+            ? (targetInput?.band_id || targetInput?.raw_id || targetInput?.id)
+            : (targetInput?.band_id || targetInput?.raw_id || targetInput?.id || targetInput?.user_id || targetInput?.profile_id))
+        : targetInput
+    ) || resolveProfileUUID(targetInput, allProfiles);
     const targetName = typeof targetInput === 'string'
       ? targetInput.replace(/^real-[pb]-/, '').replace('real-', '')
       : targetInput?.band_name || targetInput?.bandName || targetInput?.name || targetInput?.full_name || targetInput?.console_handle || 'User';
@@ -707,8 +836,8 @@ export function useSocialFollowsAndProfiles({
           } catch (e) {}
         }
 
-        // If band doesn't exist yet in Supabase bands table, ensure a record is created so the relation is valid
-        if (!targetUserId || !isValidUUID(targetUserId)) {
+        // If band doesn't exist yet in Supabase bands table, ensure a record is created so the relation is valid (only for real band targets)
+        if ((!targetUserId || !isValidUUID(targetUserId)) && isBand) {
           const autoBandId = generateDeterministicUUID(`band-${cleanSearch.toLowerCase()}`);
           const bandPayload = sanitizeBandPayload({
             id: autoBandId,
@@ -746,7 +875,7 @@ export function useSocialFollowsAndProfiles({
             const { data: matchedCreatives } = await supabaseClient
               .from('creatives')
               .select('id, creator_id, user_id')
-              .or(`business_name.ilike.%${cleanSearch}%,creative_name.ilike.%${cleanSearch}%,name.ilike.%${cleanSearch}%`)
+              .or(`business_name.ilike.%${cleanSearch}%,name.ilike.%${cleanSearch}%`)
               .limit(1);
             if (matchedCreatives && matchedCreatives.length > 0 && isValidUUID(matchedCreatives[0].id)) {
               targetUserId = matchedCreatives[0].id;
@@ -789,62 +918,25 @@ export function useSocialFollowsAndProfiles({
       ? targetUserId
       : generateDeterministicUUID(`target-${cleanSearch.toLowerCase() || 'item'}`);
 
-    // Read local storage saved follows
-    let localFollows: Record<string, boolean> = {};
-    try {
-      localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
-    } catch (e) {}
-
-    let currentlyFollowed = false;
     const targetNameLower = targetName.toLowerCase().trim();
 
-    if (localFollows[finalTargetId] || localFollows[targetNameLower]) {
-      currentlyFollowed = true;
+    const cleanTargetCheck = typeof targetInput === 'object' && targetInput
+      ? { ...targetInput, followed: undefined, isFollowed: undefined, isFollowedByMe: undefined }
+      : targetInput;
+    let currentlyFollowed = isProfileFollowedGlobally(cleanTargetCheck, allFollows, followerId);
+    if (!currentlyFollowed && finalTargetId) {
+      currentlyFollowed = isProfileFollowedGlobally(finalTargetId, allFollows, followerId);
     }
-
-    if (!currentlyFollowed && followerId && finalTargetId) {
-      currentlyFollowed = allFollows.some(f => 
-        ((f.fan_profile_id === followerId || f.follower_id === followerId) && (f.artist_id === finalTargetId || f.followed_id === finalTargetId)) ||
-        (f.target_name && f.target_name.toLowerCase().trim() === targetNameLower)
-      );
-    }
-    if (!currentlyFollowed && selectedUserProfile) {
-      const selId = resolveProfileUUID(selectedUserProfile, allProfiles);
-      if ((selId && finalTargetId && selId === finalTargetId) || selectedUserProfile.name?.toLowerCase().trim() === targetNameLower) {
-        currentlyFollowed = !!selectedUserProfile.isFollowed;
-      }
-    }
-    if (!currentlyFollowed && typeof targetInput === 'object' && targetInput?.followed !== undefined) {
-      currentlyFollowed = !!targetInput.followed;
-    }
-    if (!currentlyFollowed && typeof targetInput === 'object' && targetInput?.isFollowed !== undefined) {
-      currentlyFollowed = !!targetInput.isFollowed;
-    }
-    if (!currentlyFollowed) {
-      const inDiscover = discoverProfiles.find(p => (p.name || '').toLowerCase().trim() === targetNameLower || (finalTargetId && p.id === finalTargetId));
-      if (inDiscover?.followed) currentlyFollowed = true;
-    }
-    if (!currentlyFollowed) {
-      const inReal = realProfiles.find(p => (p.name || '').toLowerCase().trim() === targetNameLower || (finalTargetId && p.id === finalTargetId));
-      if (inReal?.followed) currentlyFollowed = true;
+    if (!currentlyFollowed && targetName) {
+      currentlyFollowed = isProfileFollowedGlobally(targetName, allFollows, followerId);
     }
 
     const nextAction = forceAction ? forceAction : (currentlyFollowed ? 'unfollow' : 'follow');
     const isNowFollowed = nextAction === 'follow';
 
-    // Persist to localStorage
-    try {
-      if (isNowFollowed) {
-        localFollows[finalTargetId] = true;
-        if (targetNameLower) localFollows[targetNameLower] = true;
-      } else {
-        delete localFollows[finalTargetId];
-        if (targetNameLower) delete localFollows[targetNameLower];
-      }
-      localStorage.setItem('nexus_local_follows_v1', JSON.stringify(localFollows));
-    } catch (e) {
-      console.warn("Failed to write nexus_local_follows_v1", e);
-    }
+    // Persist to user-scoped localStorage via followSyncService
+    saveFollowStateGlobally(targetInput, isNowFollowed, followerId);
+    if (finalTargetId) saveFollowStateGlobally(finalTargetId, isNowFollowed, followerId);
 
     if (supabaseClient && followerId && finalTargetId && isValidUUID(followerId) && isValidUUID(finalTargetId)) {
       const targetType = isBand ? 'band' : ((typeof targetInput === 'object' ? targetInput?.type || targetInput?.account_type || targetInput?.role : null) || 'user');

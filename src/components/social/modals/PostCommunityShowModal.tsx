@@ -134,18 +134,14 @@ export function PostCommunityShowModal({
       try {
         const raw = reader.result as string;
         const compressed = await compressImageInSocialFeed(raw, 1080, 1080, 0.8);
-        triggerNotification?.('⏳ Uploading flyer to storage...');
         const uploadedUrl = await uploadBase64ToStorage(compressed, 'archives', 'community_show', 'flyer');
         if (uploadedUrl && !uploadedUrl.startsWith('data:')) {
           onSuccess(uploadedUrl);
-          triggerNotification?.('✅ Flyer stored in cloud');
         } else {
           onSuccess(compressed);
-          triggerNotification?.('✅ Flyer attached');
         }
       } catch {
         onSuccess(reader.result as string);
-        triggerNotification?.('✅ Flyer attached');
       }
     };
     reader.readAsDataURL(file);
@@ -198,7 +194,6 @@ export function PostCommunityShowModal({
     };
 
     setTourStops(prev => [...prev, newStop]);
-    triggerNotification?.(`📍 Added stop: ${newStop.city}, ${newStop.state} @ ${newStop.venue_name}`);
 
     setStopCity('');
     setStopState('');
@@ -555,7 +550,7 @@ export function PostCommunityShowModal({
                   ref={singleFlyerInputRef}
                   type="file" 
                   accept="image/*" 
-                  className="hidden" 
+                  className="sr-only" 
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) processImageFile(file, (url) => setFlyerUrl(url));
@@ -783,7 +778,7 @@ export function PostCommunityShowModal({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
                   <div className="sm:col-span-2">
                     <label className="block font-mono text-[11px] text-zinc-300 uppercase tracking-wider mb-1">
                       City <span className="text-emerald-400">*</span>
@@ -806,6 +801,18 @@ export function PostCommunityShowModal({
                       value={state}
                       onChange={(e) => setState(e.target.value)}
                       placeholder="e.g. TX, CA"
+                      className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-mono text-[11px] text-zinc-300 uppercase tracking-wider mb-1">
+                      Country
+                    </label>
+                    <input 
+                      type="text"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                      placeholder="e.g. United States, UK"
                       className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-emerald-400"
                     />
                   </div>
@@ -1040,7 +1047,7 @@ export function PostCommunityShowModal({
                       ref={tourFlyerInputRef}
                       type="file" 
                       accept="image/*" 
-                      className="hidden" 
+                      className="sr-only" 
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) processImageFile(file, (url) => setTourFlyerUrl(url));

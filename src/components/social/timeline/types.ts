@@ -9,6 +9,11 @@ export interface FeedComment {
   text: string;
   time: string;
   created_at?: string;
+  mediaUrl?: string | null;
+  media_url?: string | null;
+  mediaType?: string;
+  avatar?: string;
+  userAvatar?: string;
 }
 
 export interface SongEmbedData {
@@ -178,6 +183,10 @@ export interface FeedPost {
   };
   user_reactions?: Record<string, boolean>;
   comments?: FeedComment[];
+  birthday_month?: number | null;
+  birthday_day?: number | null;
+  show_birthday_shoutout?: boolean;
+  author?: any;
 }
 
 export interface TimelineFeedProps {
@@ -188,7 +197,7 @@ export interface TimelineFeedProps {
   portalRole?: string;
   onToggleLike: (postId: string) => void;
   onEmojiReact: (postId: string, reactionType: string) => void;
-  onAddComment: (postId: string, commentText: string, parentCommentId?: string) => void;
+  onAddComment: (postId: string, commentText: string, parentCommentId?: string | null, mediaUrl?: string | null) => void;
   onTogglePin?: (postId: string) => void;
   onEditPost?: (postId: string, newText: string, newImages?: string[]) => void;
   onDeletePost?: (postId: string) => void;
@@ -201,7 +210,8 @@ export interface TimelineFeedProps {
   onOpenMerchModal?: (merchData: any) => void;
   onTriggerNotification?: (msg: string) => void;
   discoverProfiles?: any[];
-  onFollowProfile?: (profile: any) => void;
+  allProfiles?: any[];
+  onFollowProfile?: (profile: any, action?: 'follow' | 'unfollow') => void;
   onNavigateToForum?: (threadId?: string) => void;
 }
 

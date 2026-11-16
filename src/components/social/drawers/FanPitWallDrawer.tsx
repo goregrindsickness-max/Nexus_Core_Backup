@@ -74,7 +74,7 @@ export const FanPitWallDrawer: React.FC<FanPitWallDrawerProps> = ({
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/80">
+            <div className="p-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-zinc-800 flex items-center justify-between bg-zinc-950/80">
               <div>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
@@ -143,7 +143,7 @@ export const FanPitWallDrawer: React.FC<FanPitWallDrawerProps> = ({
             </div>
 
             {/* Input Area */}
-            <form onSubmit={handleSendPitWallMessage} className="p-4 border-t border-zinc-800 bg-zinc-950/90">
+            <form onSubmit={handleSendPitWallMessage} className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-zinc-800 bg-zinc-950/90">
               <div className="flex items-center gap-2">
                 <input
                   type="text"

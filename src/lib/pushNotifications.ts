@@ -1,11 +1,19 @@
 // Nexus Real-Time Device Push Notification Engine
 // Tailored for Industry Pro and Fan Workspaces
 
-import { getSupabase } from '../supabase';
+import { getSupabase } from '../services/clientService';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { triggerNativeNotification, initAndroidNotificationChannel } from '../services/pushNotificationService';
+import {
+  triggerNativeNotification,
+  initAndroidNotificationChannel,
+  handlePushDeepLink,
+  resolveVapidPublicKey,
+  urlBase64ToUint8Array as sharedUrlBase64ToUint8Array,
+  syncPushRegistrationForUser,
+} from './pushClient';
+import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
 
 export type WorkspaceType = 'industry_pro' | 'fan_only' | 'band' | 'promoter' | 'label' | 'creative' | 'fan';
 
@@ -104,6 +112,51 @@ export const FAN_PUSH_CATEGORIES: PushCategoryConfig[] = [
     workspace: 'fan_only',
     priority: 'P0',
     icon: '🎟️',
+    defaultEnabled: true,
+  },
+  {
+    id: 'new_follower',
+    label: 'New Fan Alliances & Followers',
+    description: 'Instant notification when a fan, artist, or label starts following your profile.',
+    workspace: 'fan_only',
+    priority: 'P1',
+    icon: '🤘',
+    defaultEnabled: true,
+  },
+  {
+    id: 'trending_post',
+    label: 'Trending Posts & Velocity Milestones',
+    description: 'When your post hits 10+ reactions, flames, or enters the Trending Feed.',
+    workspace: 'fan_only',
+    priority: 'P1',
+    icon: '🔥',
+    defaultEnabled: true,
+  },
+  {
+    id: 'repost_quote',
+    label: 'Re-posts & Band Spotlights',
+    description: 'Alert when a fan or verified band re-shares your content to their timeline.',
+    workspace: 'fan_only',
+    priority: 'P1',
+    icon: '🔁',
+    defaultEnabled: true,
+  },
+  {
+    id: 'photo_pit_tag',
+    label: 'Photo Pit & Media Tagging',
+    description: 'When you are tagged in live concert photos, pit videos, or festival galleries.',
+    workspace: 'fan_only',
+    priority: 'P1',
+    icon: '📷',
+    defaultEnabled: true,
+  },
+  {
+    id: 'forum_top_answer',
+    label: 'Forum Upvotes & Discussion Highlights',
+    description: 'When your comment is voted Top Answer or your thread receives high engagement.',
+    workspace: 'fan_only',
+    priority: 'P1',
+    icon: '🏆',
     defaultEnabled: true,
   },
   {
@@ -232,16 +285,7 @@ export function playPushChime(type: 'critical' | 'normal' | 'fan' = 'normal') {
   }
 }
 
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
+const urlBase64ToUint8Array = sharedUrlBase64ToUint8Array;
 
 export function isIframeEnvironment(): boolean {
   if (typeof window === 'undefined') return false;
@@ -264,13 +308,12 @@ class DevicePushManager {
       this.loadPreferences();
       this.initNativeEnvironment();
       this.initServiceWorker();
-      this.setupWindowListener();
     }
   }
 
   private async initNativeEnvironment() {
     if (typeof window === 'undefined') return;
-    const isNative = Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications');
+    const isNative = Capacitor.isNativePlatform();
     if (isNative) {
       const saved = localStorage.getItem('nexus_native_permission');
       if (saved) {
@@ -330,7 +373,7 @@ class DevicePushManager {
   }
 
   public getPermissionStatus(): PushPermissionStatus {
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications'));
+    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
     if (isNative) {
       return this.nativePermission;
     }
@@ -343,7 +386,7 @@ class DevicePushManager {
   public async refreshPermissionStatus(): Promise<PushPermissionStatus> {
     if (typeof window === 'undefined') return 'unsupported';
 
-    const isNative = Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications');
+    const isNative = Capacitor.isNativePlatform();
     if (isNative && Capacitor.isPluginAvailable('LocalNotifications')) {
       try {
         const localStatus = await LocalNotifications.checkPermissions();
@@ -393,56 +436,58 @@ class DevicePushManager {
     }
   }
 
-  private setupWindowListener() {
-    if (typeof window === 'undefined') return;
-    navigator.serviceWorker?.addEventListener('message', (event) => {
-      if (event.data?.type === 'NEXUS_PUSH_NAVIGATE') {
-        const targetTab = event.data.targetTab;
-        if (targetTab) {
-          window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: targetTab }));
-        }
-      }
-      if (event.data?.type === 'NEXUS_OPEN_CHAT') {
-        window.dispatchEvent(
-          new CustomEvent('nexus_open_chat', {
-            detail: {
-              profile_id: event.data.senderId,
-              name: event.data.name,
-              username: event.data.name,
-            },
-          })
-        );
-      }
-    });
-  }
 
-  public async subscribeToPushServer(userInfo?: { id?: string; email?: string }): Promise<PushSubscription | null> {
+  public async subscribeToPushServer(userInfo?: { id?: string; email?: string; sendWelcome?: boolean }): Promise<PushSubscription | null> {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return null;
     }
 
     try {
+      let resolvedId = userInfo?.id;
+      let resolvedEmail = userInfo?.email;
+      try {
+        if (!resolvedId) resolvedId = localStorage.getItem('nexus_auth_user_id') || undefined;
+        if (!resolvedEmail) resolvedEmail = localStorage.getItem('nexus_auth_user_email') || undefined;
+        if (!resolvedId || !resolvedEmail) {
+          const savedProf = localStorage.getItem('nexus_core_user_profile') || localStorage.getItem('nexus_user');
+          if (savedProf) {
+            const parsed = JSON.parse(savedProf);
+            if (!resolvedId && parsed?.id) resolvedId = parsed.id;
+            if (!resolvedEmail && parsed?.email) resolvedEmail = parsed.email;
+          }
+        }
+      } catch (_) {}
+
       let reg = this.registration;
+      if (!reg) {
+        reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        this.registration = reg;
+      }
       if (!reg) {
         reg = await navigator.serviceWorker.ready;
         this.registration = reg;
       }
 
-      // 1. Obtain VAPID Public Key from backend API or fallback
-      let publicKey = 'BFtYUwYxD4nggBN6jldwPmQ-rM209n3Cqom0TYLxoksAambfhk5PzDZ-0-FppflHkjW4P6tlvTsOnnl1kVlitiQ';
-      try {
-        const res = await fetch('/api/push/vapid-public-key');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.publicKey) publicKey = data.publicKey;
-        }
-      } catch (err) {
-        console.warn('[PushManager] VAPID fetch error, using default:', err);
-      }
+      // 1. Obtain VAPID Public Key from VITE_VAPID_PUBLIC_KEY or backend API
+      const publicKey = await resolveVapidPublicKey();
 
-      // 2. Subscribe browser to Push Service
+      // 2. Subscribe browser to Push Service (and refresh if server VAPID key changed)
       const convertedKey = urlBase64ToUint8Array(publicKey);
       let sub = await reg.pushManager.getSubscription();
+      if (sub && sub.options?.applicationServerKey) {
+        try {
+          const existingKey = new Uint8Array(sub.options.applicationServerKey);
+          const keysMatch =
+            existingKey.length === convertedKey.length &&
+            existingKey.every((byte, idx) => byte === convertedKey[idx]);
+          if (!keysMatch) {
+            console.log('[PushManager] Server VAPID key changed; refreshing browser push subscription.');
+            await sub.unsubscribe();
+            sub = null;
+          }
+        } catch (_) {}
+      }
+
       if (!sub) {
         sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
@@ -451,13 +496,22 @@ class DevicePushManager {
       }
 
       // 3. Register subscription with Nexus server
+      const subJson = sub.toJSON ? sub.toJSON() : sub;
       const payload = {
-        subscription: sub.toJSON ? sub.toJSON() : sub,
-        userId: userInfo?.id,
-        userEmail: userInfo?.email,
+        platform: 'web' as const,
+        subscription: subJson,
+        web_push_subscription: subJson,
+        userId: resolvedId,
+        userEmail: resolvedEmail ? resolvedEmail.toLowerCase().trim() : undefined,
+        sendWelcome: Boolean(userInfo?.sendWelcome),
       };
 
-      await fetch('/api/push/subscribe', {
+      const token = await getSupabaseAccessToken();
+      if (!token) {
+        return sub;
+      }
+
+      await authFetch('/api/push/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -472,19 +526,28 @@ class DevicePushManager {
     }
   }
 
+  public async ensureUserPushSubscription(userInfo: { id?: string; email?: string }): Promise<void> {
+    await syncPushRegistrationForUser(userInfo);
+  }
+
   public async sendPushToServer(options: {
     userId?: string;
     userEmail?: string;
+    excludeUserId?: string;
+    excludeUserEmail?: string;
     title: string;
     body: string;
     icon?: string;
     targetTab?: string;
     category?: string;
     priority?: 'P0' | 'P1';
+    tag?: string;
     data?: any;
   }): Promise<boolean> {
     try {
-      const res = await fetch('/api/push/send', {
+      const accessToken = await getSupabaseAccessToken();
+      if (!accessToken) return false;
+      const res = await authFetch('/api/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(options),
@@ -497,7 +560,7 @@ class DevicePushManager {
   }
 
   public async requestPermission(userInfo?: { id?: string; email?: string }): Promise<PushPermissionStatus> {
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications'));
+    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
     // 1. Android APK / Native Capacitor environment
     if (isNative) {
@@ -530,7 +593,13 @@ class DevicePushManager {
         }
 
         return this.nativePermission;
-      } catch (err) {
+      } catch (err: any) {
+        const errCode = String(err?.code || '');
+        const errMsg = String(err?.message || err || '');
+        if (errCode === 'UNAVAILABLE' || errCode === 'UNIMPLEMENTED' || /not supported|not implemented/i.test(errMsg)) {
+          console.warn('[PushManager] Native notifications unavailable in current environment:', errMsg);
+          return 'unsupported';
+        }
         console.error('[PushManager] Native permission request error:', err);
         return 'denied';
       }
@@ -542,15 +611,16 @@ class DevicePushManager {
     }
 
     try {
+      const wasAlreadyGranted = Notification.permission === 'granted';
       const result = await Notification.requestPermission();
       if (result === 'granted') {
         await this.registerServiceWorker();
         await this.updatePreferences({ enabled: true }, userInfo?.id);
-        await this.subscribeToPushServer(userInfo);
+        await this.subscribeToPushServer({ ...userInfo, sendWelcome: !wasAlreadyGranted });
       }
       return result as PushPermissionStatus;
     } catch (e) {
-      console.error('[PushManager] Error requesting notification permission:', e);
+      console.warn('[PushManager] Notification permission request blocked or unsupported:', e);
       return 'denied';
     }
   }
@@ -607,13 +677,31 @@ class DevicePushManager {
       }
     }
 
-    // Deduplication key
-    const hash = `${payload.title}_${payload.body}`;
-    if (this.recentNotificationHashes.has(hash)) {
-      return false; // Skip duplicate within short window
+    // Deduplication across title+body, normalized body, and messageId/notificationId within 15s window
+    const normTitle = String(payload.title || '').trim().toLowerCase();
+    const normBody = String(payload.body || '').trim().toLowerCase();
+    const entityKey = String(
+      payload.data?.messageId || payload.data?.notificationId || payload.data?.id || ''
+    ).trim();
+    const hash = `${normTitle}_${normBody}`;
+    const bodyHash = normBody.length > 8 ? `body_${normBody}` : '';
+    const idHash = entityKey ? `id_${entityKey}` : '';
+
+    if (
+      this.recentNotificationHashes.has(hash) ||
+      (bodyHash && this.recentNotificationHashes.has(bodyHash)) ||
+      (idHash && this.recentNotificationHashes.has(idHash))
+    ) {
+      return false; // Skip duplicate within cooldown window
     }
     this.recentNotificationHashes.add(hash);
-    setTimeout(() => this.recentNotificationHashes.delete(hash), 6000);
+    if (bodyHash) this.recentNotificationHashes.add(bodyHash);
+    if (idHash) this.recentNotificationHashes.add(idHash);
+    setTimeout(() => {
+      this.recentNotificationHashes.delete(hash);
+      if (bodyHash) this.recentNotificationHashes.delete(bodyHash);
+      if (idHash) this.recentNotificationHashes.delete(idHash);
+    }, 15000);
 
     // Audio chime & vibration
     if (this.preferences.soundEnabled && payload.sound !== false) {
@@ -643,7 +731,7 @@ class DevicePushManager {
     );
 
     // 1. Android APK / Native Device Notification (via Capacitor LocalNotifications)
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications'));
+    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
     if (isNative) {
       try {
         const scheduled = await triggerNativeNotification({
@@ -695,19 +783,16 @@ class DevicePushManager {
           });
           notif.onclick = () => {
             window.focus();
-            if (payload.data?.senderId) {
-              window.dispatchEvent(
-                new CustomEvent('nexus_open_chat', {
-                  detail: {
-                    profile_id: payload.data.senderId,
-                    name: payload.title,
-                  },
-                })
-              );
-            }
-            if (payload.targetTab) {
-              window.dispatchEvent(new CustomEvent('nexus_navigate_tab', { detail: payload.targetTab }));
-            }
+            handlePushDeepLink({
+              targetTab: payload.targetTab,
+              type: payload.category,
+              senderId: payload.data?.senderId,
+              senderName: payload.title,
+              showId: payload.data?.showId,
+              targetId: payload.data?.targetId,
+              route: payload.data?.route,
+              ...payload.data,
+            });
             notif.close();
           };
           return true;
@@ -850,7 +935,7 @@ class DevicePushManager {
   }
 
   public async sendTestAlert(category: string = 'routing_beacon'): Promise<boolean> {
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Capacitor.isPluginAvailable('LocalNotifications'));
+    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
     if (isNative) {
       if (this.nativePermission !== 'granted') {
         await this.requestPermission();
@@ -922,8 +1007,13 @@ export async function syncShowRsvpWithServer(rsvpData: {
     const userId = rsvpData.user_id || localStorage.getItem('nexus_auth_user_id') || undefined;
     const userEmail = rsvpData.user_email || localStorage.getItem('nexus_auth_user_email') || undefined;
 
+    const accessToken = await getSupabaseAccessToken();
+    if (!accessToken) {
+      return false;
+    }
+
     if (rsvpData.action === 'cancel') {
-      const res = await fetch(`/api/shows/rsvp/${rsvpData.show_id}`, {
+      const res = await authFetch(`/api/shows/rsvp/${rsvpData.show_id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, userEmail })
@@ -945,7 +1035,10 @@ export async function syncShowRsvpWithServer(rsvpData: {
       console.warn('[PushManager] Push subscription notice during RSVP:', e);
     }
 
-    const res = await fetch('/api/shows/rsvp', {
+    const nativeToken = typeof localStorage !== 'undefined' ? localStorage.getItem('nexus_native_push_token') : null;
+    const nativePlatform = nativeToken ? (Capacitor.getPlatform() === 'ios' ? 'ios' : 'android') : 'web';
+
+    const res = await authFetch('/api/shows/rsvp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -956,7 +1049,8 @@ export async function syncShowRsvpWithServer(rsvpData: {
         city: rsvpData.city,
         user_id: userId,
         user_email: userEmail,
-        pushSubscription: pushSub
+        pushSubscription: pushSub,
+        ...(nativeToken ? { fcmToken: nativeToken, platform: nativePlatform } : {}),
       })
     });
 
@@ -973,7 +1067,7 @@ export async function syncShowRsvpWithServer(rsvpData: {
 export async function trigger24hShowRemindersOnServer(): Promise<{ success: boolean; checked?: number; remindersSent?: number }> {
   if (typeof window === 'undefined') return { success: false };
   try {
-    const res = await fetch('/api/push/trigger-show-reminders', {
+    const res = await authFetch('/api/push/trigger-show-reminders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });

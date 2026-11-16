@@ -10,6 +10,7 @@ import {
 import { motion } from 'motion/react';
 import { getSupabase } from '../supabase';
 import { InstallInstructionsAccordion } from './InstallInstructionsAccordion';
+import { getCurrentCoordinates } from '../services/locationService';
 
 const concertBg = "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/High%20energy%20concert%202.png";
 const nexusIconBrackets = "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Nexus%20Icon%20brackets.png";
@@ -33,29 +34,78 @@ interface Flash {
 export default function SplashView({ onGoToDashboard, onCreateAccount }: SplashViewProps) {
   const [flashes, setFlashes] = useState<Flash[]>([]);
   const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'completed' | 'error'>('idle');
-  const [apkFileName, setApkFileName] = useState('Nexus-Core-v1.0.apk');
-  const [apkFileSize, setApkFileSize] = useState('7.5 MB');
+  const [apkFileName, setApkFileName] = useState('Nexus-Core-v1.5.4.apk');
+  const [apkFileSize, setApkFileSize] = useState('28.1 MB');
   const [apkDownloadUrl, setApkDownloadUrl] = useState(
-    'https://github.com/nexus-core/releases/releases/latest/download/Nexus-Core-v1.0.apk'
+    'https://github.com/goregrindsickness-max/Nexus_Core_Latest/releases/download/Nexus-Core-v1.5.4/Nexus-Core-v1.5.4.apk'
   );
+
+  // Auto-fetch latest GitHub release info dynamically
+  useEffect(() => {
+    fetch('https://api.github.com/repos/goregrindsickness-max/Nexus_Core_Latest/releases/latest')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && Array.isArray(data.assets) && data.assets.length > 0) {
+          const apkAsset = data.assets.find((a: any) => a.name.endsWith('.apk')) || data.assets[0];
+          if (apkAsset) {
+            if (apkAsset.name) setApkFileName(apkAsset.name);
+            if (apkAsset.browser_download_url) setApkDownloadUrl(apkAsset.browser_download_url);
+            if (apkAsset.size) {
+              const sizeMB = (apkAsset.size / (1024 * 1024)).toFixed(1);
+              setApkFileSize(`${sizeMB} MB`);
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch latest GitHub release info, using default v1.5.4 fallback', err);
+      });
+
+    // Prime location permission and coordinate resolution for fresh installs
+    getCurrentCoordinates({ enableHighAccuracy: true, timeout: 8000 }).then((coords) => {
+      if (coords) {
+        console.log('[SplashView] Location initialized on startup:', coords.latitude, coords.longitude);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Burnout transition effect state (Real fire screen video overlay)
   const [isBurningOut, setIsBurningOut] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
+  const executePendingAction = () => {
+    if (pendingActionRef.current) {
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      action();
+    }
+  };
 
   const handleTriggerBurnout = (targetAction: () => void) => {
     if (isBurningOut) return;
     setIsBurningOut(true);
+    pendingActionRef.current = targetAction;
 
-    if (videoRef.current) {
-      try {
-        videoRef.current.currentTime = 0;
-        videoRef.current.playbackRate = 2.2; // Play 7.9s video across 3.5s transition
-        videoRef.current.play().catch((err) => {
-          console.warn('Fire transition video play error:', err);
-        });
-      } catch (_) {}
-    }
+    setTimeout(() => {
+      if (videoRef.current) {
+        try {
+          videoRef.current.currentTime = 0;
+          videoRef.current.playbackRate = 1.0; // Play at natural speed so animation completes fully
+          const playPromise = videoRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((err) => {
+              console.warn('Fire transition video play notice:', err);
+              setTimeout(executePendingAction, 3000);
+            });
+          }
+        } catch (_) {
+          setTimeout(executePendingAction, 3000);
+        }
+      } else {
+        setTimeout(executePendingAction, 3000);
+      }
+    }, 20);
 
     try {
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -63,9 +113,14 @@ export default function SplashView({ onGoToDashboard, onCreateAccount }: SplashV
       }
     } catch (_) {}
 
+    // Fallback timer ensures transition happens if video onEnded does not fire
     setTimeout(() => {
-      targetAction();
-    }, 3500);
+      executePendingAction();
+    }, 7500);
+  };
+
+  const handleVideoEnded = () => {
+    executePendingAction();
   };
 
   // Live crowd flashes simulation
@@ -122,21 +177,28 @@ export default function SplashView({ onGoToDashboard, onCreateAccount }: SplashV
 
   return (
     <>
-      {/* Real Fire Screen Video Effect Overlay (Flames only, black keyed out via mix-blend-screen) */}
-      <video
-        ref={videoRef}
-        src="/assets/fire-screen.mp4"
-        preload="auto"
-        muted
-        playsInline
-        className={`fixed inset-0 w-full h-full object-cover z-[999999] pointer-events-none transition-opacity duration-300 ${
-          isBurningOut ? 'opacity-100' : 'opacity-0'
+      {/* Real Fire Screen Video Effect Overlay (Flames keyed out via mix-blend-screen so underlying UI is visible) */}
+      <div 
+        className={`fixed inset-0 w-screen h-screen z-[999999] pointer-events-none overflow-hidden transition-opacity duration-300 mix-blend-screen ${
+          isBurningOut ? 'opacity-85' : 'opacity-0 hidden'
         }`}
-        style={{
-          mixBlendMode: 'screen',
-          filter: 'contrast(1.25) brightness(1.15)',
-        }}
-      />
+        style={{ mixBlendMode: 'screen' }}
+      >
+        <video
+          ref={videoRef}
+          src="/assets/fire-screen.mp4"
+          preload="auto"
+          muted
+          playsInline
+          onEnded={handleVideoEnded}
+          className="absolute top-1/2 left-1/2 min-w-[125vh] min-h-[125vw] w-[125vh] h-[125vw] max-w-none object-cover pointer-events-none"
+          style={{
+            mixBlendMode: 'screen',
+            filter: 'contrast(1.2) brightness(1.1)',
+            transform: 'translate(-50%, -50%) rotate(-90deg)',
+          }}
+        />
+      </div>
 
       <div 
         className={`bg-[#07080a] flex-1 w-full flex flex-col items-center justify-start gap-6 sm:gap-8 p-4 sm:p-8 text-white font-sans select-none relative isolate overflow-x-hidden overflow-y-auto min-h-screen ${

@@ -1355,3 +1355,65 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-t
 }
 .pulse-glow-orange { animation: pulse-glow-orange 4s infinite ease-in-out; }
 
+/* Inbox Laser Scanline & Scene Note New-Update Flashing Ring */
+@keyframes inbox-laser-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(350%);
+    opacity: 0.25;
+  }
+}
+
+.inbox-laser-scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+.inbox-laser-scanline::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  height: 1.5px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(244, 63, 94, 0.45) 25%,
+    rgba(255, 255, 255, 0.9) 50%,
+    rgba(244, 63, 94, 0.45) 75%,
+    transparent
+  );
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.75);
+  animation: inbox-laser-sweep 3.2s linear infinite;
+  pointer-events: none;
+  z-index: 20;
+}
+
+@keyframes scene-note-ring-flash {
+  0%, 100% {
+    border-color: rgba(244, 63, 94, 0.95);
+    box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.22), 0 0 14px rgba(244, 63, 94, 0.65);
+  }
+  50% {
+    border-color: rgba(251, 113, 133, 1);
+    box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.45), 0 0 22px rgba(244, 63, 94, 0.95);
+  }
+}
+
+.scene-note-flash-ring {
+  animation: scene-note-ring-flash 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inbox-laser-scanline::after,
+  .scene-note-flash-ring {
+    animation: none !important;
+  }
+}

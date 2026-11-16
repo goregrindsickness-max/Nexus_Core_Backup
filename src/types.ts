@@ -490,6 +490,9 @@ export interface UserProfile {
   top_song_title?: string;
   favoriteSong?: string;
   top_song_url?: string;
+  birthday_month?: number | null;
+  birthday_day?: number | null;
+  show_birthday_shoutout?: boolean;
   // Decoupled portal-specific assets and names
   creative_avatar?: string;
   creative_banner?: string;

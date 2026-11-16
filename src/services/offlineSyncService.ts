@@ -1,5 +1,5 @@
 import localforage from 'localforage';
-import { getRawSupabase } from './clientService';
+import { getRawSupabase, setQueryBuilderWrapper, ensureValidSupabaseAuthSession } from './clientService';
 import { generateUUID, ensureUUID, sanitizeShowForDb, sanitizeInventoryItemForDb } from './schemaResilienceService';
 import { sanitizeBandPayload } from './bandService';
 import { sanitizeReleaseForDb } from './releasesService';
@@ -30,68 +30,10 @@ export const resolveBandName = (item: any, bandIdFallback?: string): any => {
     'origin': 'Origin',
     'peelingflesh': 'PeelingFlesh',
     'putrid-pile': 'Putrid Pile',
-    'lividity': 'Lividity'
+    'lividity': 'Lividity',
+    'birdflesh': 'Birdflesh',
+    'gorgasm': 'Gorgasm'
   };
-
-  if ((!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') && rawSlugCandidate && KNOWN_SEEDED_NAMES[rawSlugCandidate]) {
-    bName = KNOWN_SEEDED_NAMES[rawSlugCandidate];
-  }
-
-  if ((!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') && lookupId) {
-    const lId = String(lookupId);
-    const lUUID = ensureUUID(lId);
-
-    const findInList = (list: any[]) => {
-      return list.find((b: any) => {
-        if (!b) return false;
-        const bId = b.id ? String(b.id) : '';
-        const bUUID = b.id ? ensureUUID(b.id) : '';
-        const bSlug = (b.custom_slug || b.slug || '').trim().toLowerCase();
-        return bId === lId || bUUID === lUUID || (rawSlugCandidate && bSlug === rawSlugCandidate);
-      });
-    };
-
-    try {
-      const archives = JSON.parse(localStorage.getItem('nexus_community_band_archives') || '[]');
-      const found = findInList(archives);
-      if (found?.name || found?.band_name) {
-        const n = (found.name || found.band_name).trim();
-        if (n && n.toLowerCase() !== 'underground label' && n.toLowerCase() !== 'nexus artist') bName = n;
-      }
-    } catch {}
-    if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-      try {
-        const allCommunity = JSON.parse(localStorage.getItem('nexus_community_bands_v2') || '[]');
-        const found = findInList(allCommunity);
-        if (found?.name || found?.band_name) {
-          const n = (found.name || found.band_name).trim();
-          if (n && n.toLowerCase() !== 'underground label' && n.toLowerCase() !== 'nexus artist') bName = n;
-        }
-      } catch {}
-    }
-    if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-      try {
-        const registered = JSON.parse(localStorage.getItem('nexus_registered_bands') || '[]');
-        const found = findInList(registered);
-        if (found?.name || found?.band_name) {
-          const n = (found.name || found.band_name).trim();
-          if (n && n.toLowerCase() !== 'underground label' && n.toLowerCase() !== 'nexus artist') bName = n;
-        }
-      } catch {}
-    }
-    if (!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') {
-      try {
-        const activeBandRaw = localStorage.getItem('nexus_active_band');
-        if (activeBandRaw) {
-          const parsed = JSON.parse(activeBandRaw);
-          if (parsed?.name || parsed?.band_name) {
-            const n = (parsed.name || parsed.band_name).trim();
-            if (n && n.toLowerCase() !== 'underground label' && n.toLowerCase() !== 'nexus artist') bName = n;
-          }
-        }
-      } catch {}
-    }
-  }
 
   if ((!bName || bName.toLowerCase() === 'underground label' || bName.toLowerCase() === 'nexus artist') && rawSlugCandidate) {
     bName = KNOWN_SEEDED_NAMES[rawSlugCandidate] || rawSlugCandidate
@@ -107,10 +49,10 @@ export const resolveBandName = (item: any, bandIdFallback?: string): any => {
 };
 
 export function isNetworkOrConnectivityError(err: any): boolean {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+  if (!err) return false;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return true;
   }
-  if (!err) return false;
 
   const message = (err.message || '').toLowerCase();
   const code = (err.code || '').toLowerCase();
@@ -245,6 +187,8 @@ export async function processOfflineQueue(): Promise<void> {
   const rawSupabase = getRawSupabase();
   if (!rawSupabase) return;
 
+  await ensureValidSupabaseAuthSession(rawSupabase).catch(() => {});
+
   isSyncing = true;
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -255,6 +199,22 @@ export async function processOfflineQueue(): Promise<void> {
 
   const pendingActions = [...queue];
   const activeQueue: OfflineAction[] = [];
+
+  const isAuthOrRlsRetryableError = (err: any) => {
+    if (!err) return false;
+    const msg = String(err.message || '').toLowerCase();
+    const code = String(err.code || '').toLowerCase();
+    const status = Number(err.status || err.statusCode);
+    return (
+      code === '42501' ||
+      status === 401 ||
+      status === 403 ||
+      msg.includes('row-level security') ||
+      msg.includes('jwt') ||
+      msg.includes('not authorized') ||
+      msg.includes('auth session')
+    );
+  };
 
   for (const action of pendingActions) {
     try {
@@ -367,9 +327,9 @@ export async function processOfflineQueue(): Promise<void> {
       const { error } = await resPromise;
 
       if (error) {
-        if (isNetworkOrConnectivityError(error)) {
+        if (isNetworkOrConnectivityError(error) || isAuthOrRlsRetryableError(error)) {
           console.warn(
-            `[Offline Sync Queue] Network / connectivity error encountered while processing. Pausing queue.`,
+            `[Offline Sync Queue] Retryable network/auth error encountered while processing. Retaining in queue.`,
             error
           );
           activeQueue.push(...pendingActions.slice(pendingActions.indexOf(action)));
@@ -411,34 +371,47 @@ export async function processOfflineQueue(): Promise<void> {
   }
 }
 
-export function wrapQueryBuilder(realBuilder: any, table: string): any {
-  let action: 'insert' | 'update' | 'upsert' | 'delete' | 'select' | null = null;
-  let payload: any = null;
-  const eqFilters: { column: string; value: any }[] = [];
+interface QueryChainState {
+  action: 'insert' | 'update' | 'upsert' | 'delete' | 'select' | null;
+  payload: any;
+  eqFilters: { column: string; value: any }[];
+}
+
+export function wrapQueryBuilder(
+  realBuilder: any,
+  table: string,
+  sharedState?: QueryChainState
+): any {
+  const state: QueryChainState = sharedState || {
+    action: null,
+    payload: null,
+    eqFilters: [],
+  };
 
   const handler: ProxyHandler<any> = {
     get(target, prop, receiver) {
       if (prop === 'then') {
         return (onfulfilled?: any, onrejected?: any) => {
-          const isWrite = action && ['insert', 'update', 'upsert', 'delete'].includes(action);
+          const isWrite =
+            state.action && ['insert', 'update', 'upsert', 'delete'].includes(state.action);
           const promise = target;
           return promise.then(
             (result: any) => {
               if (isWrite && isNetworkOrConnectivityError(result?.error)) {
                 console.warn(
-                  `[Offline Queue] Direct connection failed for ${action} on '${table}'. Enqueuing offline write packet.`
+                  `[Offline Queue] Direct connection failed for ${state.action} on '${table}'. Enqueuing offline write packet.`
                 );
 
                 enqueueOfflineAction({
                   id: generateUUID(),
                   table,
-                  action: action as any,
-                  payload,
-                  eqFilters,
+                  action: state.action as any,
+                  payload: state.payload,
+                  eqFilters: [...state.eqFilters],
                   timestamp: new Date().toISOString(),
                 });
 
-                const dummyResult = { error: null, data: payload, count: 1 };
+                const dummyResult = { error: null, data: state.payload, count: 1 };
                 return onfulfilled ? onfulfilled(dummyResult) : dummyResult;
               }
               return onfulfilled ? onfulfilled(result) : result;
@@ -446,20 +419,20 @@ export function wrapQueryBuilder(realBuilder: any, table: string): any {
             (err: any) => {
               if (isWrite && isNetworkOrConnectivityError(err)) {
                 console.warn(
-                  `[Offline Queue] Intercepted throwing connectivity issue for ${action} on '${table}'. Enqueuing offline write packet.`,
+                  `[Offline Queue] Intercepted throwing connectivity issue for ${state.action} on '${table}'. Enqueuing offline write packet.`,
                   err
                 );
 
                 enqueueOfflineAction({
                   id: generateUUID(),
                   table,
-                  action: action as any,
-                  payload,
-                  eqFilters,
+                  action: state.action as any,
+                  payload: state.payload,
+                  eqFilters: [...state.eqFilters],
                   timestamp: new Date().toISOString(),
                 });
 
-                const dummyResult = { error: null, data: payload, count: 1 };
+                const dummyResult = { error: null, data: state.payload, count: 1 };
                 return onfulfilled ? onfulfilled(dummyResult) : dummyResult;
               }
               return onrejected ? onrejected(err) : Promise.reject(err);
@@ -472,29 +445,36 @@ export function wrapQueryBuilder(realBuilder: any, table: string): any {
       if (typeof val === 'function') {
         return (...args: any[]) => {
           if (prop === 'insert') {
-            action = 'insert';
-            payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
+            state.action = 'insert';
+            state.payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
           } else if (prop === 'update') {
-            action = 'update';
-            payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
+            state.action = 'update';
+            state.payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
           } else if (prop === 'upsert') {
-            action = 'upsert';
-            payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
+            state.action = 'upsert';
+            state.payload = Array.isArray(args[0]) ? [...args[0]] : normalizeArrayPayload(args[0]);
           } else if (prop === 'delete') {
-            action = 'delete';
+            state.action = 'delete';
           } else if (prop === 'eq') {
-            eqFilters.push({ column: args[0], value: args[1] });
+            state.eqFilters.push({ column: args[0], value: args[1] });
           }
 
-          if (table === 'bands' && payload && (prop === 'insert' || prop === 'update' || prop === 'upsert')) {
-            const filterId = eqFilters.find((f) => f.column === 'id')?.value;
-            payload = Array.isArray(payload)
-              ? payload.map((item) => resolveBandName(item, filterId))
-              : resolveBandName(payload, filterId);
+          if (
+            table === 'bands' &&
+            state.payload &&
+            (prop === 'insert' || prop === 'update' || prop === 'upsert')
+          ) {
+            const filterId = state.eqFilters.find((f) => f.column === 'id')?.value;
+            state.payload = Array.isArray(state.payload)
+              ? state.payload.map((item) => resolveBandName(item, filterId))
+              : resolveBandName(state.payload, filterId);
           }
 
           const nextResult = val.apply(target, args);
-          return wrapQueryBuilder(nextResult, table);
+          if (nextResult && (typeof nextResult === 'object' || typeof nextResult === 'function')) {
+            return wrapQueryBuilder(nextResult, table, state);
+          }
+          return nextResult;
         };
       }
 
@@ -504,6 +484,9 @@ export function wrapQueryBuilder(realBuilder: any, table: string): any {
 
   return new Proxy(realBuilder, handler);
 }
+
+// Register offline query builder wrapper with client service
+setQueryBuilderWrapper(wrapQueryBuilder);
 
 /**
  * Checks if a Supabase error or throw suggests that a database egress/network bypass is required

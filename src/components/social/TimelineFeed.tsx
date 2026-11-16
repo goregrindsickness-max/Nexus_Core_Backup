@@ -34,6 +34,8 @@ import {
   DiscoveryZone,
   PeopleYouMayKnow,
 } from './timeline';
+import { FeedPostCard } from '../feed/FeedPostCard';
+import { InlineReactionsModal } from './modals/InlineReactionsModal';
 import { ForumHighlightCard } from './ForumHighlightCard';
 import {
   getCuratedForumHighlights,
@@ -41,6 +43,7 @@ import {
   isUserForumThread,
   ForumHighlightThread,
 } from '../../services/forumHighlightService';
+import { MIGUEL_DEFAULT_AVATAR } from '../../utils/bandProfileUtils';
 
 export type {
   FeedComment,
@@ -87,30 +90,32 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
   onOpenMerchModal,
   onTriggerNotification,
   discoverProfiles = [],
+  allProfiles = [],
   onFollowProfile,
   onNavigateToForum,
 }) => {
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [expandedTourDates, setExpandedTourDates] = useState<Record<string, boolean>>({});
+  const [viewingReactionsPost, setViewingReactionsPost] = useState<any | null>(null);
 
-  // Curated Forum Highlights in Feed (prioritizing user's real forum posts)
+  // Curated Forum Highlights in Feed (user's post + max 2 Brutal Death Metal highlights)
   const [forumHighlights, setForumHighlights] = useState<ForumHighlightThread[]>(() =>
-    getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId)
+    getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId)
   );
   const [dismissedHighlightIds, setDismissedHighlightIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     // Initial sync with user context
-    setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+    setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
 
     // Also run asynchronous Supabase sync if connected
     syncForumHighlightsFromSupabase().then(() => {
-      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+      setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
     });
 
     const handleForumCacheUpdated = () => {
-      setForumHighlights(getCuratedForumHighlights(8, userProfile, currentUserName, currentUserId));
+      setForumHighlights(getCuratedForumHighlights(3, userProfile, currentUserName, currentUserId));
     };
     window.addEventListener('nexus_forum_cache_updated' as any, handleForumCacheUpdated);
     return () => {
@@ -313,12 +318,12 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
     });
   };
 
-  const handleCommentSubmit = (postId: string, e: React.FormEvent) => {
+  const handleCommentSubmit = (postId: string, e: React.FormEvent, mediaUrl?: string) => {
     e.preventDefault();
     const draft = commentDrafts[postId];
-    if (draft && draft.trim()) {
+    if ((draft && draft.trim()) || mediaUrl) {
       const parentInfo = replyingToCommentId[postId];
-      onAddComment(postId, draft.trim(), parentInfo?.commentId);
+      onAddComment(postId, (draft || '').trim(), parentInfo?.commentId, mediaUrl);
       setCommentDrafts((prev) => ({ ...prev, [postId]: '' }));
       setReplyingToCommentId((prev) => ({ ...prev, [postId]: null }));
     }
@@ -431,16 +436,16 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
           );
         }
 
-        const activeHighlights = forumHighlights.filter(
-          (h) => !dismissedHighlightIds.has(h.id)
-        );
+        const activeHighlights = forumHighlights
+          .filter((h) => !dismissedHighlightIds.has(h.id))
+          .slice(0, 3);
 
         return (
           <React.Fragment>
             {processedPosts.map((post, index) => {
               const showSuggestionsAfterThis = (index === 3) || (processedPosts.length < 4 && index === processedPosts.length - 1);
 
-              // Curated Forum Highlight interleaving (spaced evenly, never flooding)
+              // Curated Forum Highlight interleaving (user post + max 2 brutal death metal others, never repeating)
               let highlightToRender: ForumHighlightThread | null = null;
               if (activeHighlights.length > 0) {
                 const hasUserPost = isUserForumThread(activeHighlights[0], userProfile, currentUserName, currentUserId);
@@ -451,18 +456,24 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                   highlightToRender = activeHighlights[0];
                 } else if (index > firstSlotIndex && (index - firstSlotIndex) % 8 === 0) {
                   const slot = Math.floor((index - firstSlotIndex) / 8);
-                  highlightToRender = activeHighlights[slot % activeHighlights.length];
+                  if (slot > 0 && slot < activeHighlights.length) {
+                    highlightToRender = activeHighlights[slot];
+                  }
                 }
               }
 
               return (
                 <React.Fragment key={post.id ? `feed-post-${post.id}` : `feed-post-${index}`}>
-                  <PostCard
+                  <FeedPostCard
                     post={post}
                     currentUserId={currentUserId}
                     currentUserName={currentUserName}
                     userProfile={userProfile}
                     portalRole={portalRole}
+                    allProfiles={allProfiles}
+                    discoverProfiles={discoverProfiles}
+                    onAddComment={onAddComment}
+                    onTriggerNotification={onTriggerNotification}
                     boostData={boostedPosts[post.id]}
                     isCommentsOpen={!!expandedComments[post.id]}
                     commentDraft={commentDrafts[post.id] || ''}
@@ -557,12 +568,13 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                     setCartNotice={setCartNotice}
                     onToggleComments={() => toggleComments(post.id)}
                     onCommentDraftChange={(txt) => setCommentDrafts(prev => ({ ...prev, [post.id]: txt }))}
-                    onCommentSubmit={(e) => handleCommentSubmit(post.id, e)}
+                    onCommentSubmit={(e: any, mediaUrl?: string) => handleCommentSubmit(post.id, e, mediaUrl)}
                     onSetReplyingTo={(info) => setReplyingToCommentId(prev => ({ ...prev, [post.id]: info }))}
                     onTriggerEmojiReact={(type) => triggerEmojiReact(post.id, type)}
                     onOpenReactionMenu={() => setReactionMenuPostId(post.id)}
                     onCloseReactionMenu={() => setReactionMenuPostId(null)}
                     onOpenShareModal={() => setActiveSharePost(post)}
+                    onOpenReactionsModal={() => setViewingReactionsPost(post)}
                   />
                   {showSuggestionsAfterThis && (
                     <DiscoveryZone
@@ -582,8 +594,18 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
                     >
                       <ForumHighlightCard
                         thread={highlightToRender}
-                        currentUserName={userProfile?.name || currentUserName || 'You'}
-                        currentUserAvatar={userProfile?.avatar || ''}
+                        userProfile={userProfile}
+                        allProfiles={allProfiles}
+                        discoverProfiles={discoverProfiles}
+                        currentUserName={userProfile?.name || currentUserName || 'Miguel Goregrinder Medina'}
+                        currentUserAvatar={
+                          userProfile?.avatar_url ||
+                          userProfile?.avatar ||
+                          userProfile?.profile_avatar ||
+                          (userProfile as any)?.avatarUrl ||
+                          (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : '') ||
+                          MIGUEL_DEFAULT_AVATAR
+                        }
                         isUserPost={isUserForumThread(highlightToRender, userProfile, currentUserName, currentUserId)}
                         onOpenThread={(threadId) => {
                           if (onNavigateToForum) {
@@ -724,6 +746,16 @@ export const TimelineFeed: React.FC<TimelineFeedProps> = ({
           price={checkoutModal.price}
           isNegotiated={checkoutModal.isNegotiated}
           onClose={() => setCheckoutModal(null)}
+        />
+      )}
+
+      {/* Global Reaction Details Popover Modal */}
+      {viewingReactionsPost && (
+        <InlineReactionsModal
+          viewingReactionsPost={viewingReactionsPost}
+          setViewingReactionsPost={setViewingReactionsPost}
+          allProfiles={discoverProfiles}
+          userProfile={userProfile}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import { CommunityBandRecord } from './communityBands';
+import type { CommunityBandRecord } from './communityBands';
 
 export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
   {
@@ -17,7 +17,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Unique Leader Records",
     "bio": "Brutal technical death metal powerhouse from Las Vegas, Nevada / Denver, CO, signed to Unique Leader Records. Delivering bone-crushing slam grooves, hyper-technical guitar assault, and guttural vocal devastation.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788041930287_1788041930303.jpg?t=1788041930303",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396969937_1788396969969.jpg?t=1788396969969",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788042390992_1788042391008.jpg?t=1788042391008",
     "spotify_url": "https://open.spotify.com/artist/5eL7qI7R6d3t9e0Vw3uP4a",
     "metal_archives_url": "https://www.metal-archives.com/bands/Cordyceps/3540465543",
@@ -72,9 +72,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "CO",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788041930287_1788041930303.jpg?t=1788041930303",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788041930287_1788041930303.jpg?t=1788041930303",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788041930287_1788041930303.jpg?t=1788041930303",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396969937_1788396969969.jpg?t=1788396969969",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396969937_1788396969969.jpg?t=1788396969969",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396969937_1788396969969.jpg?t=1788396969969",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788042390992_1788042391008.jpg?t=1788042391008",
     "verification_status": "community_archive",
     "discography": [
@@ -193,8 +193,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Sevared Records",
         "catalog_id": "SR-112",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -235,7 +235,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Relapse Records",
     "bio": "Widely acknowledged as the originators and godfathers of slam death metal. Formed in Dallas, Texas in 1995, Devourment established the guttural template with \"Molesting the Decapitated\".",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787891338290.jpg?t=1787891338290",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395638723_1788395638734.jpg?t=1788395638734",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787891345437.jpg?t=1787891345437",
     "spotify_url": "https://open.spotify.com/artist/5gU6tM3qg4U8K9W2pM1e1e",
     "metal_archives_url": "https://www.metal-archives.com/bands/Devourment/493",
@@ -281,9 +281,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787891338290.jpg?t=1787891338290",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787891338290.jpg?t=1787891338290",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787891338290.jpg?t=1787891338290",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395638723_1788395638734.jpg?t=1788395638734",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395638723_1788395638734.jpg?t=1788395638734",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395638723_1788395638734.jpg?t=1788395638734",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787891345437.jpg?t=1787891345437",
     "verification_status": "community_archive",
     "discography": [
@@ -294,8 +294,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "United Guttural Records",
         "catalog_id": "UGR-004",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -346,8 +346,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-7422",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -418,7 +418,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "DE",
     "record_label": "Season of Mist / Willowtip",
     "bio": "Masterminds of technical jazz-inflected brutal death metal founded in 1994 by drummer Lille Gruber and his late father Wolfgang Teske.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787857390098.jpg?t=1787857390098",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396381585_1788396381626.jpg?t=1788396381626",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787857404616.jpg?t=1787857404616",
     "spotify_url": "https://open.spotify.com/artist/7zV2U3m4v3W2g4U8K9W2pM",
     "metal_archives_url": "https://www.metal-archives.com/bands/Defeated_Sanity/3860",
@@ -464,9 +464,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Progressive Metal"
     ],
     "state_province": "Berlin",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787857390098.jpg?t=1787857390098",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787857390098.jpg?t=1787857390098",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787857390098.jpg?t=1787857390098",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396381585_1788396381626.jpg?t=1788396381626",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396381585_1788396381626.jpg?t=1788396381626",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396381585_1788396381626.jpg?t=1788396381626",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787857404616.jpg?t=1787857404616",
     "verification_status": "community_archive",
     "discography": [
@@ -477,8 +477,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Willowtip Records",
         "catalog_id": "WT-109",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -534,8 +534,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Willowtip Records",
         "catalog_id": "WT-188",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -591,8 +591,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Season of Mist",
         "catalog_id": "SOM-744",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -653,7 +653,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Metal Age / United Guttural",
     "bio": "Formed in 1993 in Decatur, Illinois, Lividity is a veteran underground death metal outfit renowned for groovy mid-tempo blasts, guttural vocals, and raw American brutality.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787625126838.jpg?t=1787625126838",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787849693792.jpg?t=1787849693792",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787625134706.jpg?t=1787625134706",
     "spotify_url": "https://open.spotify.com/artist/5B4Xf5O2v9t4w7r2M4k8v1",
     "metal_archives_url": "https://www.metal-archives.com/bands/Lividity/1149",
@@ -699,9 +699,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Pornogrind"
     ],
     "state_province": "IL",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787625126838.jpg?t=1787625126838",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787625126838.jpg?t=1787625126838",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787625126838.jpg?t=1787625126838",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787849693792.jpg?t=1787849693792",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787849693792.jpg?t=1787849693792",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787849693792.jpg?t=1787849693792",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787625134706.jpg?t=1787625134706",
     "verification_status": "community_archive",
     "discography": [
@@ -712,8 +712,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "United Guttural Records",
         "catalog_id": "UGR-002",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -749,7 +749,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Comatose Music",
     "bio": "Houston, Texas brutal death metal force featuring Bridget Lynch on vocals, delivering unrelenting blasts, crushing groove slams, and murderous guttural intensity.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787803623565.jpg?t=1787803623565",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396502651_1788396502844.jpg?t=1788396502844",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787803632970.jpg?t=1787803632970",
     "spotify_url": "https://open.spotify.com/artist/73G7jO32VzEw5B4v1t4w8r",
     "metal_archives_url": "https://www.metal-archives.com/bands/Stabbing/3540498114",
@@ -795,9 +795,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Slam Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787803623565.jpg?t=1787803623565",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787803623565.jpg?t=1787803623565",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787803623565.jpg?t=1787803623565",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396502651_1788396502844.jpg?t=1788396502844",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396502651_1788396502844.jpg?t=1788396502844",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396502651_1788396502844.jpg?t=1788396502844",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787803632970.jpg?t=1787803632970",
     "verification_status": "community_archive",
     "discography": [
@@ -808,8 +808,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "ep",
         "label": "Independent",
         "catalog_id": "STAB-001",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -838,18 +838,66 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/stabbing-extirpated-mortal-process.jpg",
         "cover_image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/stabbing-extirpated-mortal-process.jpg",
         "tracks": [
-          { "number": 1, "title": "Inhaling the Dead", "duration": "3:15" },
-          { "number": 2, "title": "Razor Wire Strangulation", "duration": "3:40" },
-          { "number": 3, "title": "Southern Disembowelment", "duration": "3:30" },
-          { "number": 4, "title": "Extirpated Mortal Process", "duration": "4:02" },
-          { "number": 5, "title": "Visceral Human Dishonor", "duration": "3:10" },
-          { "number": 6, "title": "Sliced and Gutted", "duration": "3:25" },
-          { "number": 7, "title": "It Ends with Me", "duration": "2:55" },
-          { "number": 8, "title": "Pulse of the Asphyxiated", "duration": "3:45" },
-          { "number": 9, "title": "Pierced by the Knife", "duration": "3:18" },
-          { "number": 10, "title": "Defiled and Rotten", "duration": "3:35" },
-          { "number": 11, "title": "Pungent Excavation", "duration": "3:22" },
-          { "number": 12, "title": "Carnal Demise", "duration": "4:05" }
+          {
+            "number": 1,
+            "title": "Inhaling the Dead",
+            "duration": "3:15"
+          },
+          {
+            "number": 2,
+            "title": "Razor Wire Strangulation",
+            "duration": "3:40"
+          },
+          {
+            "number": 3,
+            "title": "Southern Disembowelment",
+            "duration": "3:30"
+          },
+          {
+            "number": 4,
+            "title": "Extirpated Mortal Process",
+            "duration": "4:02"
+          },
+          {
+            "number": 5,
+            "title": "Visceral Human Dishonor",
+            "duration": "3:10"
+          },
+          {
+            "number": 6,
+            "title": "Sliced and Gutted",
+            "duration": "3:25"
+          },
+          {
+            "number": 7,
+            "title": "It Ends with Me",
+            "duration": "2:55"
+          },
+          {
+            "number": 8,
+            "title": "Pulse of the Asphyxiated",
+            "duration": "3:45"
+          },
+          {
+            "number": 9,
+            "title": "Pierced by the Knife",
+            "duration": "3:18"
+          },
+          {
+            "number": 10,
+            "title": "Defiled and Rotten",
+            "duration": "3:35"
+          },
+          {
+            "number": 11,
+            "title": "Pungent Excavation",
+            "duration": "3:22"
+          },
+          {
+            "number": 12,
+            "title": "Carnal Demise",
+            "duration": "4:05"
+          }
         ]
       }
     ]
@@ -868,7 +916,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "New Standard Elite / Unique Leader",
     "bio": "Formed in Chicago in 1994, Gorgasm is a prominent and enduring force in American brutal death metal, famous for technical blast sections and punishing groove slams.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787807876560.jpg?t=1787807876560",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396221828_1788396221852.jpg?t=1788396221852",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787807883534.jpg?t=1787807883534",
     "spotify_url": "https://open.spotify.com/artist/5B4Xf5O2v9t4w7r2M4k8v1",
     "metal_archives_url": "https://www.metal-archives.com/bands/Gorgasm/1175",
@@ -881,30 +929,30 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       {
         "id": "gorg-1",
         "name": "Damian Leski",
-        "role": "Vocals, Guitars",
+        "role": "Guitar, Vocals",
         "status": "active",
         "years": "1994–present"
       },
       {
         "id": "gorg-2",
-        "name": "Anthony Voight",
-        "role": "Bass, Vocals",
+        "name": "Sasha Chrosciewicz",
+        "role": "Guitar, Vocals",
         "status": "active",
-        "years": "2008–present"
+        "years": "2018–present"
       },
       {
         "id": "gorg-3",
-        "name": "Ryan Saylor",
-        "role": "Guitars",
+        "name": "John Hull",
+        "role": "Bass, Vocals",
         "status": "active",
-        "years": "2010–present"
+        "years": "2022–present"
       },
       {
         "id": "gorg-4",
-        "name": "Kyle Moeller",
+        "name": "Tomasz Pilasiewicz",
         "role": "Drums",
         "status": "active",
-        "years": "2014–present"
+        "years": "2005–2008, 2024–present"
       }
     ],
     "band_name": "Gorgasm",
@@ -913,9 +961,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "IL",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787807876560.jpg?t=1787807876560",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787807876560.jpg?t=1787807876560",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787807876560.jpg?t=1787807876560",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396221828_1788396221852.jpg?t=1788396221852",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396221828_1788396221852.jpg?t=1788396221852",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396221828_1788396221852.jpg?t=1788396221852",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787807883534.jpg?t=1787807883534",
     "verification_status": "community_archive",
     "discography": [
@@ -926,8 +974,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Extremist Records",
         "catalog_id": "EXT-004",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -963,8 +1011,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Unique Leader Records",
         "catalog_id": "ULR-028",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -995,8 +1043,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "New Standard Elite",
         "catalog_id": "NSE-018",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1036,7 +1084,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Season of Mist",
     "bio": "Brodequin is known for hyper-speed historical brutal death metal chronicling medieval torture, execution methods, and dark ages atrocities.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787864115165.jpg?t=1787864115165",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395405188_1788395405206.jpg?t=1788395405206",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787864121287.jpg?t=1787864121287",
     "spotify_url": "https://open.spotify.com/artist/7v2B4w8K9W2pM1e1e7zV2U",
     "metal_archives_url": "https://www.metal-archives.com/bands/Brodequin/1154",
@@ -1074,9 +1122,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Historical Death Metal"
     ],
     "state_province": "TN",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787864115165.jpg?t=1787864115165",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787864115165.jpg?t=1787864115165",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787864115165.jpg?t=1787864115165",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395405188_1788395405206.jpg?t=1788395405206",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395405188_1788395405206.jpg?t=1788395405206",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395405188_1788395405206.jpg?t=1788395405206",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787864121287.jpg?t=1787864121287",
     "verification_status": "community_archive",
     "discography": [
@@ -1087,8 +1135,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Ablated Records",
         "catalog_id": "AB-003",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1119,8 +1167,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Season of Mist",
         "catalog_id": "SOM-750",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1160,7 +1208,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Sevared Records",
     "bio": "One-man brutal death metal demolition machine founded by Shaun LaCanne in 2000 in Racine, Wisconsin. Delivering crushing riffs, programmed blast assaults, and guttural sickness.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787866579294.jpg?t=1787866579294",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1792024247560_1792024247597.jpg?t=1792024247597",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787866585149.jpg?t=1787866585149",
     "metal_archives_url": "https://www.metal-archives.com/bands/Putrid_Pile/1225",
     "custom_slug": "putrid-pile",
@@ -1183,9 +1231,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "WI",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787866579294.jpg?t=1787866579294",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787866579294.jpg?t=1787866579294",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787866579294.jpg?t=1787866579294",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1792024247560_1792024247597.jpg?t=1792024247597",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1792024247560_1792024247597.jpg?t=1792024247597",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1792024247560_1792024247597.jpg?t=1792024247597",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787866585149.jpg?t=1787866585149",
     "verification_status": "community_archive",
     "discography": [
@@ -1196,8 +1244,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "United Guttural Records",
         "catalog_id": "UGR-018",
-        "cover_url": "",
-        "cover_image": "",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1228,8 +1276,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Sevared Records",
         "catalog_id": "SR-048",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1264,7 +1312,7 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Agonia Records / Nuclear Blast",
     "bio": "Formed in Topeka, Kansas in 1997, Origin is one of the most prominent technical death metal entities in extreme music, acclaimed for ferocious arpeggios, gravity blasts, and superhuman execution.",
-    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787869057607.jpg?t=1787869057607",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395797409_1788395797432.jpg?t=1788395797432",
     "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787869083014.jpg?t=1787869083014",
     "metal_archives_url": "https://www.metal-archives.com/bands/Origin/155",
     "custom_slug": "origin",
@@ -1308,9 +1356,9 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Technical BDM"
     ],
     "state_province": "KS",
-    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787869057607.jpg?t=1787869057607",
-    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787869057607.jpg?t=1787869057607",
-    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1787869057607.jpg?t=1787869057607",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395797409_1788395797432.jpg?t=1788395797432",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395797409_1788395797432.jpg?t=1788395797432",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788395797409_1788395797432.jpg?t=1788395797432",
     "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787869083014.jpg?t=1787869083014",
     "verification_status": "community_archive",
     "discography": [
@@ -1321,8 +1369,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-6738",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1358,8 +1406,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Nuclear Blast",
         "catalog_id": "NB-2715",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1390,8 +1438,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Agonia Records / Nuclear Blast",
         "catalog_id": "AR-545",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1432,8 +1480,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "DE",
     "record_label": "Willowtip / Relapse Records",
     "bio": "Pioneering technical death metal band founded by Muhammed Suiçmez in 1992. Known for neoclassical guitar arpeggios, extreme technical precision, and defining albums \"Epitaph\" and \"Onset of Putrefaction\".",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791209160_1790791209171.jpg?t=1790791209171",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790791275869_1790791275870.jpg?t=1790791275870",
     "spotify_url": "https://open.spotify.com/artist/4ZgH0b67h8U7s8b1vB1e1e",
     "metal_archives_url": "https://www.metal-archives.com/bands/Necrophagist/238",
     "custom_slug": "necrophagist",
@@ -1478,10 +1526,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Technical Death Metal"
     ],
     "state_province": "Baden-Württemberg",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791209160_1790791209171.jpg?t=1790791209171",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791209160_1790791209171.jpg?t=1790791209171",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791209160_1790791209171.jpg?t=1790791209171",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790791275869_1790791275870.jpg?t=1790791275870",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -1491,8 +1539,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Noise Solution / Willowtip",
         "catalog_id": "WT-034",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1528,8 +1576,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-6632",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1590,8 +1638,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Relapse Records",
     "bio": "Heavyweight icons of American brutal death metal and grindcore formed in 1991 in Maryland. Known for lethal blast beats, virtuosic dual-vocal attack, and hardcore-groove beatdowns.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396746010_1788396746022.jpg?t=1788396746022",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788387665188_1788387665194.jpg?t=1788387665194",
     "spotify_url": "https://open.spotify.com/artist/2vB4w8K9W2pM1e1e7zV2U",
     "metal_archives_url": "https://www.metal-archives.com/bands/Dying_Fetus/154",
     "custom_slug": "dying-fetus",
@@ -1629,10 +1677,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Technical Death Metal"
     ],
     "state_province": "MD",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396746010_1788396746022.jpg?t=1788396746022",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396746010_1788396746022.jpg?t=1788396746022",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396746010_1788396746022.jpg?t=1788396746022",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788387665188_1788387665194.jpg?t=1788387665194",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -1642,8 +1690,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-6467",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1694,8 +1742,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-7182",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1751,8 +1799,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-7531",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1823,8 +1871,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Century Media Records",
     "bio": "Columbus, Ohio death metal outfit known for caveman riffs, repulsive gutturals, and relentless old-school heaviness. Signed to Century Media.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791100363_1790791100370.jpg?t=1790791100370",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788160861877_1788160861892.jpg?t=1788160861892",
     "spotify_url": "https://open.spotify.com/artist/7zV2U3m4v3W2g4U8K9W2pM",
     "metal_archives_url": "https://www.metal-archives.com/bands/Sanguisugabogg/3540456102",
     "custom_slug": "sanguisugabogg",
@@ -1869,10 +1917,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Maggot Stomp"
     ],
     "state_province": "OH",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791100363_1790791100370.jpg?t=1790791100370",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791100363_1790791100370.jpg?t=1790791100370",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790791100363_1790791100370.jpg?t=1790791100370",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788160861877_1788160861892.jpg?t=1788160861892",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -1882,8 +1930,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Century Media Records",
         "catalog_id": "CM-9871",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1919,8 +1967,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Century Media Records",
         "catalog_id": "CM-9982",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -1966,8 +2014,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Relapse Records",
     "bio": "Legendary horror death metal/grindcore pioneer formed in Yonkers, New York in 1989 by Will Rahmer and Roger Beaujard. Renowned for low-tuned fuzz, horror movie samples, and relentless blast assaults.",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-avatar_1791937848411_1791937848700.jpg?t=1791937848700",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-banner_1791937865523_1791937865710.jpg?t=1791937865710",
     "spotify_url": "https://open.spotify.com/artist/4ZgH0b67h8U7s8b1vB1e1e",
     "metal_archives_url": "https://www.metal-archives.com/bands/Mortician/1148",
     "custom_slug": "mortician",
@@ -1998,10 +2046,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "NY",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-avatar_1791937848411_1791937848700.jpg?t=1791937848700",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-avatar_1791937848411_1791937848700.jpg?t=1791937848700",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-avatar_1791937848411_1791937848700.jpg?t=1791937848700",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5b11c121-f310-471b-aef9-cecd5fea3cec/community-banner_1791937865523_1791937865710.jpg?t=1791937865710",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -2011,8 +2059,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-6934",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2053,8 +2101,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Relapse Records",
         "catalog_id": "RR-6435",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2115,8 +2163,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Nuclear Blast",
     "bio": "Suffocation are considered the founding fathers of brutal and technical death metal, forging the legendary Long Island sound in 1988 with groundbreaking breakdowns, intricate riffing, and Frank Mullen's iconic guttural delivery.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396054583_1788396054592.jpg?t=1788396054592",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788075872226_1788075872243.jpg?t=1788075872243",
     "spotify_url": "https://open.spotify.com/artist/1e1e7zV2U3m4v3W2g4U8K9",
     "metal_archives_url": "https://www.metal-archives.com/bands/Suffocation/118",
     "custom_slug": "suffocation",
@@ -2161,10 +2209,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "NYDM"
     ],
     "state_province": "NY",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396054583_1788396054592.jpg?t=1788396054592",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396054583_1788396054592.jpg?t=1788396054592",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788396054583_1788396054592.jpg?t=1788396054592",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788075872226_1788075872243.jpg?t=1788075872243",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -2174,8 +2222,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Roadrunner Records",
         "catalog_id": "RR-9275",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2231,8 +2279,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Roadrunner Records",
         "catalog_id": "RR-9013",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2283,8 +2331,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Roadrunner Records",
         "catalog_id": "RR-8951",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2330,8 +2378,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Nuclear Blast",
         "catalog_id": "NB-6531",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2437,7 +2485,11 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "cover_url": "https://coverartarchive.org/release-group/e7261c3c-c4cd-4376-bd1c-4dc08d07552a/front-500",
         "cover_image": "https://coverartarchive.org/release-group/e7261c3c-c4cd-4376-bd1c-4dc08d07552a/front-500",
         "tracks": [
-          { "number": 1, "title": "Heinous Interstellar Malformations", "duration": "3:40" }
+          {
+            "number": 1,
+            "title": "Heinous Interstellar Malformations",
+            "duration": "3:40"
+          }
         ]
       }
     ]
@@ -2457,8 +2509,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "PL",
     "record_label": "Nuclear Blast / Earache Records",
     "bio": "Polish death metal legends founded in 1983 by Piotr \"Peter\" Wiwczarek. One of the undisputed pioneering forces in European extreme metal with acclaimed records \"The Ultimate Incantation\", \"De Profundis\", and \"Litany\".",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545075109_1788545075131.jpg?t=1788545075131",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788545093569_1788545093584.jpg?t=1788545093584",
     "spotify_url": "https://open.spotify.com/artist/2qB8w8K9W2pM1e1e7zV2U",
     "metal_archives_url": "https://www.metal-archives.com/bands/Vader/145",
     "custom_slug": "vader",
@@ -2503,10 +2555,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Extreme Metal"
     ],
     "state_province": "Warmia-Masuria",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545075109_1788545075131.jpg?t=1788545075131",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545075109_1788545075131.jpg?t=1788545075131",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545075109_1788545075131.jpg?t=1788545075131",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788545093569_1788545093584.jpg?t=1788545093584",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -2516,8 +2568,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Earache Records",
         "catalog_id": "MOSH-059",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2583,8 +2635,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Impact Records / Nuclear Blast",
         "catalog_id": "IR-004",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2640,8 +2692,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Metal Blade Records",
         "catalog_id": "3984-14299-2",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2692,8 +2744,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Nuclear Blast",
         "catalog_id": "NB-4789",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2769,8 +2821,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Unique Leader Records",
     "bio": "Oklahoma City slam sensation blending bone-shattering Southern slam riffs with hip-hop mixtape aesthetics, samples, and relentless beatdowns. Signed to Unique Leader Records.",
-    "avatar_url": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-avatar_1791939433186_1791939433513.jpg?t=1791939433513",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-banner_1791939419618_1791939420524.jpg?t=1791939420524",
     "spotify_url": "https://open.spotify.com/artist/7zV2U3m4v3W2g4U8K9W2pM",
     "metal_archives_url": "https://www.metal-archives.com/bands/PeelingFlesh/3540492194",
     "custom_slug": "peelingflesh",
@@ -2822,10 +2874,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "OK",
-    "avatar": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-avatar_1791939433186_1791939433513.jpg?t=1791939433513",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-avatar_1791939433186_1791939433513.jpg?t=1791939433513",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-avatar_1791939433186_1791939433513.jpg?t=1791939433513",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/2f0193f8-295c-4b0a-905f-c01b18ea18a9/community-banner_1791939419618_1791939420524.jpg?t=1791939420524",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -2835,8 +2887,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Independent",
         "catalog_id": "PF-002",
-        "cover_url": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2872,8 +2924,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Unique Leader Records",
         "catalog_id": "ULR-412",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -2923,8 +2975,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "CA",
     "record_label": "Nuclear Blast / Century Media",
     "bio": "Montreal extreme metal pioneers known for groundbreaking speed, chaotic jazz timing, and Flo Mounier's legendary drumming. Creators of the magnum opus \"None So Vile\".",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788385796973_1788385796991.jpg?t=1788385796991",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787787755734.jpg?t=1787787755734",
     "spotify_url": "https://open.spotify.com/artist/5B4Xf5O2v9t4w7r2M4k8v1",
     "metal_archives_url": "https://www.metal-archives.com/bands/Cryptopsy/115",
     "custom_slug": "cryptopsy",
@@ -2968,10 +3020,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "QC",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788385796973_1788385796991.jpg?t=1788385796991",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788385796973_1788385796991.jpg?t=1788385796991",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788385796973_1788385796991.jpg?t=1788385796991",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787787755734.jpg?t=1787787755734",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -2981,8 +3033,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Wrong Again Records / Century Media",
         "catalog_id": "WAR-008",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3033,8 +3085,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Invasion Records",
         "catalog_id": "INV-022",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3090,8 +3142,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Nuclear Blast",
         "catalog_id": "NB-6211",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3151,8 +3203,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "CA",
     "record_label": "Comatose Music",
     "bio": "Heavy-hitting Canadian slam death metal juggernaut formed in Quebec. Punishing grooves, guttural vocal devastation, and ruthless precision.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789856842149_1789856842172.jpg?t=1789856842172",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1789860344032_1789860344061.jpg?t=1789860344061",
     "metal_archives_url": "https://www.metal-archives.com/bands/Necroticgorebeast/3540458110",
     "custom_slug": "necroticgorebeast",
     "curated_by": "@slam_vault",
@@ -3195,10 +3247,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "QC",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789856842149_1789856842172.jpg?t=1789856842172",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789856842149_1789856842172.jpg?t=1789856842172",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789856842149_1789856842172.jpg?t=1789856842172",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1789860344032_1789860344061.jpg?t=1789860344061",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3208,8 +3260,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Comatose Music",
         "catalog_id": "COMA-129",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3245,8 +3297,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Comatose Music",
         "catalog_id": "COMA-181",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3281,8 +3333,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "PT",
     "record_label": "Agonia Records / Miasma Records",
     "bio": "Portuguese slam death metal masters founded in Lisbon in 2013. Blending galactic cosmic themes with punishing slam grooves and razor-sharp modern production.",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788403640440_1788403640451.png?t=1788403640451",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787848876245.jpg?t=1787848876245",
     "metal_archives_url": "https://www.metal-archives.com/bands/Analepsy/3540391234",
     "custom_slug": "analepsy",
     "curated_by": "@iberian_slam",
@@ -3311,10 +3363,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "Lisbon",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788403640440_1788403640451.png?t=1788403640451",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788403640440_1788403640451.png?t=1788403640451",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788403640440_1788403640451.png?t=1788403640451",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787848876245.jpg?t=1787848876245",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3324,8 +3376,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "ep",
         "label": "Vomit Your Shirt",
         "catalog_id": "VYS-005",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3356,8 +3408,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Unique Leader Records",
         "catalog_id": "ULR-192",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3393,8 +3445,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Agonia Records / Miasma Records",
         "catalog_id": "AR-549",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3445,8 +3497,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "UK",
     "record_label": "Unique Leader Records / Gore House",
     "bio": "Scottish party death metal innovators famous for contrasting cheerful Fisher-Price typography with brutally crushing slamming death metal.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791950586423_1791950586791.jpg?t=1791950586791",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1791950340949_1791950341551.jpg?t=1791950341551",
     "metal_archives_url": "https://www.metal-archives.com/bands/Party_Cannon/3540342918",
     "custom_slug": "party-cannon",
     "curated_by": "@party_slam",
@@ -3497,10 +3549,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Grindcore"
     ],
     "state_province": "Fife",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791950586423_1791950586791.jpg?t=1791950586791",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791950586423_1791950586791.jpg?t=1791950586791",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791950586423_1791950586791.jpg?t=1791950586791",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1791950340949_1791950341551.jpg?t=1791950341551",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3510,8 +3562,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Gore House Productions",
         "catalog_id": "GHP-025",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3542,8 +3594,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Gore House Productions",
         "catalog_id": "GHP-058",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3574,8 +3626,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Unique Leader Records",
         "catalog_id": "ULR-420",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3615,8 +3667,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "GR",
     "record_label": "Unique Leader Records",
     "bio": "Greek brutal death metal masters delivering hyper-groove blast sections, guttural filth, and uncompromising precision.",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791943864530_1791943866482.jpg?t=1791943866482",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1791943850509_1791943851103.jpg?t=1791943851103",
     "metal_archives_url": "https://www.metal-archives.com/bands/Mortal_Torment/108991",
     "custom_slug": "mortal-torment",
     "curated_by": "@athens_death",
@@ -3645,10 +3697,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "Attica",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791943864530_1791943866482.jpg?t=1791943866482",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791943864530_1791943866482.jpg?t=1791943866482",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1791943864530_1791943866482.jpg?t=1791943866482",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/archives/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1791943850509_1791943851103.jpg?t=1791943851103",
     "verification_status": "community_archive",
     "discography": []
   },
@@ -3666,8 +3718,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Extreme Souls Production",
     "bio": "Texas underground brutal death metal cult formed in Houston. Acclaimed for the underground classic \"Baptized Through Blasphemy\".",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545558195_1788545558198.jpg?t=1788545558198",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788545412136_1788545412145.jpg?t=1788545412145",
     "custom_slug": "sect-of-execration",
     "curated_by": "@texas_slam",
     "curator_name": "Houston Underground Society",
@@ -3688,10 +3740,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545558195_1788545558198.jpg?t=1788545558198",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545558195_1788545558198.jpg?t=1788545558198",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788545558195_1788545558198.jpg?t=1788545558198",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788545412136_1788545412145.jpg?t=1788545412145",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3701,8 +3753,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Extreme Souls Production",
         "catalog_id": "ESP-006",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3737,8 +3789,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Comatose Music",
     "bio": "Brutal death metal group featuring veterans of the Texas underground, delivering ferocious grooves, high-speed blast passages, and total sonic devastation.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788077968101_1788077968117.jpg?t=1788077968117",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788077626348_1788077626363.jpg?t=1788077626363",
     "custom_slug": "kill-everything",
     "curated_by": "@texas_slam",
     "curator_name": "Houston Underground Society",
@@ -3759,10 +3811,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788077968101_1788077968117.jpg?t=1788077968117",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788077968101_1788077968117.jpg?t=1788077968117",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788077968101_1788077968117.jpg?t=1788077968117",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788077626348_1788077626363.jpg?t=1788077626363",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3772,8 +3824,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Comatose Music",
         "catalog_id": "COMA-118",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3808,8 +3860,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Ablated Records",
     "bio": "Legendary Ohio brutal death metal band known for the classic album \"Tales of Necrophilia\", featuring crushing blast beats and guttural savagery.",
-    "avatar_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404507739_1788404507775.jpg?t=1788404507775",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787850600666.jpg?t=1787850600666",
     "custom_slug": "regurgitation",
     "curated_by": "@ohio_death",
     "curator_name": "Ohio Death Vault",
@@ -3830,10 +3882,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "OH",
-    "avatar": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404507739_1788404507775.jpg?t=1788404507775",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404507739_1788404507775.jpg?t=1788404507775",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404507739_1788404507775.jpg?t=1788404507775",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787850600666.jpg?t=1787850600666",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -3843,8 +3895,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Ablated Records",
         "catalog_id": "AB-001",
-        "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -3879,8 +3931,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Comatose Music",
     "bio": "High-speed technical brutal death metal powerhouse delivering razor-sharp riffs, relentless blasts, and guttural fury across multiple acclaimed records.",
-    "avatar_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788074257978_1788074257991.jpg?t=1788074257991",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788073828404_1788073828407.jpg?t=1788073828407",
     "custom_slug": "incinerate",
     "curated_by": "@midwest_death",
     "curator_name": "Midwest Extreme Society",
@@ -3901,10 +3953,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "MN",
-    "avatar": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788074257978_1788074257991.jpg?t=1788074257991",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788074257978_1788074257991.jpg?t=1788074257991",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788074257978_1788074257991.jpg?t=1788074257991",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788073828404_1788073828407.jpg?t=1788073828407",
     "verification_status": "community_archive",
     "discography": []
   },
@@ -3922,8 +3974,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "DE",
     "record_label": "Black Sunset / Powerground",
     "bio": "German technical brutal death metal unit from Bremen, delivering punishing blast speed and technical groove precision since 1999.",
-    "avatar_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404247180_1788404247208.jpg?t=1788404247208",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787892438745_1787892438749.jpg?t=1787892438749",
     "custom_slug": "despondency",
     "curated_by": "@euro_death",
     "curator_name": "Bremen Death Society",
@@ -3944,10 +3996,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "Bremen",
-    "avatar": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404247180_1788404247208.jpg?t=1788404247208",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404247180_1788404247208.jpg?t=1788404247208",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404247180_1788404247208.jpg?t=1788404247208",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787892438745_1787892438749.jpg?t=1787892438749",
     "verification_status": "community_archive",
     "discography": []
   },
@@ -3965,8 +4017,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Willowtip Records",
     "bio": "Topeka, Kansas brutal death metal onslaught featuring members of Origin, delivering blistering blast speed and relentless aggression.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788478429181_1788478429210.jpg?t=1788478429210",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788478443064_1788478443069.jpg?t=1788478443069",
     "custom_slug": "unmerciful",
     "curated_by": "@midwest_death",
     "curator_name": "Midwest Extreme Society",
@@ -3987,10 +4039,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "KS",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788478429181_1788478429210.jpg?t=1788478429210",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788478429181_1788478429210.jpg?t=1788478429210",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788478429181_1788478429210.jpg?t=1788478429210",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1788478443064_1788478443069.jpg?t=1788478443069",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -4000,8 +4052,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Unique Leader Records",
         "catalog_id": "ULR-048",
-        "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -4022,8 +4074,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Willowtip Records",
         "catalog_id": "WT-185",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -4053,8 +4105,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "TR",
     "record_label": "Rotten Music",
     "bio": "Turkish brutal death metal force from Istanbul, delivering crushing blast speed, serpentine technical riffs, and deep guttural devastation.",
-    "avatar_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789776289702_1789776289715.jpg?t=1789776289715",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1789776053693_1789776053701.jpg?t=1789776053701",
     "custom_slug": "molested-divinity",
     "curated_by": "@rotten_archives",
     "curator_name": "Anatolian Death Society",
@@ -4075,10 +4127,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "Istanbul",
-    "avatar": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789776289702_1789776289715.jpg?t=1789776289715",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789776289702_1789776289715.jpg?t=1789776289715",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1789776289702_1789776289715.jpg?t=1789776289715",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1789776053693_1789776053701.jpg?t=1789776053701",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -4088,8 +4140,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Rotten Music",
         "catalog_id": "RM-032",
-        "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -4110,8 +4162,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Rotten Music",
         "catalog_id": "RM-061",
-        "cover_url": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
@@ -4141,8 +4193,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Comatose Music",
     "bio": "Texas brutal death metal wrecking crew delivering unrelenting technical slam and guttural devastation.",
-    "avatar_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790730492732_1790730492758.jpg?t=1790730492758",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790730507194_1790730507199.jpg?t=1790730507199",
     "custom_slug": "between-the-killings",
     "curated_by": "@texas_slam",
     "curator_name": "Texas Slam Vault",
@@ -4163,10 +4215,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790730492732_1790730492758.jpg?t=1790730492758",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790730492732_1790730492758.jpg?t=1790730492758",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790730492732_1790730492758.jpg?t=1790730492758",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790730507194_1790730507199.jpg?t=1790730507199",
     "verification_status": "community_archive",
     "discography": []
   },
@@ -4184,8 +4236,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Independent",
     "bio": "Dallas, Texas extreme underground brutal death metal project delivering crushing guttural riffs and sonic intensity.",
-    "avatar_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404992469_1788404992497.jpg?t=1788404992497",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787896941770_1787896941781.jpg?t=1787896941781",
     "custom_slug": "human-artifacts",
     "curated_by": "@texas_slam",
     "curator_name": "Texas Slam Vault",
@@ -4206,10 +4258,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404992469_1788404992497.jpg?t=1788404992497",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404992469_1788404992497.jpg?t=1788404992497",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1788404992469_1788404992497.jpg?t=1788404992497",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1787896941770_1787896941781.jpg?t=1787896941781",
     "verification_status": "community_archive",
     "discography": []
   },
@@ -4227,8 +4279,8 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
     "country": "USA",
     "record_label": "Independent",
     "bio": "Heavyweight Texas slamming death metal project delivering devastating downtuned riffs and guttural vocals.",
-    "avatar_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "cover_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790218237542_1790218237563.jpg?t=1790218237563",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790218246716_1790218246728.jpg?t=1790218246728",
     "custom_slug": "necessary-death",
     "curated_by": "@texas_slam",
     "curator_name": "Texas Slam Vault",
@@ -4249,10 +4301,10 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
       "Brutal Death Metal"
     ],
     "state_province": "TX",
-    "avatar": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "logo_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=400&auto=format&fit=crop&q=80",
-    "banner_url": "https://images.unsplash.com/photo-1498038432885-c6f3f1b912ee?w=1200&auto=format&fit=crop&q=80",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790218237542_1790218237563.jpg?t=1790218237563",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790218237542_1790218237563.jpg?t=1790218237563",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1790218237542_1790218237563.jpg?t=1790218237563",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1790218246716_1790218246728.jpg?t=1790218246728",
     "verification_status": "community_archive",
     "discography": [
       {
@@ -4262,19 +4314,1119 @@ export const INITIAL_COMMUNITY_BANDS: CommunityBandRecord[] = [
         "type": "album",
         "label": "Independent",
         "catalog_id": "ND-001",
-        "cover_url": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
-        "cover_image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80",
+        "cover_url": null,
+        "cover_image": null,
         "tracks": [
           {
             "number": 1,
             "title": "Morbid Realization",
             "duration": "3:20"
-          },
-          {
-            "number": 2,
-            "title": "Cold Slab",
-            "duration": "3:40"
           }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "def01697-734a-43fa-8b88-66166b28f743",
+    "name": "Cannibal Corpse",
+    "band_name": "Cannibal Corpse",
+    "genre": "Death Metal",
+    "subgenres": ["Death Metal", "Brutal Death Metal", "Thrash Metal"],
+    "micro_genres": ["Death Metal", "Brutal Death Metal", "Thrash Metal"],
+    "founded_year": "1988",
+    "city": "Buffalo",
+    "state": "NY",
+    "state_province": "NY",
+    "country": "USA",
+    "record_label": "Metal Blade Records",
+    "bio": "Legendary death metal pioneers formed in Buffalo, New York in 1988. One of the top-selling death metal bands of all time, famous for razor-sharp technical riffs, relentless blast beats, and iconic releases like Tomb of the Mutilated and The Bleeding.",
+    "avatar": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793953372064_1793953372104.jpg",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793953372064_1793953372104.jpg",
+    "logo_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793953372064_1793953372104.jpg",
+    "image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793953372064_1793953372104.jpg",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1793953524744_1793953524750.jpg",
+    "banner_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1793953524744_1793953524750.jpg",
+    "spotify_url": "https://open.spotify.com/artist/1G14y7G101o0G0K8P",
+    "custom_slug": "cannibal-corpse",
+    "verification_status": "community_archive",
+    "created_at": "1988-01-01T00:00:00Z",
+    "followers_count": 98500,
+    "lineup": [
+      { "id": "cc-1", "name": "George \"Corpsegrinder\" Fisher", "role": "Lead Vocals", "status": "active", "years": "1995–present" },
+      { "id": "cc-2", "name": "Alex Webster", "role": "Bass", "status": "active", "years": "1988–present" },
+      { "id": "cc-3", "name": "Paul Mazurkiewicz", "role": "Drums", "status": "active", "years": "1988–present" },
+      { "id": "cc-4", "name": "Rob Barrett", "role": "Rhythm Guitar", "status": "active", "years": "1993–1997, 2005–present" },
+      { "id": "cc-5", "name": "Erik Rutan", "role": "Lead Guitar", "status": "active", "years": "2021–present" }
+    ],
+    "discography": [
+      {
+        "id": "cc-rel-1",
+        "title": "Eaten Back to Life",
+        "year": "1990",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14032"
+      },
+      {
+        "id": "cc-rel-2",
+        "title": "Butchered at Birth",
+        "year": "1991",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14050"
+      },
+      {
+        "id": "cc-rel-3",
+        "title": "Tomb of the Mutilated",
+        "year": "1992",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14068"
+      },
+      {
+        "id": "cc-rel-4",
+        "title": "Hammer Smashed Face",
+        "year": "1993",
+        "type": "ep",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14072"
+      },
+      {
+        "id": "cc-rel-5",
+        "title": "The Bleeding",
+        "year": "1994",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14088"
+      },
+      {
+        "id": "cc-rel-6",
+        "title": "Vile",
+        "year": "1996",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14112"
+      },
+      {
+        "id": "cc-rel-7",
+        "title": "Gallery of Suicide",
+        "year": "1998",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14164"
+      },
+      {
+        "id": "cc-rel-8",
+        "title": "Bloodthirst",
+        "year": "1999",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14240"
+      },
+      {
+        "id": "cc-rel-9",
+        "title": "Gore Obsessed",
+        "year": "2002",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14382"
+      },
+      {
+        "id": "cc-rel-10",
+        "title": "Worm Infested",
+        "year": "2003",
+        "type": "ep",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14420"
+      },
+      {
+        "id": "cc-rel-11",
+        "title": "The Wretched Spawn",
+        "year": "2004",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14456"
+      },
+      {
+        "id": "cc-rel-12",
+        "title": "Kill",
+        "year": "2006",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14562"
+      },
+      {
+        "id": "cc-rel-13",
+        "title": "Evisceration Plague",
+        "year": "2009",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14710"
+      },
+      {
+        "id": "cc-rel-14",
+        "title": "Torture",
+        "year": "2012",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15082"
+      },
+      {
+        "id": "cc-rel-15",
+        "title": "A Skeletal Domain",
+        "year": "2014",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15340"
+      },
+      {
+        "id": "cc-rel-16",
+        "title": "Red Before Black",
+        "year": "2017",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15542"
+      },
+      {
+        "id": "cc-rel-17",
+        "title": "Violence Unimagined",
+        "year": "2021",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15760"
+      },
+      {
+        "id": "cc-rel-18",
+        "title": "Chaos Horrific",
+        "year": "2023",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-16014"
+      }
+    ]
+  },
+  {
+    "id": "he-hate-eternal-official-uuid",
+    "name": "Hate Eternal",
+    "band_name": "Hate Eternal",
+    "genre": "Death Metal",
+    "subgenres": ["Extreme Metal", "Death Metal", "Tech Death"],
+    "micro_genres": ["Extreme Metal", "Death Metal", "Tech Death"],
+    "founded_year": "1997",
+    "city": "Tampa",
+    "state": "FL",
+    "state_province": "FL",
+    "country": "USA",
+    "record_label": "Season of Mist",
+    "bio": "Formed in St. Petersburg, Florida, in 1997 by legendary guitarist and producer Erik Rutan (Morbid Angel, Cannibal Corpse), Hate Eternal is a relentless hurricane of ferocious, hyper-speed technical death metal.",
+    "custom_slug": "hate-eternal",
+    "verification_status": "community_archive",
+    "created_at": "1997-01-01T00:00:00Z",
+    "followers_count": 34200,
+    "lineup": [
+      { "id": "he-1", "name": "Erik Rutan", "role": "Guitars, Vocals", "status": "active", "years": "1997–present" },
+      { "id": "he-2", "name": "JJ Hrubovcak", "role": "Bass", "status": "active", "years": "2008–present" },
+      { "id": "he-3", "name": "Hannes Grossmann", "role": "Drums", "status": "active", "years": "2018–present" }
+    ],
+    "discography": []
+  },
+  {
+    "id": "831ed6bc-e039-45d3-84cd-0a508fa18f57",
+    "name": "Deeds of Flesh",
+    "band_name": "Deeds of Flesh",
+    "genre": "Brutal Death Metal",
+    "subgenres": ["Brutal Death Metal", "Technical Death Metal"],
+    "micro_genres": ["Brutal Death Metal", "Technical Death Metal"],
+    "founded_year": "1993",
+    "city": "Los Osos",
+    "state": "CA",
+    "state_province": "CA",
+    "country": "USA",
+    "record_label": "Unique Leader Records",
+    "bio": "Legendary American brutal technical death metal pioneers formed in 1993 by Erik Lindmark and Jacoby Kingston. Founders of Unique Leader Records.",
+    "custom_slug": "deeds-of-flesh",
+    "verification_status": "community_archive",
+    "created_at": "1993-01-01T00:00:00Z",
+    "followers_count": 28900,
+    "lineup": [
+      { "id": "dof-1", "name": "Jacoby Kingston", "role": "Bass, Vocals", "status": "active", "years": "1993–2007, 2020–present" },
+      { "id": "dof-2", "name": "Craig Peters", "role": "Guitars", "status": "active", "years": "2011–present" },
+      { "id": "dof-3", "name": "Darren Cesca", "role": "Drums", "status": "active", "years": "2016–present" },
+      { "id": "dof-4", "name": "Erik Lindmark", "role": "Guitars, Vocals", "status": "past", "years": "1993–2018 (R.I.P.)" }
+    ],
+    "discography": [
+      {
+        "id": "37990ab9-cdc5-40a9-85f9-dd4ec697160a",
+        "title": "Gradually Melted - EP",
+        "year": "1995",
+        "type": "ep",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813635",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/74/81/fa/7481fafc-0ae1-f38b-8a0c-dba455f96c3f/191773824112.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/74/81/fa/7481fafc-0ae1-f38b-8a0c-dba455f96c3f/191773824112.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Three Abreast", "duration": "3:43" },
+          { "number": 2, "title": "Gradually Melted", "duration": "4:23" },
+          { "number": 3, "title": "Human Mutilation", "duration": "4:42" },
+          { "number": 4, "title": "Blood Splattered Embryo", "duration": "3:02" }
+        ]
+      },
+      {
+        "id": "9104d34c-7576-44df-ab7d-0beaa7fed3bd",
+        "title": "Trading Pieces",
+        "year": "1996",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813636",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/9e/e2/ff/9ee2ffca-634b-4dc7-eacb-c6acdd77ac35/191773824174.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/9e/e2/ff/9ee2ffca-634b-4dc7-eacb-c6acdd77ac35/191773824174.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Carnivorous Ways", "duration": "3:34" },
+          { "number": 2, "title": "Born Then Torn Apart", "duration": "2:07" },
+          { "number": 3, "title": "Trading Pieces", "duration": "2:45" },
+          { "number": 4, "title": "Hunting Humans", "duration": "2:39" },
+          { "number": 5, "title": "Impious Offerings", "duration": "3:00" },
+          { "number": 6, "title": "Acid Troops", "duration": "3:36" },
+          { "number": 7, "title": "Deeds of Flesh", "duration": "2:57" },
+          { "number": 8, "title": "Erected on Stakes", "duration": "1:55" },
+          { "number": 9, "title": "Chunks in the Shower", "duration": "2:28" },
+          { "number": 10, "title": "Blasted", "duration": "2:09" },
+          { "number": 11, "title": "Outro", "duration": "2:33" }
+        ]
+      },
+      {
+        "id": "fac4dfb9-7288-43ae-ba66-55bc45f53022",
+        "title": "Inbreeding the Anthropophagi",
+        "year": "1998",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813637",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/29/19/b5/2919b538-9fb1-e6d5-bb84-e5fe37978aa4/191773824129.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/29/19/b5/2919b538-9fb1-e6d5-bb84-e5fe37978aa4/191773824129.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "End of All", "duration": "1:21" },
+          { "number": 2, "title": "Feeding on the Deceased", "duration": "3:59" },
+          { "number": 3, "title": "Inbreeding the Anthropophagi", "duration": "4:46" },
+          { "number": 4, "title": "Infectious One", "duration": "4:18" },
+          { "number": 5, "title": "Ritual of Violence", "duration": "3:50" },
+          { "number": 6, "title": "Canvas of Flesh", "duration": "3:04" },
+          { "number": 7, "title": "Folded into Beast", "duration": "3:37" },
+          { "number": 8, "title": "Gradually Melted", "duration": "4:23" }
+        ]
+      },
+      {
+        "id": "e74f0c3e-43d8-42b3-9203-b9e13c3181da",
+        "title": "Path of the Weakening",
+        "year": "1999",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813639",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/0c/a0/22/0ca02233-ad39-7c2c-270a-aaaf7b20fba8/191773824150.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/0c/a0/22/0ca02233-ad39-7c2c-270a-aaaf7b20fba8/191773824150.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Indigenous to the Appalling", "duration": "3:49" },
+          { "number": 2, "title": "Lustmord", "duration": "2:41" },
+          { "number": 3, "title": "Path of the Weakening", "duration": "4:50" },
+          { "number": 4, "title": "Summarily Killed", "duration": "3:31" },
+          { "number": 5, "title": "Sounds of Loud Reigns", "duration": "3:26" },
+          { "number": 6, "title": "Execute the Anthropophagi", "duration": "3:59" },
+          { "number": 7, "title": "I Die on My Own Terms", "duration": "2:36" },
+          { "number": 8, "title": "Sense of the Diabolic", "duration": "3:18" },
+          { "number": 9, "title": "A Violent God", "duration": "3:29" }
+        ]
+      },
+      {
+        "id": "c0f0e880-e41e-4e3e-ab7d-0bea07ad1465",
+        "title": "Mark of the Legion",
+        "year": "2001",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813640",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/8a/63/f5/8a63f52f-fb64-39ff-1c28-4ec5f2b02458/191773824136.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/8a/63/f5/8a63f52f-fb64-39ff-1c28-4ec5f2b02458/191773824136.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Cleansed by Fire", "duration": "4:29" },
+          { "number": 2, "title": "An Eternity of Feasting and Brawling", "duration": "4:19" },
+          { "number": 3, "title": "Mark of the Legion", "duration": "5:22" },
+          { "number": 4, "title": "Spewing Profligacy", "duration": "4:39" },
+          { "number": 5, "title": "Fullfilled in Warfare", "duration": "3:33" },
+          { "number": 6, "title": "Contest of Wills", "duration": "3:50" },
+          { "number": 7, "title": "Master of Murder", "duration": "4:22" },
+          { "number": 8, "title": "Ideal Genocide", "duration": "5:37" },
+          { "number": 9, "title": "Drink the Blood", "duration": "5:23" }
+        ]
+      },
+      {
+        "id": "e5923113-d25d-45cb-be71-807700279cd3",
+        "title": "Reduced to Ashes",
+        "year": "2003",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813641",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music123/v4/b2/da/c9/b2dac96a-03b5-ef9d-d15c-1e859af9732d/194491307509.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music123/v4/b2/da/c9/b2dac96a-03b5-ef9d-d15c-1e859af9732d/194491307509.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Reduced to Ashes", "duration": "3:26" },
+          { "number": 2, "title": "Infested", "duration": "3:39" },
+          { "number": 3, "title": "The Human Affliction", "duration": "3:45" },
+          { "number": 4, "title": "Emaciated", "duration": "4:18" },
+          { "number": 5, "title": "Banished", "duration": "3:39" },
+          { "number": 6, "title": "Disfigured", "duration": "3:05" },
+          { "number": 7, "title": "In The Shadow of The Earth", "duration": "4:22" },
+          { "number": 8, "title": "The Curse of The Gods", "duration": "3:56" }
+        ]
+      },
+      {
+        "id": "d7f00d03-89a9-4593-9c86-b272ed48a465",
+        "title": "Crown of Souls",
+        "year": "2005",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813642",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/11/86/89/11868930-a62e-35d4-8d96-9586f153cba5/191773824099.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/11/86/89/11868930-a62e-35d4-8d96-9586f153cba5/191773824099.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Introduction", "duration": "0:30" },
+          { "number": 2, "title": "Crown of Souls", "duration": "3:40" },
+          { "number": 3, "title": "Medical Murder", "duration": "4:42" },
+          { "number": 4, "title": "Hunter's Moon", "duration": "4:36" },
+          { "number": 5, "title": "'Til The Morning", "duration": "4:34" },
+          { "number": 6, "title": "The Incestuous God", "duration": "4:08" },
+          { "number": 7, "title": "The Beast of Cañada De Diablo", "duration": "4:24" },
+          { "number": 8, "title": "The Poisoning", "duration": "3:38" },
+          { "number": 9, "title": "The Gathering of Ghouls", "duration": "4:39" }
+        ]
+      },
+      {
+        "id": "d3d1bf4c-2164-43da-96b1-d4c43a4feb94",
+        "title": "Of What's to Come",
+        "year": "2008",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813643",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/fe/cb/11/fecb118d-dfd2-bc22-2969-0b46d0c7657e/191773824143.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/fe/cb/11/fecb118d-dfd2-bc22-2969-0b46d0c7657e/191773824143.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Waters of Space", "duration": "0:32" },
+          { "number": 2, "title": "Eradication Pods", "duration": "4:01" },
+          { "number": 3, "title": "Unearthly Invent", "duration": "3:55" },
+          { "number": 4, "title": "Of What's to Come", "duration": "5:16" },
+          { "number": 5, "title": "Virulent Seed", "duration": "4:49" },
+          { "number": 6, "title": "Referencing the Unknown", "duration": "4:54" },
+          { "number": 7, "title": "Hands of the Conqueror", "duration": "4:36" },
+          { "number": 8, "title": "Harvest Temples", "duration": "4:19" },
+          { "number": 9, "title": "Dawn of the Next", "duration": "4:03" }
+        ]
+      },
+      {
+        "id": "0f39c852-5634-4fc2-8d6a-470b7b1e1674",
+        "title": "Portals to Canaan",
+        "year": "2013",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813644",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1f/0b/e3/1f0be348-a44e-55e0-10f9-13bb836c47a5/191773824167.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1f/0b/e3/1f0be348-a44e-55e0-10f9-13bb836c47a5/191773824167.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Amidst the Ruins", "duration": "1:18" },
+          { "number": 2, "title": "Entranced in Decades of Silence", "duration": "6:38" },
+          { "number": 3, "title": "Rise of the Ancients", "duration": "4:48" },
+          { "number": 4, "title": "Celestial Voices", "duration": "1:45" },
+          { "number": 5, "title": "Caelum Hirundines Carina / The Orbit of Chunk", "duration": "5:10" },
+          { "number": 6, "title": "Portals to Canaan", "duration": "5:26" },
+          { "number": 7, "title": "Hollow Human Husks", "duration": "4:12" },
+          { "number": 8, "title": "Astronautics", "duration": "4:44" },
+          { "number": 9, "title": "Perpetual Regicide", "duration": "4:03" }
+        ]
+      },
+      {
+        "id": "0674c998-5c86-499d-a141-1744bf42f855",
+        "title": "Nucleus",
+        "year": "2020",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1298813645",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music114/v4/92/74/6c/92746cd1-b21d-6cbc-05f8-c9773ce4e4fb/195497182664.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music114/v4/92/74/6c/92746cd1-b21d-6cbc-05f8-c9773ce4e4fb/195497182664.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Odyssey", "duration": "3:27" },
+          { "number": 2, "title": "Alyen Scourge", "duration": "5:05" },
+          { "number": 3, "title": "Ascension Vortex (feat. Decrepit Bill, Obie Flett & Anthony Trapani)", "duration": "4:29" },
+          { "number": 4, "title": "Catacombs of the Monolith (feat. Luc Lemay)", "duration": "5:08" },
+          { "number": 5, "title": "Ethereal Ancestors (feat. George \"Corpsegrinder\" Fisher)", "duration": "4:28" },
+          { "number": 6, "title": "Nucleus (feat. John Gallagher)", "duration": "4:56" },
+          { "number": 7, "title": "Races Conjoined (feat. Matti Way & Jon Zig)", "duration": "5:17" },
+          { "number": 8, "title": "Terror (feat. Dusty Boisjolie & Robbe Kok)", "duration": "6:00" },
+          { "number": 9, "title": "Onward", "duration": "1:44" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "bf-birdflesh-official-uuid",
+    "name": "Birdflesh",
+    "band_name": "Birdflesh",
+    "genre": "Grindcore",
+    "subgenres": ["Grindcore", "Deathgrind"],
+    "micro_genres": ["Grindcore", "Deathgrind"],
+    "founded_year": "1992",
+    "city": "Växjö",
+    "state_province": "Kronoberg",
+    "country": "Sweden",
+    "record_label": "Everlasting Spew Records",
+    "bio": "Formed in 1992 in Växjö, Sweden, Birdflesh is a cult underground institution of humorous, high-octane grindcore and deathgrind, known for wearing outlandish stage masks and delivering breakneck blast beats.",
+    "custom_slug": "birdflesh",
+    "verification_status": "community_archive",
+    "created_at": "1992-01-01T00:00:00Z",
+    "followers_count": 18400,
+    "lineup": [
+      { "id": "bf-1", "name": "Adde Mitroulis", "role": "Drums, Vocals", "status": "active", "years": "1997–present" },
+      { "id": "bf-2", "name": "Joakim Svensson", "role": "Bass, Vocals", "status": "active", "years": "2007–present" },
+      { "id": "bf-3", "name": "Elis Edin Markskog", "role": "Guitars, Vocals", "status": "active", "years": "2011–present" }
+    ],
+    "discography": []
+  },
+  {
+    "id": "sc-scour-official-uuid",
+    "name": "Scour",
+    "band_name": "Scour",
+    "genre": "Extreme Metal",
+    "subgenres": ["Extreme Metal", "Black Metal", "Thrash Metal"],
+    "micro_genres": ["Extreme Metal", "Black Metal", "Thrash Metal"],
+    "founded_year": "2015",
+    "city": "New Orleans",
+    "state": "LA",
+    "state_province": "LA",
+    "country": "USA",
+    "record_label": "Housecore Records / Nuclear Blast",
+    "bio": "Extreme metal supergroup formed in 2015 featuring Philip H. Anselmo (Pantera, Down), Derek Engemann (Cattle Decapitation), John Jarvis (Pig Destroyer), Mark Kloeppel (Misery Index), and Adam Jarvis (Misery Index, Pig Destroyer).",
+    "custom_slug": "scour",
+    "verification_status": "community_archive",
+    "created_at": "2015-01-01T00:00:00Z",
+    "followers_count": 24100,
+    "lineup": [
+      { "id": "sc-1", "name": "Philip H. Anselmo", "role": "Lead Vocals", "status": "active", "years": "2015–present" },
+      { "id": "sc-2", "name": "Derek Engemann", "role": "Guitars, Backing Vocals", "status": "active", "years": "2015–present" },
+      { "id": "sc-3", "name": "Mark Kloeppel", "role": "Guitars, Backing Vocals", "status": "active", "years": "2015–present" },
+      { "id": "sc-4", "name": "John Jarvis", "role": "Bass, Backing Vocals", "status": "active", "years": "2015–present" },
+      { "id": "sc-5", "name": "Adam Jarvis", "role": "Drums", "status": "active", "years": "2015–present" }
+    ],
+    "discography": []
+  },
+  {
+    "id": "sb-squash-bowels-official-uuid",
+    "name": "Squash Bowels",
+    "band_name": "Squash Bowels",
+    "genre": "Goregrind / Deathgrind",
+    "subgenres": ["Goregrind", "Deathgrind", "Grindcore"],
+    "micro_genres": ["Goregrind", "Deathgrind", "Grindcore"],
+    "founded_year": "1994",
+    "city": "Białystok",
+    "state_province": "Podlaskie",
+    "country": "Poland",
+    "record_label": "Willowtip Records / Lard Records",
+    "bio": "Cult Polish goregrind and deathgrind institution formed in Białystok, Poland, in 1994. Known for unrelenting blast beats, pitch-shifted gutturals, and classic albums like Grindvirus and Grindcoholics.",
+    "custom_slug": "squash-bowels",
+    "verification_status": "community_archive",
+    "created_at": "1994-01-01T00:00:00Z",
+    "followers_count": 16800,
+    "lineup": [
+      { "id": "sb-1", "name": "Arthur \"Paluch\" Meinart", "role": "Bass, Vocals", "status": "past", "years": "1994–2016" },
+      { "id": "sb-2", "name": "Andy", "role": "Guitars", "status": "past", "years": "1994–2016" },
+      { "id": "sb-3", "name": "Psycho", "role": "Drums", "status": "past", "years": "2001–2016" }
+    ],
+    "discography": []
+  },
+  {
+    "id": "lod-lust-of-decay-official-uuid",
+    "name": "Lust of Decay",
+    "band_name": "Lust of Decay",
+    "genre": "Brutal Death Metal",
+    "subgenres": ["Brutal Death Metal", "Slam Death Metal"],
+    "micro_genres": ["Brutal Death Metal", "Slam Death Metal"],
+    "founded_year": "1999",
+    "city": "Lexington",
+    "state": "KY",
+    "state_province": "KY",
+    "country": "USA",
+    "record_label": "Comatose Music",
+    "bio": "Brutal death metal powerhouse formed in Lexington, Kentucky in 1999, signed to Comatose Music. Renowned for brutal slam grooves, gut-wrenching gutturals, and classic albums like Infesting the Exhumed and Purity Through Dismemberment.",
+    "custom_slug": "lust-of-decay",
+    "verification_status": "community_archive",
+    "created_at": "1999-01-01T00:00:00Z",
+    "followers_count": 14200,
+    "lineup": [
+      { "id": "lod-1", "name": "Steve Green", "role": "Guitar", "status": "active", "years": "2000–present" },
+      { "id": "lod-2", "name": "Jay Barnes", "role": "Vocals", "status": "active", "years": "2000–present" },
+      { "id": "lod-3", "name": "Jordan Varella", "role": "Drums", "status": "active", "years": "2002–2007, 2020–present" },
+      { "id": "lod-4", "name": "Ryan Coulter", "role": "Bass", "status": "active", "years": "2014–present" }
+    ],
+    "discography": [
+      {
+        "id": "85296868-a0e5-4a6f-ac6a-5aec1fe8f519",
+        "title": "Infesting the Exhumed",
+        "year": "2002",
+        "type": "album",
+        "label": "Comatose Music",
+        "catalog_id": "LOD-01",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/74/81/fa/7481fafc-0ae1-f38b-8a0c-dba455f96c3f/191773824112.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/74/81/fa/7481fafc-0ae1-f38b-8a0c-dba455f96c3f/191773824112.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Infesting the Exhumed", "duration": "3:20" },
+          { "number": 2, "title": "Carnal Devourment", "duration": "2:55" },
+          { "number": 3, "title": "Putrid Putrescence", "duration": "3:10" },
+          { "number": 4, "title": "Vaginal Necrosis", "duration": "2:45" }
+        ]
+      },
+      {
+        "id": "3656bc7a-b8e2-4239-ac6a-5aecd58afebd",
+        "title": "Kingdom of Corpses",
+        "year": "2004",
+        "type": "album",
+        "label": "Comatose Music",
+        "catalog_id": "LOD-02",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/9e/e2/ff/9ee2ffca-634b-4dc7-eacb-c6acdd77ac35/191773824174.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/9e/e2/ff/9ee2ffca-634b-4dc7-eacb-c6acdd77ac35/191773824174.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Kingdom of Corpses", "duration": "3:40" },
+          { "number": 2, "title": "Decimated", "duration": "3:05" },
+          { "number": 3, "title": "Mutilated Remains", "duration": "3:15" }
+        ]
+      },
+      {
+        "id": "ad9f691b-a06e-4cf2-964e-efa9101865d5",
+        "title": "Despise / Lust of Decay",
+        "year": "2004",
+        "type": "album",
+        "label": "Comatose Music",
+        "catalog_id": "LOD-03",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/29/19/b5/2919b538-9fb1-e6d5-bb84-e5fe37978aa4/191773824129.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/29/19/b5/2919b538-9fb1-e6d5-bb84-e5fe37978aa4/191773824129.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Despise", "duration": "3:30" },
+          { "number": 2, "title": "Lust of Decay", "duration": "3:12" }
+        ]
+      },
+      {
+        "id": "681813f7-5dca-4f7b-910f-19a8f4b3070a",
+        "title": "Entombed in Sewage",
+        "year": "2008",
+        "type": "album",
+        "label": "Comatose Music",
+        "catalog_id": "LOD-04",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/0c/a0/22/0ca02233-ad39-7c2c-270a-aaaf7b20fba8/191773824150.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music118/v4/0c/a0/22/0ca02233-ad39-7c2c-270a-aaaf7b20fba8/191773824150.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Entombed in Sewage", "duration": "3:50" },
+          { "number": 2, "title": "Swamped in Gore", "duration": "3:25" }
+        ]
+      },
+      {
+        "id": "8d1b782b-7755-4383-8a50-24877daf8d79",
+        "title": "Purity Through Dismemberment",
+        "year": "2014",
+        "type": "album",
+        "label": "Comatose Music",
+        "catalog_id": "LOD-05",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/8a/63/f5/8a63f52f-fb64-39ff-1c28-4ec5f2b02458/191773824136.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music128/v4/8a/63/f5/8a63f52f-fb64-39ff-1c28-4ec5f2b02458/191773824136.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Purity Through Dismemberment", "duration": "4:02" },
+          { "number": 2, "title": "Surgical Abomination", "duration": "3:45" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "0f365267-3742-4ddb-a853-ad458a233c62",
+    "name": "Aeon",
+    "band_name": "Aeon",
+    "genre": "Death Metal",
+    "subgenres": [
+      "Death Metal",
+      "Brutal Death Metal",
+      "Extreme Metal"
+    ],
+    "founded_year": "1999",
+    "city": "Östersund",
+    "state": "Jämtland",
+    "country": "Sweden",
+    "record_label": "Metal Blade Records",
+    "bio": "Formed in Östersund, Sweden, in 1999 by vocalist Tommy Dahlström and guitarist Zeb Nilsson following the demise of Defaced Creation. Renowned for their unapologetically blasphemous themes, razor-sharp technical precision, and crushing blast beats, Aeon stands as one of the heaviest death metal exports from Scandinavia.",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Aeon_Logo.jpg",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Aeon_Banner.jpg",
+    "spotify_url": "https://open.spotify.com/artist/3o6G0K4vW01kL0pM",
+    "metal_archives_url": "https://www.metal-archives.com/bands/Aeon/3887",
+    "custom_slug": "aeon",
+    "verification_status": "community_archive",
+    "curated_by": "@deathmetal_archivist",
+    "curator_name": "Swedish Death Metal Vault",
+    "created_at": "1999-01-01T00:00:00Z",
+    "followers_count": 8900,
+    "lineup": [
+      { "id": "aeon-1", "name": "Tommy Dahlström", "role": "Vocals", "status": "active", "years": "1999–present" },
+      { "id": "aeon-2", "name": "Zeb Nilsson", "role": "Guitars", "status": "active", "years": "1999–present" },
+      { "id": "aeon-3", "name": "Tony Östman", "role": "Bass", "status": "active", "years": "2013–present" },
+      { "id": "aeon-4", "name": "Jonas Wallren", "role": "Drums", "status": "active", "years": "2020–present" }
+    ],
+    "discography": [
+      {
+        "id": "aeon-rel-1",
+        "title": "Bleeding the False",
+        "year": "2005",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "ULR-005"
+      },
+      {
+        "id": "aeon-rel-2",
+        "title": "Rise to Dominate",
+        "year": "2007",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14638"
+      },
+      {
+        "id": "aeon-rel-3",
+        "title": "Path of Fire",
+        "year": "2010",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-14902"
+      },
+      {
+        "id": "aeon-rel-4",
+        "title": "Aeons Black",
+        "year": "2012",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15152"
+      },
+      {
+        "id": "aeon-rel-5",
+        "title": "God Ends Here",
+        "year": "2021",
+        "type": "album",
+        "label": "Metal Blade Records",
+        "catalog_id": "MB-15793"
+      }
+    ]
+  },
+  {
+    "id": "benediction-official-uuid",
+    "name": "Benediction",
+    "band_name": "Benediction",
+    "genre": "Old School Death Metal",
+    "subgenres": [
+      "Old School Death Metal",
+      "Death Metal",
+      "Extreme Metal"
+    ],
+    "founded_year": "1989",
+    "city": "Birmingham",
+    "state": "West Midlands",
+    "country": "United Kingdom",
+    "record_label": "Nuclear Blast Records",
+    "bio": "Formed in Birmingham, England, in 1989, Benediction is one of the foundational pillars of British Old School Death Metal. Signed to Nuclear Blast Records, Benediction deliver neck-snapping riffage, relentless groove, and crushing vocal intensity across 10 seminal releases.",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Benediction_Logo.jpg",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Benediction_Banner.jpg",
+    "spotify_url": "https://open.spotify.com/artist/6P27kFvVp0U3a5k8Q5w18b",
+    "metal_archives_url": "https://www.metal-archives.com/bands/Benediction/610",
+    "custom_slug": "benediction",
+    "verification_status": "community_archive",
+    "curated_by": "@ukdm_archivist",
+    "curator_name": "UK Death Metal Archives",
+    "created_at": "1989-01-01T00:00:00Z",
+    "followers_count": 12500,
+    "lineup": [
+      { "id": "ben-1", "name": "Dave Ingram", "role": "Vocals", "status": "active", "years": "1990–1998, 2019–present" },
+      { "id": "ben-2", "name": "Darren Brookes", "role": "Guitars", "status": "active", "years": "1989–present" },
+      { "id": "ben-3", "name": "Peter Rew", "role": "Guitars", "status": "active", "years": "1989–present" },
+      { "id": "ben-4", "name": "Nik Sampson", "role": "Bass", "status": "active", "years": "2020–present" },
+      { "id": "ben-5", "name": "Giovanni Durst", "role": "Drums", "status": "active", "years": "2019–present" }
+    ],
+    "discography": [
+      {
+        "id": "ben-rel-1",
+        "title": "Subconscious Terror",
+        "year": "1990",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-033"
+      },
+      {
+        "id": "ben-rel-2",
+        "title": "The Grand Leveller",
+        "year": "1991",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-050"
+      },
+      {
+        "id": "ben-rel-3",
+        "title": "Dark Is the Season",
+        "year": "1992",
+        "type": "ep",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-061"
+      },
+      {
+        "id": "ben-rel-4",
+        "title": "Transcend the Rubicon",
+        "year": "1993",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-076"
+      },
+      {
+        "id": "ben-rel-5",
+        "title": "The Grotesque / Asymmetry",
+        "year": "1994",
+        "type": "ep",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-103"
+      },
+      {
+        "id": "ben-rel-6",
+        "title": "The Dreams You Dread",
+        "year": "1995",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-122"
+      },
+      {
+        "id": "ben-rel-7",
+        "title": "Grind Bastard",
+        "year": "1998",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-304"
+      },
+      {
+        "id": "ben-rel-8",
+        "title": "Organised Chaos",
+        "year": "2001",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-657"
+      },
+      {
+        "id": "ben-rel-9",
+        "title": "Killing Music",
+        "year": "2008",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-2150"
+      },
+      {
+        "id": "ben-rel-10",
+        "title": "Scriptures",
+        "year": "2020",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-5339"
+      }
+    ]
+  },
+  {
+    "id": "hypocrisy-official-uuid",
+    "name": "Hypocrisy",
+    "band_name": "Hypocrisy",
+    "genre": "Melodic Death Metal",
+    "subgenres": [
+      "Melodic Death Metal",
+      "Death Metal",
+      "Extreme Metal"
+    ],
+    "founded_year": "1991",
+    "city": "Ludvika",
+    "state": "Dalarna",
+    "country": "Sweden",
+    "record_label": "Nuclear Blast Records",
+    "bio": "Formed in Ludvika, Sweden, in 1991 by visionary frontman and producer Peter Tägtgren, Hypocrisy is a world-renowned pioneer of Swedish Melodic Death Metal. Famous for iconic masterpieces like Abducted, The Final Chapter, and Roswell 47.",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Hypocrisy_Logo.jpg",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/public-assets/Hypocrisy_Banner.jpg",
+    "spotify_url": "https://open.spotify.com/artist/1G14y7G101o0G0K8P",
+    "metal_archives_url": "https://www.metal-archives.com/bands/Hypocrisy/349",
+    "custom_slug": "hypocrisy",
+    "verification_status": "community_archive",
+    "curated_by": "@melodeath_archivist",
+    "curator_name": "Swedish Death Metal Vault",
+    "created_at": "1991-01-01T00:00:00Z",
+    "followers_count": 28400,
+    "lineup": [
+      { "id": "hyp-1", "name": "Peter Tägtgren", "role": "Vocals, Guitars", "status": "active", "years": "1991–present" },
+      { "id": "hyp-2", "name": "Mikael Hedlund", "role": "Bass", "status": "active", "years": "1991–present" },
+      { "id": "hyp-3", "name": "Thomas Elofsson", "role": "Guitars", "status": "active", "years": "2010–present" },
+      { "id": "hyp-4", "name": "Henrik Axenrot", "role": "Drums", "status": "active", "years": "2022–present" }
+    ],
+    "discography": [
+      {
+        "id": "hyp-rel-1",
+        "title": "Penetralia",
+        "year": "1992",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-067"
+      },
+      {
+        "id": "hyp-rel-2",
+        "title": "Pleasure of Molestation",
+        "year": "1993",
+        "type": "ep",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-078"
+      },
+      {
+        "id": "hyp-rel-3",
+        "title": "Osculum Obscenum",
+        "year": "1993",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-081"
+      },
+      {
+        "id": "hyp-rel-4",
+        "title": "Inferior Devoties",
+        "year": "1994",
+        "type": "ep",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-095"
+      },
+      {
+        "id": "hyp-rel-5",
+        "title": "The Fourth Dimension",
+        "year": "1994",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-106"
+      },
+      {
+        "id": "hyp-rel-6",
+        "title": "Abducted",
+        "year": "1996",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-148"
+      },
+      {
+        "id": "hyp-rel-7",
+        "title": "Maximum Abduction",
+        "year": "1997",
+        "type": "ep",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-224"
+      },
+      {
+        "id": "hyp-rel-8",
+        "title": "The Final Chapter",
+        "year": "1997",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-278"
+      },
+      {
+        "id": "hyp-rel-9",
+        "title": "Hypocrisy Destroys Wacken",
+        "year": "1999",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-372"
+      },
+      {
+        "id": "hyp-rel-10",
+        "title": "Hypocrisy",
+        "year": "1999",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-396"
+      },
+      {
+        "id": "hyp-rel-11",
+        "title": "Into the Abyss",
+        "year": "2000",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-490"
+      },
+      {
+        "id": "hyp-rel-12",
+        "title": "Catch 22",
+        "year": "2002",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-648"
+      },
+      {
+        "id": "hyp-rel-13",
+        "title": "The Arrival",
+        "year": "2004",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-1218"
+      },
+      {
+        "id": "hyp-rel-14",
+        "title": "Virus",
+        "year": "2005",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-1488"
+      },
+      {
+        "id": "hyp-rel-15",
+        "title": "Catch 22 V2.0.08",
+        "year": "2008",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-2082"
+      },
+      {
+        "id": "hyp-rel-16",
+        "title": "A Taste of Extreme Divinity",
+        "year": "2009",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-2290"
+      },
+      {
+        "id": "hyp-rel-17",
+        "title": "Worship",
+        "year": "2021",
+        "type": "album",
+        "label": "Nuclear Blast Records",
+        "catalog_id": "NB-5820"
+      }
+    ]
+  },
+  {
+    "id": "2e4753ed-3af6-454d-912a-0512c544fb12",
+    "name": "Extermination Dismemberment",
+    "band_name": "Extermination Dismemberment",
+    "genre": "Slamming BDM",
+    "subgenres": [
+      "Slamming BDM",
+      "Brutal Deathcore",
+      "Extreme Metal"
+    ],
+    "founded_year": "2009",
+    "city": "Minsk",
+    "state": "Minsk",
+    "country": "Belarus",
+    "record_label": "Unique Leader Records",
+    "bio": "Formed in Minsk, Belarus, in 2009, Extermination Dismemberment is an internationally renowned pioneer of slamming brutal death metal. Famous for their seismic sub-bass drops, pulverizing slam grooves, and apocalyptic production across 5 crushing releases.",
+    "avatar_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-avatar_1793920761905_1793920761932.jpg",
+    "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/community-banner_1793818748983_1793818748994.jpg",
+    "spotify_url": "https://open.spotify.com/artist/7v7E8j010yG5tX01",
+    "metal_archives_url": "https://www.metal-archives.com/bands/Extermination_Dismemberment/3540318825",
+    "custom_slug": "extermination-dismemberment",
+    "verification_status": "community_archive",
+    "curated_by": "@slam_archivist",
+    "curator_name": "Slam Metal Vault",
+    "created_at": "2009-01-01T00:00:00Z",
+    "followers_count": 18200,
+    "lineup": [
+      { "id": "ed-1", "name": "Arseniy Kovalchuk", "role": "Guitars", "status": "active", "years": "2009–present" },
+      { "id": "ed-2", "name": "Vladislav Vislavskiy", "role": "Vocals", "status": "active", "years": "2011–present" },
+      { "id": "ed-3", "name": "Viktor Kallas", "role": "Bass", "status": "active", "years": "2013–present" },
+      { "id": "ed-4", "name": "Denis Dementev", "role": "Drums", "status": "active", "years": "2018–present" }
+    ],
+    "discography": [
+      {
+        "id": "0dc9774a-ed9d-44ed-a7e7-db5f424f518f",
+        "title": "Butcher Basement",
+        "year": "2010",
+        "type": "album",
+        "label": "Imbecil Entertainment Records / Morbid Generation Records",
+        "catalog_id": "IT-1231149286",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music117/v4/27/26/65/2726650c-d059-548c-1b3b-8e2e04146bcf/artwork.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music117/v4/27/26/65/2726650c-d059-548c-1b3b-8e2e04146bcf/artwork.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Commencement of End", "duration": "1:21" },
+          { "number": 2, "title": "Slaughterer Chainsaw", "duration": "3:41" },
+          { "number": 3, "title": "Resurrectionist Blasphemous", "duration": "2:58" },
+          { "number": 4, "title": "Merciless Infanticide", "duration": "3:18" },
+          { "number": 5, "title": "Brutality Great Battle", "duration": "2:31" },
+          { "number": 6, "title": "Rotten Entrails", "duration": "2:10" },
+          { "number": 7, "title": "Butcher Basement", "duration": "4:17" },
+          { "number": 8, "title": "Gastrointestinal Rupture", "duration": "2:57" },
+          { "number": 9, "title": "Bulldozer Massacre", "duration": "6:31" },
+          { "number": 10, "title": "My Bloody Show", "duration": "2:29" },
+          { "number": 11, "title": "Omnivorous Sanctum", "duration": "2:56" },
+          { "number": 12, "title": "Ogre Orchardman", "duration": "3:20" },
+          { "number": 13, "title": "Ophthalmic Eyeing", "duration": "2:45" }
+        ]
+      },
+      {
+        "id": "9d376484-5401-421b-96fe-8f82b30dfc16",
+        "title": "Serial Urbicide",
+        "year": "2013",
+        "type": "album",
+        "label": "Amputated Vein Records",
+        "catalog_id": "IT-702880999",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/c4/98/90/c49890e7-d2cf-eb38-76aa-815ecba69809/AVR043.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/c4/98/90/c49890e7-d2cf-eb38-76aa-815ecba69809/AVR043.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Evisceration Conceiving", "duration": "1:11" },
+          { "number": 2, "title": "Disemboweled Engorgement", "duration": "4:01" },
+          { "number": 3, "title": "Gutted Face", "duration": "3:08" },
+          { "number": 4, "title": "Serial Urbicide", "duration": "3:59" },
+          { "number": 5, "title": "Deconstructive Parasite", "duration": "5:16" },
+          { "number": 6, "title": "Survival", "duration": "3:32" },
+          { "number": 7, "title": "Devastation Squad", "duration": "3:22" },
+          { "number": 8, "title": "Carnivore Outraged", "duration": "3:37" },
+          { "number": 9, "title": "Bloodbath Religion", "duration": "3:50" },
+          { "number": 10, "title": "Human Holocaust", "duration": "6:20" }
+        ]
+      },
+      {
+        "id": "84984e44-2640-413f-88b9-50619fa1f384",
+        "title": "Protonemesis - Single",
+        "year": "2021",
+        "type": "single",
+        "label": "Unique Leader Records",
+        "catalog_id": "IT-1586842140",
+        "cover_url": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/23/58/d3/2358d36d-1ad6-c105-7769-44c2ed69e5a6/196292517484.jpg/600x600bb.jpg",
+        "cover_image": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/23/58/d3/2358d36d-1ad6-c105-7769-44c2ed69e5a6/196292517484.jpg/600x600bb.jpg",
+        "tracks": [
+          { "number": 1, "title": "Protonemesis", "duration": "4:09" }
+        ]
+      },
+      {
+        "id": "41cd1513-405d-4527-bc06-9e9d5f3d62d8",
+        "title": "Dehumanization Protocol",
+        "year": "2023",
+        "type": "album",
+        "label": "Unique Leader Records",
+        "catalog_id": "ULR-310",
+        "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/release-art_1793819265919_1793819265938.jpg",
+        "cover_image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/release-art_1793819265919_1793819265938.jpg",
+        "tracks": [
+          { "number": 1, "title": "God Help Us", "duration": "1:00" },
+          { "number": 2, "title": "Dehumanization Protocol", "duration": "4:21" },
+          { "number": 3, "title": "Terror Domination", "duration": "4:55" },
+          { "number": 4, "title": "Protonemesis", "duration": "4:10" },
+          { "number": 5, "title": "Plague in the Guise of Flesh", "duration": "4:55" },
+          { "number": 6, "title": "Omnivore", "duration": "3:00" },
+          { "number": 7, "title": "Extermination Factory", "duration": "5:52" },
+          { "number": 8, "title": "Agony Incarnate", "duration": "4:19" },
+          { "number": 9, "title": "Humanity's Last Grief", "duration": "1:30" },
+          { "number": 10, "title": "Sentenced to Extinction", "duration": "6:33" },
+          { "number": 11, "title": "Ruins of Armageddon", "duration": "8:06" },
+          { "number": 12, "title": "Corpsepit", "duration": "4:39" },
+          { "number": 13, "title": "Protonemesis (2021 Version)", "duration": "4:09" }
+        ]
+      },
+      {
+        "id": "0c9e8a05-f982-473a-a9d7-d72c81513de6",
+        "title": "Enslaver of the Continents",
+        "year": "2024",
+        "type": "single",
+        "label": "Unique Leader Records",
+        "cover_url": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/release-art_1794344665875_1794344665891.jpg",
+        "cover_image": "https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/community-bands/5403162d-1947-43aa-b5f6-38a1bd2a1b80/release-art_1794344665875_1794344665891.jpg",
+        "tracks": [
+          { "number": 1, "title": "Enslaver of the Continents", "duration": "4:12" }
         ]
       }
     ]

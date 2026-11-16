@@ -1162,13 +1162,11 @@ export default function CreativeDashboardViewV2({
     setNewPortTitle('');
     setNewPortClient('');
     setNewPortLink('');
-    triggerNotification('🎨 Portfolio asset published to directory stream.');
     safeAddLog(`Published new portfolio work "${newItem.title}" to public profile.`);
   };
 
   const handleDeletePortfolio = (id: string) => {
     setPortfolioItems(prev => prev.filter(item => item.id !== id));
-    triggerNotification('Portfolio item removed.');
   };
 
   const handleAddGalleryItem = async (e: React.FormEvent) => {
@@ -1208,7 +1206,6 @@ export default function CreativeDashboardViewV2({
       setNewGalTitle('');
       setNewGalSubtitle('');
       setExternalEmbedUrl('');
-      triggerNotification('🚀 Direct streaming reference published to dynamic lookbook feed!');
       safeAddLog(`Linked external ${embed.type} streaming reference "${newGalTitle}" is now live.`);
       return;
     }
@@ -1270,7 +1267,6 @@ export default function CreativeDashboardViewV2({
     setNewGalSubtitle('');
     setNewGalYear('2026');
     if (fileInputRef.current) fileInputRef.current.value = '';
-    triggerNotification('📸 Added new showcase items to your professional media gallery!');
     safeAddLog(`Published new media showcase "${newGalTitle}" with genre ${newGalGenre} (${newGalMicroGenre}) to digital portfolio.`);
   };
 
@@ -1289,8 +1285,6 @@ export default function CreativeDashboardViewV2({
       localStorage.setItem(key, JSON.stringify(filtered));
       setActiveLookbookItemIds(prev => prev.filter(itemId => itemId !== id));
     } catch (_) {}
-
-    triggerNotification('Showcase gallery item deleted.');
   };
 
   const handleProposalStatus = (id: string, status: 'accepted' | 'declined') => {
@@ -1476,7 +1470,7 @@ export default function CreativeDashboardViewV2({
   return (
     <div className="min-h-screen bg-[#050505] font-sans text-zinc-100 flex flex-col items-center selection:bg-fuchsia-500/30 selection:text-fuchsia-400">
       {/* STICKY TOP HEADER ROW */}
-      <div className="sticky top-0 z-20 bg-[#0c0e12]/95 backdrop-blur-md border-b border-zinc-900 w-full shadow-[0_10px_30px_rgba(0,0,0,0.9)] flex flex-col">
+      <div className="sticky top-0 z-20 bg-[#0c0e12]/95 backdrop-blur-md border-b border-zinc-900 w-full shadow-[0_10px_30px_rgba(0,0,0,0.9)] flex flex-col pt-[env(safe-area-inset-top)]">
         {/* Row 1: BRAND NAVIGATION HEADER */}
         <div className="px-5 py-3 flex items-center justify-between border-b border-[#1b1e25] bg-black">
           <div className="flex items-center gap-2">
@@ -1576,7 +1570,7 @@ export default function CreativeDashboardViewV2({
                             ) : (
                               <Globe className="w-4 h-4 text-fuchsia-500" />
                             )}
-                            <input type="file" accept="image/*" className="hidden" onChange={(e) => { handleImageUpload(e); setV2RoleMenuOpen(false); }} />
+                            <input type="file" accept="image/*" className="sr-only" onChange={(e) => { handleImageUpload(e); setV2RoleMenuOpen(false); }} />
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-[7px] uppercase font-bold text-fuchsia-400">
                               Edit
                             </div>
@@ -1680,7 +1674,6 @@ export default function CreativeDashboardViewV2({
                                     if (supabase && userProfile.id) {
                                       supabase.from('profiles').update({ account_type: targetAcc, active_workspace: portal.key }).eq('id', userProfile.id).then(() => {});
                                     }
-                                    triggerNotification?.(`⚡ Switched to ${portal.name}.`);
                                   }}
                                   className={`w-full flex items-center justify-between p-2 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 ${portal.hoverBorderClass} text-zinc-400 hover:text-white transition-all cursor-pointer group`}
                                 >
@@ -1852,7 +1845,7 @@ export default function CreativeDashboardViewV2({
                     </button>
                     <label className="bg-zinc-950/60 hover:bg-zinc-850 border border-zinc-800 hover:border-[#d946ef] text-[#d946ef]/90 hover:text-white p-2 rounded-xl transition-all cursor-pointer flex items-center justify-center shadow-md shadow-black">
                       <Upload className="w-4 h-4" />
-                      <input type="file" accept="image/*" className="hidden" onChange={handleCoverImageUpload} />
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleCoverImageUpload} />
                     </label>
                     <button
                       type="button"
@@ -1881,7 +1874,7 @@ export default function CreativeDashboardViewV2({
                           <Globe className="w-12 h-12 text-[#d946ef] group-hover:scale-110 transition-transform duration-300" />
                         )}
                         {/* Invisible file input */}
-                        <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                        <input type="file" accept="image/*" className="sr-only" onChange={handleImageUpload} />
                         <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <span className="text-[8px] font-mono font-bold text-white uppercase bg-black/80 px-1 py-0.5 rounded border border-[#d946ef]/30">Edit</span>
                         </div>
@@ -1995,7 +1988,7 @@ export default function CreativeDashboardViewV2({
                     <label className="bg-zinc-950/60 hover:bg-zinc-850 border border-zinc-800 hover:border-[#d946ef] text-[#d946ef]/90 hover:text-white p-2.5 rounded-xl transition-all cursor-pointer shadow-md shadow-black flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-wider uppercase">
                       <Upload className="w-4 h-4" />
                       <span>CHANGE BANNER</span>
-                      <input type="file" accept="image/*" className="hidden" onChange={handleCoverImageUpload} />
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleCoverImageUpload} />
                     </label>
 
                     <button 
@@ -2024,7 +2017,7 @@ export default function CreativeDashboardViewV2({
                           <Globe className="w-16 h-16 text-[#d946ef] group-hover:scale-110 transition-transform duration-300" />
                         )}
                         {/* Real file upload input triggers on label click */}
-                        <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                        <input type="file" accept="image/*" className="sr-only" onChange={handleImageUpload} />
                         <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <span className="text-[8px] font-mono font-bold text-white uppercase bg-black/80 px-1.5 py-1 rounded border border-[#d946ef]/30">Upload</span>
                         </div>
@@ -2832,7 +2825,6 @@ export default function CreativeDashboardViewV2({
                                       if (supabase) {
                                         supabase.from('creative_lookbook_feed').delete().eq('id', item.id).then(({error}) => { if (error) console.log(error) });
                                       }
-                                      triggerNotification('Removed showcase highlight from public Lookbook.');
                                       safeAddLog(`Removed "${item.title}" from active lookbook selection.`);
                                     } else {
                                       // Toggle on: Check limit of 5 concurrent
@@ -2865,7 +2857,6 @@ export default function CreativeDashboardViewV2({
                                             media_type: (item as any).mediaType || 'image'
                                         }).then(({error}) => { if (error) console.log(error) });
                                       }
-                                      triggerNotification('⭐ Showcase asset highlighted in primary Lookbook!');
                                       safeAddLog(`Highlighted "${item.title}" to public Lookbook.`);
                                     }
                                   } catch (err) {

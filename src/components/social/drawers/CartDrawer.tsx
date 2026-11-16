@@ -34,9 +34,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md h-full bg-[#121214] border-l border-zinc-900 shadow-2xl flex flex-col"
+            className="w-full max-w-md h-[100dvh] max-h-[100dvh] bg-[#121214] border-l border-zinc-900 shadow-2xl flex flex-col"
           >
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-900 bg-zinc-950/40 shrink-0">
+            <div className="flex items-center justify-between px-6 py-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-zinc-900 bg-zinc-950/40 shrink-0">
               <span className="text-sm font-black uppercase text-white tracking-wider flex items-center gap-2 font-display">
                 <ShoppingCart className="w-5 h-5 text-rose-500" /> Your Cart
               </span>
@@ -134,7 +134,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
 
             {cartItems.length > 0 && (
-              <div className="p-6 bg-zinc-950 border-t border-zinc-900 shrink-0">
+              <div className="p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] bg-zinc-950 border-t border-zinc-900 shrink-0">
                 <div className="space-y-2 mb-4 text-xs font-mono">
                   <div className="flex justify-between text-zinc-400">
                     <span>Subtotal</span>

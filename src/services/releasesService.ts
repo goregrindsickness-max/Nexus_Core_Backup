@@ -2,9 +2,10 @@ import { supabase as singletonSupabase } from '../lib/supabaseClient';
 import { getSupabase } from './clientService';
 import { labelCatalogStore } from '../utils/indexedDB';
 import { uploadBase64ToStorage } from './storageService';
-import { ensureUUID, executeWithSchemaResilience } from './schemaResilienceService';
+import { ensureUUID, executeWithSchemaResilience, registerSchemaSanitizers } from './schemaResilienceService';
+import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
 
-import { markReleaseDeletedInStorage, communityBandManager, saveBandDiscographyToCache } from '../lib/communityBands';
+
 
 const getActiveSupabase = (portalType?: 'band' | 'promoter' | 'creative') => {
   return getSupabase(portalType) || singletonSupabase;
@@ -17,6 +18,7 @@ export interface ReleaseTrack {
   duration?: string;
   lyrics?: string;
   audioUrl?: string;
+  previewUrl?: string;
   url?: string;
   isrc?: string;
   fileSize?: string;
@@ -85,15 +87,17 @@ export function sanitizeReleaseForDb(release: any): any {
   if (clean.year && !clean.release_date) {
     clean.release_date = String(clean.year);
   }
-  if (clean.release_info && !clean.label) {
-    clean.label = clean.release_info;
-  }
+  if (clean.band_name && !clean.band) clean.band = clean.band_name;
+  if (clean.artist && !clean.band) clean.band = clean.artist;
+  if (clean.artist_name && !clean.band) clean.band = clean.artist_name;
 
   // Strip client-side-only metadata properties and obsolete/unsupported schema columns
+  delete clean.band_name;
+  delete clean.artist;
+  delete clean.artist_name;
   delete clean.catalogId;
   delete clean.releaseDate;
   delete clean.coverColor;
-  delete clean.cover_color;
   delete clean.coverImage;
   delete clean.isEditing;
   delete clean.isNew;
@@ -105,6 +109,7 @@ export function sanitizeReleaseForDb(release: any): any {
   const allowedColumns = new Set([
     'id',
     'band_id',
+    'band',
     'label_id',
     'title',
     'catalog_id',
@@ -114,11 +119,13 @@ export function sanitizeReleaseForDb(release: any): any {
     'genre',
     'cover_image',
     'cover_url',
+    'cover_color',
     'tracks',
     'formats',
     'digital',
     'audio_vault_path',
     'status',
+    'created_by',
     'created_at',
     'updated_at'
   ]);
@@ -131,6 +138,8 @@ export function sanitizeReleaseForDb(release: any): any {
   }
   return dbRelease;
 }
+
+registerSchemaSanitizers({ sanitizeReleaseForDb });
 
 /**
  * Persist releases reliably into both IndexedDB (client storage),
@@ -188,8 +197,8 @@ export async function persistReleasesLocallyAndServer(releases: any[]): Promise<
 
   // 3. Server-side persistence via /api/releases
   try {
-    if (typeof fetch !== 'undefined') {
-      await fetch('/api/releases', {
+    if (typeof fetch !== 'undefined' && (await getSupabaseAccessToken())) {
+      await authFetch('/api/releases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ releases })
@@ -200,8 +209,26 @@ export async function persistReleasesLocallyAndServer(releases: any[]): Promise<
   }
 }
 
+function safeJsonParse<T>(val: unknown, fallback: T): T {
+  if (typeof val !== 'string') return fallback;
+  const trimmed = val.trim();
+  if (!trimmed) return fallback;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function mapDbRowToRelease(row: any): CatalogRelease {
   const cover = row.cover_image || row.cover_url || row.coverImage || row.coverUrl || row.image_url || '';
+  const parsedTracks = Array.isArray(row.tracks) ? row.tracks : safeJsonParse<any[]>(row.tracks, []);
+  const parsedFormats = typeof row.formats === 'object' && row.formats && !Array.isArray(row.formats)
+    ? row.formats
+    : safeJsonParse<Record<string, any>>(row.formats, {});
+  const parsedDigital = Array.isArray(row.digital) ? row.digital : safeJsonParse<any[]>(row.digital, []);
+
   return {
     id: row.id,
     catalogId: row.catalog_id || row.catalogId,
@@ -217,14 +244,15 @@ function mapDbRowToRelease(row: any): CatalogRelease {
     coverUrl: cover,
     cover_image: cover,
     cover_url: cover,
-    tracks: Array.isArray(row.tracks) ? row.tracks : (typeof row.tracks === 'string' ? JSON.parse(row.tracks) : []),
-    formats: typeof row.formats === 'object' && row.formats ? row.formats : (typeof row.formats === 'string' ? JSON.parse(row.formats) : {}),
-    digital: Array.isArray(row.digital) ? row.digital : (typeof row.digital === 'string' ? JSON.parse(row.digital) : []),
+    tracks: Array.isArray(parsedTracks) ? parsedTracks : [],
+    formats: typeof parsedFormats === 'object' && parsedFormats && !Array.isArray(parsedFormats) ? parsedFormats : {},
+    digital: Array.isArray(parsedDigital) ? parsedDigital : [],
     audio_vault_path: row.audio_vault_path,
     band_id: row.band_id,
-    band_name: row.band_name || row.artist || row.artist_name || '',
-    artist: row.artist || row.band_name || row.artist_name || '',
-    artist_name: row.artist_name || row.band_name || row.artist || '',
+    band: row.band || row.band_name || row.artist || row.artist_name || '',
+    band_name: row.band_name || row.band || row.artist || row.artist_name || '',
+    artist: row.artist || row.band || row.band_name || row.artist_name || '',
+    artist_name: row.artist_name || row.band || row.band_name || row.artist || '',
     label_id: row.label_id,
     status: row.status || 'active',
     created_at: row.created_at,
@@ -261,7 +289,7 @@ export async function fetchReleasesFromDatabase(portalType?: 'band' | 'promoter'
   // Fallback 1: Server-side cache (/api/releases)
   if (typeof fetch !== 'undefined') {
     try {
-      const res = await fetch('/api/releases');
+      const res = await authFetch('/api/releases');
       if (res.ok) {
         const json = await res.json();
         if (json && Array.isArray(json.releases) && json.releases.length > 0) {
@@ -334,9 +362,10 @@ export async function upsertReleaseToDatabase(
     const rawPayload: Record<string, any> = {
       id: release.id ? ensureUUID(release.id) : ensureUUID(`rel-${targetBandId}-${Date.now()}`),
       band_id: targetBandId,
-      band_name: release.band_name || release.artist || (release as any).artist_name || null,
-      artist: release.artist || release.band_name || (release as any).artist_name || null,
-      artist_name: release.artist_name || release.artist || release.band_name || null,
+      band: release.band || release.band_name || release.artist || (release as any).artist_name || null,
+      band_name: release.band_name || release.band || release.artist || (release as any).artist_name || null,
+      artist: release.artist || release.band || release.band_name || (release as any).artist_name || null,
+      artist_name: release.artist_name || release.band || release.artist || release.band_name || null,
       label_id: isValidUUID(release.label_id) ? release.label_id : null,
       title: release.title,
       catalog_id: release.catalogId || (release as any).catalog_id || null,
@@ -573,6 +602,7 @@ export async function upsertReleasesBatchToDatabase(
       const rawPayload: Record<string, any> = {
         id: releaseId,
         band_id: targetBandId,
+        band: resolvedBandName,
         band_name: resolvedBandName,
         artist: resolvedBandName,
         artist_name: resolvedBandName,
@@ -723,11 +753,10 @@ export async function deleteReleaseFromDatabase(
     const cleanTitle = (releaseTitle || '').toLowerCase().trim();
     const cleanBand = (bandIdOrName || '').toLowerCase().trim();
 
-    // Mark in persistent deletion storage set
-    markReleaseDeletedInStorage(cleanId, releaseTitle, bandIdOrName);
-
-    // Update communityBandManager in memory and cache
+    // Update communityBandManager in memory and persistent cache
     try {
+      const { markReleaseDeletedInStorage, communityBandManager, saveBandDiscographyToCache } = await import('../lib/communityBands');
+      markReleaseDeletedInStorage(cleanId, releaseTitle, bandIdOrName);
       if (cleanBand) {
         const matchedBand = communityBandManager.getById(cleanBand) || communityBandManager.findByName(cleanBand);
         if (matchedBand && Array.isArray(matchedBand.discography)) {
@@ -780,11 +809,11 @@ export async function deleteReleaseFromDatabase(
 
     // 3. Delete from server-side cache
     try {
-      if (typeof fetch !== 'undefined') {
+      if (typeof fetch !== 'undefined' && (await getSupabaseAccessToken())) {
         if (cleanId) {
-          await fetch(`/api/releases/${cleanId}`, { method: 'DELETE' });
+          await authFetch(`/api/releases/${cleanId}`, { method: 'DELETE' });
         }
-        await fetch('/api/releases/delete', {
+        await authFetch('/api/releases/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

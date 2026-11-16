@@ -2,12 +2,22 @@ import { useState, useRef, useEffect } from 'react';
 import type { FeedItem } from '../../../data/socialFeedMockData';
 import { mockFeed } from '../../../data/socialFeedMockData';
 import { getSupabase, uploadBase64ToStorage, createShopMerchItem } from '../../../supabase';
+import { ensureUUID } from '../../../services/schemaResilienceService';
 import { isAudioUrl, extractUUID, isBandcampUrl, resolveBandcampMetadata, formatBandcampEmbedDarkUrl } from '../../../utils/socialFeedUtils';
 import { registerCommunityEvent } from '../../../utils/communityEventUtils';
+import { generateDeterministicUUID } from '../follows/followService';
 import { syncPostToSupabase } from '../utils/postSyncUtils';
-import { resolveActivePersona } from '../utils/personaResolution';
+import { resolveActivePersona, resolveReactionActor } from '../utils/personaResolution';
 import { savePostReaction } from '../utils/reactionStore';
 import { getCurrentCoordinates } from '../../../services/locationService';
+import { submitGlobalReaction } from '../../../services/postInteractionsService';
+import { pushManager } from '../../../lib/pushNotifications';
+import { detectGroundedVenue } from '../../../services/venueGroundingService';
+import {
+  getEditionById,
+  getEntityByIdOrSlug,
+  getLineupForEdition,
+} from '../../../services/networkEntitiesService';
 
 export function getYouTubeId(url: string): string {
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -243,11 +253,9 @@ export function useSocialFeedState({
 
   const handleDetectLocation = async () => {
     setIsDetectingLocation(true);
-    triggerNotification?.("🛰️ Querying satellite GPS coordinates...");
 
     const coords = await getCurrentCoordinates({ enableHighAccuracy: true, timeout: 10000 });
     if (!coords) {
-      triggerNotification?.("⚠️ GPS coordinate retrieval failed or permission denied. Enter manually.");
       setIsDetectingLocation(false);
       return;
     }
@@ -266,22 +274,17 @@ export function useSocialFeedState({
 
         if (city && state) {
           setTaggedVenue(`${city}, ${state}`);
-          triggerNotification?.(`📍 Location resolved: ${city}, ${state}`);
         } else if (city) {
           setTaggedVenue(`${city}, ${country}`);
-          triggerNotification?.(`📍 Location resolved: ${city}, ${country}`);
         } else {
           setTaggedVenue(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-          triggerNotification?.(`📍 Coordinates captured: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
         }
       } else {
         setTaggedVenue(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-        triggerNotification?.(`📍 Coordinates captured: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
       }
     } catch (err) {
       console.warn("Reverse geocoding failed, using coordinates:", err);
       setTaggedVenue(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-      triggerNotification?.(`📍 Captured location coordinates.`);
     } finally {
       setIsDetectingLocation(false);
     }
@@ -404,14 +407,29 @@ export function useSocialFeedState({
       })
     );
 
-    // 2. Persist locally to reactionStore (localStorage + IndexedDB) immediately
-    let activeUserId = userProfile?.id;
-    if (!activeUserId && typeof window !== 'undefined') {
-      activeUserId = localStorage.getItem('nexus_active_profile_id') || localStorage.getItem('nexus_user_profile_id') || 'guest';
-    }
-    savePostReaction(postId, fullCurr, nextUserReacts, activeUserId);
+    // 2. Resolve active persona actor for multi-profile support (personal Industry Pro, band, promoter, creative, label)
+    const actor = resolveReactionActor({
+      portalRole,
+      userProfile,
+      activeBand,
+      fallbackUserId: userProfile?.id
+    });
+    let activeUserId = actor.id;
 
-    // 3. Persist globally to Supabase
+    savePostReaction(postId, fullCurr, nextUserReacts, actor.id);
+
+    // 3. Persist globally across all sessions and devices via backend interaction service with distinct persona identity
+    try {
+      submitGlobalReaction(postId, actor.id, reactionKey, {
+        userName: actor.name,
+        userAvatar: actor.avatar,
+        userRole: actor.role
+      });
+    } catch (rxErr) {
+      console.warn('Failed to submit global reaction:', rxErr);
+    }
+
+    // 4. Best-effort Supabase update (if permitted by policies)
     const supabase = getSupabase();
     if (supabase) {
       try {
@@ -425,18 +443,25 @@ export function useSocialFeedState({
         }
 
         // Direct update into nexus_posts
-        const { data: existingRows } = await supabase
-          .from('nexus_posts')
-          .select('id, data, reactions, likes_count')
-          .or(`id.eq.${postId},id.eq.nexus_post_${postId}`)
-          .limit(1);
+        const cleanPostId = postId.replace(/^nexus_post_/, '');
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanPostId);
+        const targetUUID = extractUUID(cleanPostId) || (isUUID ? cleanPostId : null);
+
+        let existingRows: any[] | null = null;
+        if (targetUUID) {
+          const { data } = await supabase
+            .from('nexus_posts')
+            .select('id, data, reactions')
+            .eq('id', targetUUID)
+            .limit(1);
+          existingRows = data;
+        }
 
         if (existingRows && existingRows.length > 0) {
           const row = existingRows[0];
           const postObj = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
           await supabase.from('nexus_posts').update({
             reactions: fullCurr,
-            likes_count: fullCurr.likes,
             data: {
               ...postObj,
               reactions: fullCurr,
@@ -444,14 +469,13 @@ export function useSocialFeedState({
             },
           }).eq('id', row.id);
         } else if (targetPost) {
-          // If mock/seed post, upsert into nexus_posts so it is globally stored in Supabase
+          const cleanPostUUID = ensureUUID(postId);
           await supabase.from('nexus_posts').upsert([{
-            id: postId,
+            id: cleanPostUUID,
             profile_id: (activeUserId && activeUserId !== 'guest') ? activeUserId : '00000000-0000-0000-0000-000000000000',
             content: targetPost.content || (targetPost as any).text || (targetPost as any).message || ' ',
             media_url: (targetPost as any).media_url || (targetPost as any).mediaUrl || targetPost.image || null,
             reactions: fullCurr,
-            likes_count: fullCurr.likes,
             data: {
               ...targetPost,
               reactions: fullCurr,
@@ -461,14 +485,6 @@ export function useSocialFeedState({
           }], { onConflict: 'id' });
         }
 
-        // Best effort call to toggle_post_reaction RPC
-        try {
-          await supabase.rpc('toggle_post_reaction', {
-            p_post_id: postId,
-            p_profile_id: activeUserId,
-            p_reaction_type: reactionKey,
-          });
-        } catch (_) {}
 
         // 4. Notifications:
         // When reacting to someone else's content, ONLY send notification to the author.
@@ -480,64 +496,86 @@ export function useSocialFeedState({
               .map(x => String(x).toLowerCase().trim())
           );
 
-          const targetAuthorRaw = (targetPost as any).authorId || (targetPost as any).profile_id || (targetPost as any).user_id || (targetPost.author as any)?.id || (targetPost.author as any)?.email;
+          const targetAuthorRaw = (targetPost as any).authorId || (targetPost as any).profile_id || (targetPost as any).user_id || (targetPost.author as any)?.id || (targetPost.author as any)?.email || (targetPost.author as any)?.name || 'author';
           const targetAuthorEmail = (targetPost.author as any)?.email;
           const targetAuthorName = (targetPost.author as any)?.name || (targetPost as any).authorName;
 
-          const isTargetMyself = 
-            (targetAuthorRaw && myIds.has(String(targetAuthorRaw).toLowerCase().trim())) ||
-            (targetAuthorEmail && myIds.has(String(targetAuthorEmail).toLowerCase().trim())) ||
-            (targetAuthorName && myIds.has(String(targetAuthorName).toLowerCase().trim()));
+          const rawUUIDMatch = extractUUID(targetAuthorRaw);
+          const validReceiverUUID = rawUUIDMatch || (typeof targetAuthorRaw === 'string' && targetAuthorRaw.trim() ? generateDeterministicUUID(targetAuthorRaw.trim()) : '00000000-0000-0000-0000-000000000000');
 
-          const validReceiverUUID = (targetAuthorRaw && extractUUID(targetAuthorRaw)) || null;
-          const isReactingToSomeoneElse = !isTargetMyself && Boolean(validReceiverUUID && !myIds.has(validReceiverUUID.toLowerCase().trim()));
+          const actorName = userProfile?.name || userProfile?.console_handle || profileHandle || 'A user';
+          const postSnippet = (targetPost.content || (targetPost as any).message || (targetPost as any).text || 'transmission').substring(0, 50);
+          const notifId = generateDeterministicUUID(`notif_rx_${postId}_${activeUserId}_${reactionKey}`);
+          
+          const rawActorUUID = extractUUID(activeUserId) || extractUUID(userProfile?.id);
+          const currentActorId = rawActorUUID || (activeUserId ? generateDeterministicUUID(String(activeUserId)) : null);
+          const currentActorEmail = userProfile?.email || null;
 
-          if (isReactingToSomeoneElse && validReceiverUUID) {
-            const actorName = userProfile?.name || userProfile?.console_handle || profileHandle || 'A user';
-            const postSnippet = (targetPost.content || (targetPost as any).message || (targetPost as any).text || 'transmission').substring(0, 50);
-            const notifId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (extractUUID(postId) || '00000000-0000-0000-0000-000000000000');
-            const currentActorId = activeUserId || userProfile?.id || null;
-            const currentActorEmail = userProfile?.email || null;
+          const notifItem = {
+            id: notifId,
+            user_id: validReceiverUUID,
+            actor_id: currentActorId,
+            actor_email: currentActorEmail,
+            title: `🔥 NEW REACTION`,
+            message: `${actorName} reacted (${reactionKey.toUpperCase()}) to transmission: "${postSnippet}"`,
+            content: `${actorName} reacted (${reactionKey.toUpperCase()}) to transmission: "${postSnippet}"`,
+            category: 'REACTION',
+            highlight: 'New Reaction',
+            timeAgo: 'Just now',
+            timestamp: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+            read: false,
+            is_read: false,
+            type: 'post_reaction',
+            postId: postId,
+            linkTab: 'feed',
+          };
 
-            const notifItem = {
-              id: notifId,
+          // 1. Dispatch custom event so local UI right notifications drawer updates instantly
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('nexus_in_app_notice', { detail: notifItem }));
+          }
+
+          // 2. Persist locally to localStorage notifications cache
+          try {
+            const rawLocal = localStorage.getItem('nexus_local_notifications_v1');
+            const localNotifs = rawLocal ? JSON.parse(rawLocal) : [];
+            const updatedNotifs = [notifItem, ...localNotifs.filter((n: any) => n.id !== notifItem.id)].slice(0, 100);
+            localStorage.setItem('nexus_local_notifications_v1', JSON.stringify(updatedNotifs));
+          } catch (_) {}
+
+          // 3. Persist to Supabase database
+          await supabase.from('nexus_notifications').upsert([
+            {
+              id: ensureUUID(notifItem.id),
               user_id: validReceiverUUID,
               actor_id: currentActorId,
-              actor_email: currentActorEmail,
-              title: `🔥 NEW REACTION`,
-              message: `${actorName} reacted (${reactionKey.toUpperCase()}) to your transmission: "${postSnippet}"`,
-              content: `${actorName} reacted (${reactionKey.toUpperCase()}) to your transmission: "${postSnippet}"`,
-              category: 'REACTION',
-              highlight: 'New Reaction',
-              timeAgo: 'Just now',
-              timestamp: new Date().toISOString(),
-              created_at: new Date().toISOString(),
-              read: false,
-              is_read: false,
+              title: notifItem.title,
+              message: notifItem.message,
               type: 'post_reaction',
-              postId: postId,
-              linkTab: 'feed',
-            };
-
-            await supabase.from('nexus_notifications').insert([
-              {
-                id: notifItem.id,
-                user_id: validReceiverUUID,
+              is_read: false,
+              data: {
+                ...notifItem,
+                category: 'REACTION',
                 actor_id: currentActorId,
                 actor_email: currentActorEmail,
-                title: notifItem.title,
-                message: notifItem.message,
-                category: 'REACTION',
-                type: 'post_reaction',
-                is_read: false,
-                data: {
-                  ...notifItem,
-                  actor_id: currentActorId,
-                  actor_email: currentActorEmail,
-                },
-                created_at: new Date().toISOString(),
               },
-            ]);
+              created_at: new Date().toISOString(),
+            },
+          ], { onConflict: 'id' });
+
+          if (validReceiverUUID !== currentActorId) {
+            pushManager.sendPushToServer({
+              userId: validReceiverUUID,
+              excludeUserId: currentActorId,
+              excludeUserEmail: currentActorEmail,
+              title: '🔥 New Reaction on Your Post',
+              body: notifItem.message,
+              category: 'artist_interactions',
+              targetTab: 'social',
+              priority: 'P1',
+              data: { postId, type: 'post_reaction', actorId: currentActorId }
+            }).catch(() => {});
           }
         }
       } catch (e) {
@@ -581,11 +619,19 @@ export function useSocialFeedState({
     const supabase = getSupabase();
     if (supabase) {
       try {
-        const { data: existing } = await supabase
-          .from('nexus_posts')
-          .select('*')
-          .or(`id.eq.${postId},id.eq.nexus_post_${postId}`)
-          .limit(1);
+        const cleanPostId = postId.replace(/^nexus_post_/, '');
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanPostId);
+        const targetUUID = extractUUID(cleanPostId) || (isUUID ? cleanPostId : null);
+
+        let existing: any[] | null = null;
+        if (targetUUID) {
+          const { data } = await supabase
+            .from('nexus_posts')
+            .select('*')
+            .eq('id', targetUUID)
+            .limit(1);
+          existing = data;
+        }
 
         const existingRow = existing && existing[0];
         const postObj = existingRow
@@ -698,16 +744,8 @@ export function useSocialFeedState({
         window.dispatchEvent(new CustomEvent('nexus_post_deleted', { detail: { id: postId } }));
       }
 
-      if (success) {
-        if (triggerNotification) {
-          triggerNotification("🗑️ Post deleted successfully.");
-        }
-      } else {
-        if (triggerNotification) {
-          triggerNotification("🗑️ Post removed locally.");
-        } else {
-          console.warn(`Could not delete post from DB: ${errorMsg}. Post was removed from local view instead.`);
-        }
+      if (!success) {
+        console.warn(`Could not delete post from DB: ${errorMsg}. Post was removed from local view instead.`);
       }
 
       return true;
@@ -729,10 +767,14 @@ export function useSocialFeedState({
       return;
     }
 
-    if (!newPostText.trim()) return;
+    const pendingFestivalEditionId =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('nexus_pending_festival_edition_id')
+        : null;
+
+    if (!newPostText.trim() && !pendingFestivalEditionId) return;
 
     setIsSubmittingPost(true);
-    triggerNotification?.('Publishing post and uploading media...');
 
     try {
       let uploadedUrls: string[] = [];
@@ -1003,9 +1045,57 @@ export function useSocialFeedState({
         }
       }
 
+      // Auto-Ground Venue via Google Maps API before publishing only when a venue is explicitly tagged
+      let resolvedGroundedVenue: any = undefined;
+      const explicitVenueToGround = (
+        taggedVenue ||
+        eventDataValue?.locationName ||
+        ''
+      ).trim();
+
+      if (explicitVenueToGround) {
+        try {
+          const groundingQuery = [explicitVenueToGround, eventDataValue?.address, newPostText].filter(Boolean).join(' ');
+          const groundedRes = await detectGroundedVenue(groundingQuery);
+          if (groundedRes && groundedRes.hasVenue) {
+            resolvedGroundedVenue = groundedRes;
+          }
+        } catch (gErr) {
+          console.warn('Auto-grounding venue error in handleCreatePost:', gErr);
+        }
+      }
+
+      let festivalDataValue: any = undefined;
+      if (pendingFestivalEditionId) {
+        const festEd = getEditionById(pendingFestivalEditionId);
+        if (festEd) {
+          const festEntity = getEntityByIdOrSlug(festEd.entity_id);
+          const festLineup = getLineupForEdition(festEd.id);
+          festivalDataValue = {
+            editionId: festEd.id,
+            entityId: festEd.entity_id,
+            editionName: festEd.edition_name,
+            entityName: festEntity?.display_name || authorName,
+            entitySlug: festEntity?.slug || '',
+            startDate: festEd.start_date,
+            endDate: festEd.end_date,
+            venueName: festEd.venue_name,
+            city: festEd.city,
+            state: festEd.state,
+            ticketUrl: festEd.ticket_url,
+            flyerUrl: festEd.flyer_url,
+            status: festEd.status,
+            lineup: festLineup,
+          };
+        }
+        try {
+          localStorage.removeItem('nexus_pending_festival_edition_id');
+        } catch {}
+      }
+
       const newPost: any = {
         id: postUuid,
-        type: classifiedDataValue ? classifiedType : merchDataValue ? 'merch_drop' : tapeDataValue ? 'tape_share' : pollDataValue ? 'poll' : eventDataValue ? 'event' : 'post',
+        type: festivalDataValue ? 'festival_lineup' : classifiedDataValue ? classifiedType : merchDataValue ? 'merch_drop' : tapeDataValue ? 'tape_share' : pollDataValue ? 'poll' : eventDataValue ? 'event' : 'post',
         category: classifiedDataValue ? classifiedType : undefined,
         workspace_type: activeWorkspace,
         workspaceType: activeWorkspace,
@@ -1014,8 +1104,10 @@ export function useSocialFeedState({
         authorName: authorName,
         authorAvatar: authorAvatar,
         author: {
-          id: isBandRole ? (activeBand?.id || activeAuthorId) : activeAuthorId,
+          id: resolvedPersona.entityId ? resolvedPersona.entityId : (isBandRole ? (activeBand?.id || activeAuthorId) : activeAuthorId),
           personaId: resolvedPersona.id,
+          entityId: resolvedPersona.entityId,
+          entitySlug: resolvedPersona.entitySlug,
           name: authorName,
           realName: authorRealName,
           avatar: authorAvatar,
@@ -1030,8 +1122,8 @@ export function useSocialFeedState({
         timeAgo: 'Just now',
         timestamp: new Date().toISOString(),
         created_at: new Date().toISOString(),
-        content: newPostText,
-        tag: classifiedDataValue ? (classifiedType === 'gear' ? 'GEAR SWAP' : 'CLASSIFIED') : newPostTag,
+        content: newPostText || (festivalDataValue ? `🎪 Official Lineup Billing for ${festivalDataValue.editionName}` : ''),
+        tag: festivalDataValue ? 'FESTIVAL LINEUP' : classifiedDataValue ? (classifiedType === 'gear' ? 'GEAR SWAP' : 'CLASSIFIED') : newPostTag,
         image: finalImage,
         mediaUrl: mediaUrlToUse,
         media_url: mediaUrlToUse,
@@ -1044,7 +1136,11 @@ export function useSocialFeedState({
         youtube_id: ytId,
         youtubeUrl: ytUrl,
         youtube_url: ytUrl,
-        location: taggedVenue || (eventDataValue ? eventDataValue.locationName : undefined),
+        location: taggedVenue || (eventDataValue ? eventDataValue.locationName : (festivalDataValue ? `${festivalDataValue.city}${festivalDataValue.state ? `, ${festivalDataValue.state}` : ''}` : undefined)),
+        taggedVenue: taggedVenue.trim() || undefined,
+        tagged_venue: taggedVenue.trim() || undefined,
+        groundedVenue: resolvedGroundedVenue,
+        grounded_venue: resolvedGroundedVenue,
         reactions: [{ type: 'flame', count: 0, active: false }],
         comments: [],
         topComment: undefined,
@@ -1062,12 +1158,44 @@ export function useSocialFeedState({
         merchData: merchDataValue,
         tapeData: tapeDataValue,
         eventData: eventDataValue,
+        festivalData: festivalDataValue,
+        festival_data: festivalDataValue,
         classifiedData: classifiedDataValue,
         classified_data: classifiedDataValue,
       };
 
       await syncPostToSupabase(newPost, activeAuthorId);
       setFeed((prev) => [newPost, ...prev]);
+
+      // Dispatch real-time push notification based on content category
+      if (eventDataValue) {
+        pushManager.sendPushToServer({
+          title: `🤘 Band En Route: ${authorName}`,
+          body: `${authorName} published show date in ${eventDataValue.city || eventDataValue.locationName || 'your area'}: "${eventDataValue.title}"!`,
+          category: 'tour_proximity',
+          priority: 'P0',
+          targetTab: 'social',
+          data: { bandName: authorName, city: eventDataValue.city || eventDataValue.locationName, type: 'tour_proximity' }
+        }).catch(() => {});
+      } else if (tapeDataValue) {
+        pushManager.sendPushToServer({
+          title: `🔥 Soundboard Tape Premiere: ${authorName}`,
+          body: `New live tape dropped: "${tapeDataValue.title}"!`,
+          category: 'exclusive_content',
+          priority: 'P1',
+          targetTab: 'social',
+          data: { bandName: authorName, tapeTitle: tapeDataValue.title, type: 'tape_premiere' }
+        }).catch(() => {});
+      } else if (merchDataValue) {
+        pushManager.sendPushToServer({
+          title: `⚡ Merch Drop Launch: ${merchDataValue.name}`,
+          body: `Limited merch drop by ${authorName} is live now!`,
+          category: 'scarcity_merch_drop',
+          priority: 'P0',
+          targetTab: 'merch',
+          data: { bandName: authorName, merchName: merchDataValue.name, type: 'merch_drop' }
+        }).catch(() => {});
+      }
 
       setNewPostText('');
       setNewPostTag('');
@@ -1122,7 +1250,6 @@ export function useSocialFeedState({
       setShowMediaInput(false);
       setShowYoutubeInput(false);
       setShowVenueInput(false);
-      triggerNotification?.('Post published to the scene.');
     } catch (err) {
       console.error('Failed to create post:', err);
       triggerNotification?.('⚠️ Failed to publish post.');

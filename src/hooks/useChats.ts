@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getSupabase } from '../supabase';
-import { getValidUserId, handleSendMessage } from '../store/useChatStore';
+import { getValidUserId, getAllValidUserIds, handleSendMessage } from '../store/useChatStore';
 import { markChatAsRead, handleMarkAllAsRead } from '../lib/chat';
 import { pushManager } from '../lib/pushNotifications';
+import { isViewingDmThread } from '../lib/pushClient';
+import { getDisplayPreviewForMessage, isValidUuid } from '../utils/groupMessagingUtils';
 
 export interface ChatMessage {
   id: string;
@@ -20,6 +22,7 @@ export const useChats = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [unreadMessageIds, setUnreadMessageIds] = useState<Set<string>>(new Set());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [myUserIds, setMyUserIds] = useState<string[]>([]);
   const [activeRecipientId, setActiveRecipientId] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [isSending, setIsSending] = useState<boolean>(false);
@@ -28,15 +31,37 @@ export const useChats = () => {
   activeRecipientIdRef.current = activeRecipientId;
   const currentUserIdRef = useRef<string | null>(currentUserId);
   currentUserIdRef.current = currentUserId;
+  const myUserIdsRef = useRef<string[]>(myUserIds);
+  myUserIdsRef.current = myUserIds;
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
 
-  // Resolve active user ID
+  // Resolve active user IDs and subscribe to auth transitions
   useEffect(() => {
     const supabase = getSupabase();
-    if (supabase) {
-      getValidUserId(supabase).then((id) => {
-        if (id) setCurrentUserId(id);
-      });
-    }
+    if (!supabase) return;
+
+    const refreshIds = async () => {
+      const allIds = await getAllValidUserIds(supabase);
+      if (allIds.length > 0) {
+        setCurrentUserId((prev) => (prev === allIds[0] ? prev : allIds[0]));
+        const nextKey = allIds.join('|');
+        setMyUserIds((prev) => (prev.join('|') === nextKey ? prev : allIds));
+      }
+    };
+
+    refreshIds();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user?.id) {
+        setCurrentUserId((prev) => (prev === session.user.id ? prev : session.user.id));
+      }
+      refreshIds();
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
   }, []);
 
   // Fetch all messages for current user to compute totalUnreadCount
@@ -44,20 +69,34 @@ export const useChats = () => {
     const supabase = getSupabase();
     if (!supabase) return;
     try {
-      const uid = currentUserId || (await getValidUserId(supabase));
-      if (!uid) return;
+      const allIds = await getAllValidUserIds(supabase);
+      const validUuids = Array.from(
+        new Set([currentUserId, ...allIds].filter((id): id is string => Boolean(id) && isValidUuid(id)))
+      );
+      if (validUuids.length === 0) return;
+
+      const orConditions: string[] = [];
+      validUuids.forEach((uid) => {
+        orConditions.push(`sender_id.eq.${uid}`);
+        orConditions.push(`receiver_id.eq.${uid}`);
+        orConditions.push(`recipient_id.eq.${uid}`);
+      });
 
       const { data, error } = await supabase
         .from('nexus_chats')
         .select('*')
-        .or(`sender_id.eq.${uid},receiver_id.eq.${uid},recipient_id.eq.${uid}`)
+        .or(orConditions.join(','))
         .order('created_at', { ascending: true });
 
       if (!error && data) {
         setMessages(data);
+        const myIdLowerSet = new Set(validUuids.map((id) => id.toLowerCase()));
         const unreadSet = new Set<string>();
         data.forEach((msg: ChatMessage) => {
-          if (msg.sender_id !== uid && (msg.is_read === false || msg.is_read === null)) {
+          if (
+            !myIdLowerSet.has(String(msg.sender_id || '').toLowerCase()) &&
+            (msg.is_read === false || msg.is_read === null)
+          ) {
             unreadSet.add(msg.id);
           }
         });
@@ -86,7 +125,9 @@ export const useChats = () => {
         );
         setUnreadMessageIds((prev) => {
           const next = new Set(prev);
-          messages.filter((m) => m.sender_id === readChatId).forEach((m) => next.delete(m.id));
+          messagesRef.current
+            .filter((m) => m.sender_id === readChatId)
+            .forEach((m) => next.delete(m.id));
           return next;
         });
       }
@@ -117,14 +158,20 @@ export const useChats = () => {
             if (incomingMessage) {
               const activePartnerId = activeRecipientIdRef.current;
               const activeUid = currentUserIdRef.current;
-              // If the user is currently looking at this specific open thread:
-              if (activePartnerId && activePartnerId === incomingMessage.sender_id) {
-                // 1. Mark local message as read immediately
-                incomingMessage.is_read = true;
+              const allMyLower = new Set(
+                [activeUid, ...myUserIdsRef.current].filter(Boolean).map((id) => String(id).toLowerCase())
+              );
+              const isFromMe = allMyLower.has(String(incomingMessage.sender_id || '').toLowerCase());
+              const isForMe =
+                allMyLower.has(String(incomingMessage.receiver_id || '').toLowerCase()) ||
+                allMyLower.has(String(incomingMessage.recipient_id || '').toLowerCase());
 
-                // 2. Persist to database so it stays read on refresh
+              if (!isFromMe && !isForMe) return;
+
+              if (activePartnerId && activePartnerId === incomingMessage.sender_id) {
+                incomingMessage.is_read = true;
                 markChatAsRead(incomingMessage.sender_id, activeUid || undefined);
-              } else if (!incomingMessage.is_read && incomingMessage.sender_id !== activeUid) {
+              } else if (!incomingMessage.is_read && !isFromMe) {
                 setUnreadMessageIds((prev) => new Set(prev).add(incomingMessage.id));
               }
 
@@ -133,17 +180,31 @@ export const useChats = () => {
                 return [...prev, incomingMessage];
               });
 
-              // Dispatch real device push notification if incoming from another user
-              if (incomingMessage.sender_id !== activeUid) {
-                const previewText = incomingMessage.content || incomingMessage.message || 'Sent an attachment';
+              const display = getDisplayPreviewForMessage(incomingMessage);
+              const isActivelyViewingSender = Boolean(
+                (activePartnerId && activePartnerId === incomingMessage.sender_id) ||
+                isViewingDmThread(incomingMessage.sender_id) ||
+                (display.group?.groupId && isViewingDmThread(display.group.groupId))
+              );
+
+              if (!isFromMe && isForMe && !isActivelyViewingSender) {
+                const pushTitle = display.group
+                  ? `💬 ${display.group.groupName || 'Group Chat'}`
+                  : '💬 New Direct Message';
+                const pushBody = display.group
+                  ? `${display.group.senderName}: ${display.preview}`
+                  : display.preview;
                 pushManager.sendPushNotification({
-                  title: '💬 New Direct Message',
-                  body: previewText.length > 80 ? `${previewText.substring(0, 77)}...` : previewText,
+                  title: pushTitle,
+                  body: pushBody.length > 80 ? `${pushBody.substring(0, 77)}...` : pushBody,
                   category: 'direct_messages',
                   priority: 'P1',
                   targetTab: 'messages',
                   data: {
+                    messageId: incomingMessage.id,
                     senderId: incomingMessage.sender_id,
+                    groupId: display.group?.groupId,
+                    groupName: display.group?.groupName,
                   }
                 });
               }

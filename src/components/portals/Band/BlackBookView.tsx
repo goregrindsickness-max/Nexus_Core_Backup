@@ -8,7 +8,7 @@ import { handleSendMessage as sendDbMessage } from '../../../store/useChatStore'
 import VenueReputationCard from './VenueReputationCard';
 import { seedVenuesForCities, classifyPlace, isIrrelevantPlace } from '../../../services/musicBrainzSeederService';
 import { getAllBlackBookVenues, BUILT_IN_BLACK_BOOK_VENUES } from '../../../services/venueSearchService';
-import { getApiEndpoint } from '../../../utils/apiConfig';
+import { authFetch, getSupabaseAccessToken } from '../../../utils/apiConfig';
 
 /**
  * Detect if an existing place record appears to be closed, defunct, or former
@@ -69,79 +69,7 @@ interface BlackBookViewProps {
   disableScrollToTop?: boolean;
 }
 
-const mockVenues = [
-  {
-    id: 'v1',
-    name: 'The Echo',
-    city: 'Los Angeles',
-    state: 'CA',
-    country: 'USA',
-    capacity: 350,
-    email: 'booking@theechola.com',
-    genreFit: 92,
-    payoutRating: 4.8,
-    loadInRating: 3.5,
-    buyers: 'Lizzy & Mark',
-    intelEntries: [
-      "Hard cut off at 11:30PM. Load-in through the back alley, very tight squeeze. Payout is always exact and on time.",
-      "The local sound engineer is top-tier. Bring earplugs, it gets very loud inside.",
-      "Security is strict but professional. Backstage room is locked during general door opening."
-    ]
-  },
-  {
-    id: 'v2',
-    name: 'Chain Reaction',
-    city: 'Anaheim',
-    state: 'CA',
-    country: 'USA',
-    capacity: 250,
-    email: 'chainreactionbooking@gmail.com',
-    genreFit: 98,
-    payoutRating: 4.5,
-    loadInRating: 4.0,
-    buyers: 'Jon',
-    intelEntries: [
-      "Legendary spot for heavy/punk bands. Front door load-in only. Merch area gets incredibly crowded but moves units.",
-      "Very friendly venue owners who really care about DIY culture. Soft drinks are on house for artists.",
-      "Check with Jon about load-in details before 5 PM to secure easy street parking."
-    ]
-  },
-  {
-    id: 'v3',
-    name: 'Bottom of the Hill',
-    city: 'San Francisco',
-    state: 'CA',
-    country: 'USA',
-    capacity: 246,
-    email: 'booking@bottomofthehill.com',
-    genreFit: 85,
-    payoutRating: 5.0,
-    loadInRating: 3.0,
-    buyers: 'Lynn',
-    intelEntries: [
-      "Incredible sound system. Steep stairs for load-in are brutal on cabinets. Ask for the drink tickets early.",
-      "Lynn is super busy but will respond if you follow up once after 4 days. Great vegan food nearby."
-    ]
-  },
-  {
-    id: 'v4',
-    name: 'Neumos',
-    city: 'Seattle',
-    state: 'WA',
-    country: 'USA',
-    capacity: 650,
-    email: 'talent@neumos.com',
-    genreFit: 78,
-    payoutRating: 4.9,
-    loadInRating: 4.5,
-    buyers: 'Evan',
-    intelEntries: [
-      "Highly professional staff. Green room is huge and stocked. Load-in is easy via the side ramp.",
-      "Excellent local promotion. Usually books weeks or months in advance.",
-      "Merch stand space has its own dedicated power strip. Highly visible to the crowd."
-    ]
-  },
-];
+const mockVenues: any[] = [];
 
 export default function BlackBookView({ onBack, triggerNotification, userProfile, setUserProfile, activeBandName, offers = [], onUpdateOffer, userReviews = [], venues = [], setVenues, initialTab = 'directory', hideTabs = false, disableScrollToTop = false }: BlackBookViewProps) {
   const [activeTab, setActiveTab] = useState<'directory' | 'beacons'>(initialTab);
@@ -538,7 +466,7 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
       // Fetch server-persisted venues cache
       let serverVenues: any[] = [];
       try {
-        const res = await fetch(getApiEndpoint('/api/venues'));
+        const res = await authFetch('/api/venues');
         if (res.ok) {
           const sData = await res.json();
           if (sData.success && Array.isArray(sData.venues)) {
@@ -714,11 +642,13 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
 
     // 1. Post batch to server-side persistent endpoint (works across all devices & APK)
     try {
-      await fetch(getApiEndpoint('/api/venues/batch'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ venues: venuesList })
-      });
+      if (await getSupabaseAccessToken()) {
+        await authFetch('/api/venues/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ venues: venuesList })
+        });
+      }
     } catch (_) {}
 
     // 2. Direct Supabase venues upsert attempt
@@ -769,11 +699,12 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
       // 1. Try server-side API endpoint
       try {
         setSeedingLogs(prev => [...prev, `[SERVER] Calling /api/venues/seed-musicbrainz...`]);
-        const res = await fetch(getApiEndpoint('/api/venues/seed-musicbrainz'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cities: selectedHubs })
-        });
+        if (await getSupabaseAccessToken()) {
+          const res = await authFetch('/api/venues/seed-musicbrainz', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cities: selectedHubs })
+          });
 
         if (res.ok) {
           const data = await res.json();
@@ -840,6 +771,9 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
               syncVenuesBatchToSupabase(data.venues);
             }
           }
+        }
+        } else {
+          setSeedingLogs(prev => [...prev, `[INFO] No active session token; falling back to client-side seeder.`]);
         }
       } catch (apiErr) {
         console.warn("Backend API seeder fallback to direct service:", apiErr);
@@ -1329,9 +1263,11 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
 
     // Sync deletion to server cache
     try {
-      await fetch(`/api/venues/${encodeURIComponent(id || 'none')}?name=${encodeURIComponent(name || '')}&city=${encodeURIComponent(venueObj.city || '')}`, {
-        method: 'DELETE'
-      });
+      if (await getSupabaseAccessToken()) {
+        await authFetch(`/api/venues/${encodeURIComponent(id || 'none')}?name=${encodeURIComponent(name || '')}&city=${encodeURIComponent(venueObj.city || '')}`, {
+          method: 'DELETE'
+        });
+      }
     } catch (e) {
       console.warn("Could not sync delete to server cache:", e);
     }
@@ -1506,12 +1442,15 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
       });
 
       // Sync deletion to server cache for all deleted places in this city
-      for (const place of cityPlaces) {
-        try {
-          fetch(`/api/venues/${encodeURIComponent(place.id || 'none')}?name=${encodeURIComponent(place.name || '')}&city=${encodeURIComponent(place.city || '')}`, {
-            method: 'DELETE'
-          }).catch(() => {});
-        } catch (e) {}
+      const hasToken = await getSupabaseAccessToken();
+      if (hasToken) {
+        for (const place of cityPlaces) {
+          try {
+            authFetch(`/api/venues/${encodeURIComponent(place.id || 'none')}?name=${encodeURIComponent(place.name || '')}&city=${encodeURIComponent(place.city || '')}`, {
+              method: 'DELETE'
+            }).catch(() => {});
+          } catch (e) {}
+        }
       }
 
       // Delete from Supabase if connected
@@ -1666,11 +1605,13 @@ export default function BlackBookView({ onBack, triggerNotification, userProfile
 
     // 4. Batch delete on server cache
     try {
-      await fetch('/api/venues/batch-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: idsToPurge, keys: keysToPurge })
-      });
+      if (await getSupabaseAccessToken()) {
+        await authFetch('/api/venues/batch-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: idsToPurge, keys: keysToPurge })
+        });
+      }
     } catch (e) {
       console.warn("Could not sync batch delete to server cache:", e);
     }
@@ -1715,7 +1656,6 @@ Representing ${activeBandName}`;
   const handleCopyPitch = () => {
     if (selectedVenue) {
       navigator.clipboard.writeText(pitchText);
-      triggerNotification("Pitch copied to clipboard!");
       setIsModalOpen(false);
     }
   };

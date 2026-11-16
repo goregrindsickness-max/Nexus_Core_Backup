@@ -7,10 +7,11 @@ import { formatLocationDisplay } from '../../../constants/location';
 import { useUserPresence } from '../../../lib/presence';
 import { ROSTER_CATALOGS } from '../../../data/socialFeedMockData';
 import { normalizeLoadedProfile, getSupabase, executeWithSchemaResilience, executeSanitizedProfileUpsert, upsertBandToDatabase, generateUUID } from '../../../supabase';
-import { formatCleanLocation, isPromoterAvatarUrl, isPromoterCoverUrl, DEFAULT_PERSONAL_AVATAR, DEFAULT_PERSONAL_COVER, resolvePromoterLogo, resolveCreativeLogo, VORTEX_GRAPHICS_DEFAULT_COVER } from '../../../utils/bandProfileUtils';
+import { formatCleanLocation, isPromoterAvatarUrl, isPromoterCoverUrl, DEFAULT_PERSONAL_AVATAR, DEFAULT_PERSONAL_COVER, resolvePromoterLogo, resolveCreativeLogo, VORTEX_GRAPHICS_DEFAULT_COVER, isBandSplitUp, resolveBandStatus, getBandStatusLabel, getBandStatusBadgeClass } from '../../../utils/bandProfileUtils';
 import { getEmbedUrl, getCollectionsTrackDuration, extractUUID } from '../../../utils/socialFeedUtils';
-import { communityBandManager, CommunityBandRecord, isCommunityBandRecord, loadBandDiscographyFromCache } from '../../../lib/communityBands';
+import { communityBandManager, CommunityBandRecord, isCommunityBandRecord, loadBandDiscographyFromCache, resolveAuthenticReleaseYear, deduplicateDiscography, extractReleaseCover, findMasterReleaseCover, isValidBandImageUrl, pickBestBandImage, isGorgasmBand, isStaleGorgasmLineup, parseBandLineup, GORGASM_OFFICIAL_LINEUP, GORGASM_OFFICIAL_LOGO } from '../../../lib/communityBands';
 import { isMiguelNameOrProfile } from '../../social/utils/profileUtils';
+import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME } from '../../../utils/followSyncService';
 import CommunityBandCuratorModal from '../../social/modals/CommunityBandCuratorModal';
 import BandClaimHandoverModal from '../../social/modals/BandClaimHandoverModal';
 import BandBookingModal from '../../social/modals/BandBookingModal';
@@ -26,13 +27,22 @@ import { GalleryTab } from '../../profile/GalleryTab';
 import { CrtTvFrame } from '../../profile/CrtTvFrame';
 import { ReleaseDetailsModal } from './ReleaseDetailsModal';
 import PublicStorefrontView from '../../sales/PublicStorefrontView';
+import { MasterAudioUploaderModal } from './MasterAudioUploaderModal';
 import { fetchReleasesFromDatabase } from '../../../services/releasesService';
 import { VORTEX_GRAPHICS_SVG_AVATAR, PROMOTER_SVG_AVATAR } from '../../../utils/imageFallbacks';
+import { resolvePublicBandData, enrichBandMetadataAsync } from '../../../services/bandEnrichmentService';
+import { AffiliatedEntitiesSection } from '../../social/cards/AffiliatedEntitiesSection';
+import { BirthdayShoutoutBadge } from '../../social/BirthdayShoutoutBadge';
+import {
+  buildBirthdayHornsMessage,
+  isMutualConnection,
+} from '../../../utils/birthdayUtils';
+import { sendDirectMessage } from '../../../store/useChatStore';
 
 export type { ListenerMetric };
 export { calculateListenerMetrics };
 
-import { PublicProfileModalProps } from '../../social/modals/PublicProfileModal';
+import type { PublicProfileModalProps } from '../../social/modals/PublicProfileModal';
 
 export const getReleaseCoverUrl = (release: any): string | null => {
   if (!release) return null;
@@ -154,6 +164,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   const [selectedRelease, setSelectedRelease] = React.useState<any>(null);
   const [isIsolatedStorefrontOpen, setIsIsolatedStorefrontOpen] = useState(false);
   const [storefrontBandData, setStorefrontBandData] = useState<any>(null);
+  const [isAudioUploaderOpen, setIsAudioUploaderOpen] = useState(false);
 
   // Synchronous sync of communityArchiveMatch on profile selection changes
   React.useEffect(() => {
@@ -169,7 +180,104 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         setCommunityArchiveMatch(match);
       }
     }
-  }, [selectedUserProfile?.id, selectedUserProfile?.isYou, selectedUserProfile?.name, selectedUserProfile?.band_name, selectedUserProfile?.bandName, targetProfile?.id, targetProfile?.isYou, targetProfile?.name, targetProfile?.band_name, targetProfile?.bandName]);
+  }, [selectedUserProfile?.id, selectedUserProfile?.isYou, selectedUserProfile?.name, selectedUserProfile?.band_name, selectedUserProfile?.bandName, targetProfile?.id, targetProfile?.name, targetProfile?.band_name, targetProfile?.bandName]);
+
+  const handleCurateBandClick = () => {
+    const effectiveBandName = rawResolvedBandName || bData?.band_name || bData?.name || selectedUserProfile?.band_name || selectedUserProfile?.name || targetProfile?.band_name || targetProfile?.name || 'Band';
+    
+    let existing = communityArchiveMatch || communityBandManager.findMatch(effectiveBandName) || communityBandManager.findByName(effectiveBandName);
+
+    if (existing && bData) {
+      const existingLineup = parseBandLineup(existing.lineup);
+      const bDataLineup = parseBandLineup(bData.lineup);
+      existing = communityBandManager.upsertBand({
+        ...existing,
+        ...bData,
+        id: existing.id || bData.id,
+        name: effectiveBandName,
+        band_name: effectiveBandName,
+        lineup: bDataLineup.length > 0 ? bDataLineup : existingLineup,
+        status: bData.status || existing.status,
+        is_split_up: Boolean(bData.status === 'split-up' || (bData as any).is_split_up || existing.status === 'split-up')
+      }, { isNew: false, skipRemoteSync: true });
+      setCommunityArchiveMatch(existing);
+    }
+
+    const userBio = userProfile?.bio || userProfile?.profileBlurb;
+
+    if (!existing) {
+      const publicDetails = resolvePublicBandData(effectiveBandName, {
+        ...bData,
+        ...effTarget,
+        ...selectedUserProfile,
+        ...targetProfile
+      });
+
+      const existingBio = (bData?.bio && !bData.bio.startsWith('Community-curated archive') && bData.bio !== userBio && bData.bio !== profileBlurb)
+        ? bData.bio
+        : (publicDetails.bio || 'Not written yet.');
+
+      const initialLineup = (publicDetails.lineup?.length ? publicDetails.lineup : parseBandLineup(bData?.lineup)) || [];
+      const freshBandPayload: Partial<CommunityBandRecord> = {
+        id: bData?.id || generateUUID(),
+        name: effectiveBandName,
+        band_name: effectiveBandName,
+        genre: publicDetails.genre || bData?.genre || 'Extreme Metal',
+        micro_genres: publicDetails.micro_genres || bData?.micro_genres || bData?.subgenres || ['Extreme Metal'],
+        subgenres: publicDetails.micro_genres || bData?.micro_genres || bData?.subgenres || ['Extreme Metal'],
+        founded_year: publicDetails.founded_year || bData?.founded_year || bData?.year_formed || '',
+        record_label: publicDetails.record_label || publicDetails.label || bData?.record_label || bData?.label || '',
+        label: publicDetails.record_label || publicDetails.label || bData?.record_label || bData?.label || '',
+        city: publicDetails.city || bData?.city || '',
+        state_province: publicDetails.state_province || bData?.state_province || bData?.state || '',
+        state: publicDetails.state_province || bData?.state_province || bData?.state || '',
+        country: publicDetails.country || bData?.country || 'USA',
+        bio: existingBio,
+        avatar_url: rawResolvedBandLogo || bData?.avatar_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
+        logo_url: rawResolvedBandLogo || bData?.logo_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=400',
+        cover_url: bData?.cover_url || bData?.banner_url || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200',
+        banner_url: bData?.cover_url || bData?.banner_url || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&q=80&w=1200',
+        spotify_url: publicDetails.spotify_url || bData?.spotify_url || '',
+        bandcamp_url: bData?.bandcamp_url || '',
+        metal_archives_url: publicDetails.metal_archives_url || bData?.metal_archives_url || '',
+        youtube_url: publicDetails.youtube_url || bData?.youtube_url || '',
+        lineup: initialLineup,
+        discography: (publicDetails.discography?.length ? publicDetails.discography : bData?.discography) || [],
+        curated_by: userProfile?.console_handle || userProfile?.handle || '@community_archivist'
+      };
+
+      existing = communityBandManager.upsertBand(freshBandPayload, { isNew: true, skipRemoteSync: true });
+      setCommunityArchiveMatch(existing);
+
+      // Async background enrichment call to Gemini & Open Music DB
+      enrichBandMetadataAsync(effectiveBandName).then(asyncDetails => {
+        if (asyncDetails && Object.keys(asyncDetails).length > 0 && existing?.id) {
+          const latestSaved = communityBandManager.findByName(effectiveBandName) || existing;
+          const preservedLineup = parseBandLineup(latestSaved.lineup);
+          const updated = communityBandManager.upsertBand({
+            id: latestSaved.id,
+            name: effectiveBandName,
+            band_name: effectiveBandName,
+            founded_year: latestSaved.founded_year || asyncDetails.founded_year,
+            record_label: latestSaved.record_label || asyncDetails.record_label,
+            label: latestSaved.label || asyncDetails.record_label,
+            city: latestSaved.city || asyncDetails.city,
+            state_province: latestSaved.state_province || asyncDetails.state_province,
+            country: latestSaved.country || asyncDetails.country,
+            genre: latestSaved.genre || asyncDetails.genre,
+            micro_genres: latestSaved.micro_genres?.length ? latestSaved.micro_genres : asyncDetails.micro_genres,
+            bio: (!latestSaved.bio || latestSaved.bio === 'Not written yet.') ? asyncDetails.bio : latestSaved.bio,
+            lineup: preservedLineup
+          }, { isNew: false, skipRemoteSync: true });
+          setCommunityArchiveMatch(updated);
+        }
+      }).catch(() => {});
+    } else {
+      setCommunityArchiveMatch(existing);
+    }
+
+    setShowCuratorModal(true);
+  };
 
   React.useEffect(() => {
     let isMounted = true;
@@ -238,24 +346,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
           })));
         }
 
-        // Deduplicate releases by title to prevent duplicate entries while retaining richest artwork
-        const seenReleaseTitles = new Map<string, any>();
-        for (const rel of allCandidates) {
-          if (!rel || !rel.title) continue;
-          const norm = rel.title.toLowerCase().replace(/[^a-z0-9]/g, '');
-          if (!norm) continue;
-          if (!seenReleaseTitles.has(norm)) {
-            seenReleaseTitles.set(norm, rel);
-          } else {
-            const existing = seenReleaseTitles.get(norm)!;
-            const existingCover = existing.cover_url || existing.cover_image || existing.coverUrl;
-            const newCover = rel.cover_url || rel.cover_image || rel.coverUrl;
-            if (!existingCover && newCover) {
-              seenReleaseTitles.set(norm, { ...existing, cover_url: newCover, cover_image: newCover, coverUrl: newCover, coverImage: newCover });
-            }
-          }
-        }
-        const finalReleases = Array.from(seenReleaseTitles.values());
+        // Deduplicate releases using deduplicateDiscography to purge 0-track placeholders and retain richest tracklists/artwork
+        const finalReleases = deduplicateDiscography(allCandidates, bandName || selectedUserProfile?.name);
 
         if (isMounted && finalReleases.length > 0) {
           const mapped = finalReleases.map((row: any) => {
@@ -263,17 +355,9 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
               (cd: any) => cd.id === row.id || (cd.title && row.title && cd.title.toLowerCase().trim() === row.title.toLowerCase().trim())
             );
             const resolvedCover =
-              row.cover_url ||
-              row.cover_image ||
-              row.coverUrl ||
-              row.coverImage ||
-              row.image_url ||
-              commRel?.cover_url ||
-              commRel?.cover_image ||
-              commRel?.coverUrl ||
-              commRel?.coverImage ||
-              commRel?.image_url ||
-              '';
+              extractReleaseCover(row, bandName) ||
+              extractReleaseCover(commRel, bandName) ||
+              findMasterReleaseCover(row.title || commRel?.title || '', bandName);
 
             return {
               id: row.id,
@@ -282,7 +366,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
               title: row.title || commRel?.title || '',
               coverColor: row.cover_color || '',
               type: row.type || commRel?.type || 'Album',
-              year: row.release_date ? new Date(row.release_date).getFullYear().toString() : (row.release_year || commRel?.year || '2026'),
+              year: resolveAuthenticReleaseYear(row) || commRel?.year || row.year || '2023',
               releaseDate: row.release_date || commRel?.year || '',
               label: row.label || commRel?.label || commRel?.release_info || '',
               genre: row.genre || (commRel as any)?.genre || '',
@@ -370,7 +454,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     if (saveProfileData) {
       saveProfileData(true);
     }
-    triggerNotification?.("⚡ Live profile marquee update saved!");
   };
 
   const isTargetExplicitSelf = Boolean(
@@ -392,8 +475,17 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         setFetchedBandData(null);
       }
 
-      const targetRoleStr = (base?.role || base?.portalRole || '').toLowerCase();
-      const isBand = !!(
+      const targetRoleStr = (base?.role || base?.portalRole || base?.account_type || '').toLowerCase();
+      const isPersonal = Boolean(
+        base?.isPersonal ||
+        base?.account_type === 'fan' ||
+        base?.account_type === 'fan_only' ||
+        base?.account_type === 'industry_pro' ||
+        targetRoleStr.includes('fan') ||
+        targetRoleStr.includes('listener') ||
+        targetRoleStr.includes('supporter')
+      );
+      const isBand = !isPersonal && !!(
         base?.isBandProfile ||
         base?.type === 'band' ||
         base?.account_type === 'band' ||
@@ -401,17 +493,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         targetRoleStr === 'artist' ||
         targetRoleStr === 'official band' ||
         targetRoleStr === 'archive band' ||
-        base?.band_name
-      );
-      const isPersonal = !isBand && !!(
-        base?.isPersonal ||
-        targetRoleStr === 'fan' ||
-        targetRoleStr === 'fan listener' ||
-        targetRoleStr === 'industry pro' ||
-        targetRoleStr === 'member' ||
-        targetRoleStr === 'creative' ||
-        targetRoleStr === 'promoter' ||
-        targetRoleStr === 'label'
+        (base?.band_name && base?.account_type === 'band')
       );
 
       const targetId = base.id || selectedUserProfile?.id;
@@ -422,13 +504,18 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         try {
           let showsList: any[] = [];
           const validUUID = targetId && extractUUID(targetId);
-          if (validUUID) {
-            // Only filter by band_id
+          if (validUUID || targetName) {
             const { data } = await supabase
               .from('shows')
               .select('*')
-              .eq('band_id', validUUID);
-            if (data && data.length > 0) showsList = data;
+              .order('created_at', { ascending: false })
+              .limit(50);
+            if (data && data.length > 0) {
+              showsList = data.filter((s: any) => 
+                (validUUID && (s.band_id === validUUID || s.user_id === validUUID || s.creator_id === validUUID)) ||
+                (targetName && (s.headliner?.toLowerCase().includes(targetName.toLowerCase()) || s.band_name?.toLowerCase().includes(targetName.toLowerCase())))
+              );
+            }
           }
 
           if (isMounted) {
@@ -536,19 +623,33 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
           }
 
           if (isMounted && record) {
+            const recNameLower = (record.band_name || record.name || '').toLowerCase().trim();
+            const isGorgRec = isGorgasmBand(record.id || recNameLower, record.custom_slug || record.slug);
+            const cleanRecAvatar = pickBestBandImage(record.avatar_url, record.logo_url, record.avatar, record.image, isGorgRec ? GORGASM_OFFICIAL_LOGO : '');
+            const cleanRecCover = pickBestBandImage(record.cover_url, record.banner_url, record.banner, record.cover);
+            const parsedRecLineup = parseBandLineup(record.lineup);
+            const cleanRecLineup = (isGorgRec && isStaleGorgasmLineup(parsedRecLineup)) ? GORGASM_OFFICIAL_LINEUP : parsedRecLineup;
             const normalizedRecord = {
               ...record,
-              avatar_url: record.avatar_url || record.logo_url || record.avatar || record.image || '',
-              logo_url: record.logo_url || record.avatar_url || record.avatar || record.image || '',
-              cover_url: record.cover_url || record.banner_url || record.banner || record.cover || '',
-              banner_url: record.banner_url || record.cover_url || record.banner || record.cover || '',
+              avatar_url: cleanRecAvatar,
+              logo_url: cleanRecAvatar,
+              cover_url: cleanRecCover,
+              banner_url: cleanRecCover,
+              lineup: cleanRecLineup,
               name: record.band_name || record.name || '',
               band_name: record.band_name || record.name || ''
             };
             setFetchedBandData(normalizedRecord);
+            try {
+              const updatedMatch = communityBandManager.upsertBand(normalizedRecord, { isNew: false, skipRemoteSync: true });
+              if (updatedMatch) {
+                setCommunityArchiveMatch(updatedMatch);
+              }
+            } catch (_) {}
             if ((normalizedRecord.bio || normalizedRecord.description) && setProfileBlurb) {
               if (base?.isYou || selectedUserProfile?.isYou) {
-                setProfileBlurb(normalizedRecord.bio || normalizedRecord.description);
+                const bioVal = normalizedRecord.bio || normalizedRecord.description;
+                setProfileBlurb(bioVal);
               }
             }
           }
@@ -560,7 +661,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
               const { count, error } = await supabase
                 .from('follows')
                 .select('*', { count: 'exact', head: true })
-                .or(`followed_id.eq.${extractUUID(bandUUID)},artist_id.eq.${extractUUID(bandUUID)}`);
+                .eq('followed_id', extractUUID(bandUUID)!);
               if (!error && count !== null && count !== undefined) {
                 if (isMounted && setLiveProfileStats) {
                   setLiveProfileStats((prev: any) => ({ ...prev, followers: count }));
@@ -661,17 +762,23 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
           );
 
           if (matchesId || matchesName) {
+            const isGorgNew = isGorgasmBand(newBand.id || newBand.band_name || newBand.name, newBand.custom_slug || newBand.slug);
+            const cleanNewAvatar = pickBestBandImage(newBand.avatar_url, newBand.logo_url, newBand.avatar, newBand.image, isGorgNew ? GORGASM_OFFICIAL_LOGO : '');
+            const cleanNewCover = pickBestBandImage(newBand.cover_url, newBand.banner_url, newBand.banner, newBand.cover);
+            const parsedNewLineup = parseBandLineup(newBand.lineup);
+            const cleanNewLineup = (isGorgNew && isStaleGorgasmLineup(parsedNewLineup)) ? GORGASM_OFFICIAL_LINEUP : parsedNewLineup;
             const normalized = {
               ...newBand,
-              avatar_url: newBand.avatar_url || newBand.logo_url || newBand.avatar || newBand.image || '',
-              logo_url: newBand.logo_url || newBand.avatar_url || newBand.avatar || newBand.image || '',
-              cover_url: newBand.cover_url || newBand.banner_url || newBand.banner || newBand.cover || '',
-              banner_url: newBand.banner_url || newBand.cover_url || newBand.banner || newBand.cover || '',
+              avatar_url: cleanNewAvatar,
+              logo_url: cleanNewAvatar,
+              cover_url: cleanNewCover,
+              banner_url: cleanNewCover,
+              lineup: cleanNewLineup,
               name: newBand.band_name || newBand.name || '',
               band_name: newBand.band_name || newBand.name || ''
             };
             setFetchedBandData(normalized);
-            communityBandManager.upsertCommunityBand(normalized, { isNew: false });
+            communityBandManager.upsertCommunityBand(normalized, { isNew: false, skipRemoteSync: true });
           }
         }
       )
@@ -681,7 +788,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [fetchedBandData?.id, selectedUserProfile, targetProfile, supabase]);
+  }, [fetchedBandData?.id, selectedUserProfile?.id, selectedUserProfile?.name, selectedUserProfile?.band_name, targetProfile?.id, targetProfile?.name, targetProfile?.band_name, supabase]);
 
   React.useEffect(() => {
     const handleBandUpdate = (evt: any) => {
@@ -709,10 +816,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       );
 
       if (isIdMatch || isNameMatch || isYouMatch) {
+        const hasUpdatedLineup = typeof updated === 'object' && 'lineup' in updated && updated.lineup !== undefined;
+        const parsedUpdatedLineup = hasUpdatedLineup ? parseBandLineup(updated.lineup) : undefined;
         if (typeof updated === 'object' && (updated.name || updated.band_name)) {
           setCommunityArchiveMatch((prev) => ({
             ...(prev || {}),
             ...updated,
+            ...(hasUpdatedLineup ? { lineup: parsedUpdatedLineup } : {}),
             avatar_url: newAvatar || prev?.avatar_url,
             logo_url: newAvatar || prev?.logo_url,
             cover_url: newBanner || prev?.cover_url,
@@ -722,6 +832,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         setFetchedBandData((prev: any) => ({
           ...(prev || {}),
           ...(typeof updated === 'object' ? updated : {}),
+          ...(hasUpdatedLineup ? { lineup: parsedUpdatedLineup } : {}),
           logo_url: newAvatar || prev?.logo_url,
           avatar_url: newAvatar || prev?.avatar_url,
           cover_url: newBanner || prev?.cover_url,
@@ -758,7 +869,26 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       window.removeEventListener('nexus_band_updated', handleBandUpdate);
       window.removeEventListener('community_band_saved', handleBandUpdate);
     };
-  }, [selectedUserProfile, targetProfile]);
+  }, [selectedUserProfile?.id, selectedUserProfile?.name, targetProfile?.id, targetProfile?.name]);
+
+  // Sync follow state globally across all components
+  React.useEffect(() => {
+    const handleGlobalFollowUpdate = () => {
+      if (!selectedUserProfile) return;
+      const targetObj = { ...selectedUserProfile, ...fetchedBandData };
+      const isFollowedNow = isProfileFollowedGlobally(targetObj);
+      setSelectedUserProfile((prev: any) => (prev && prev.isFollowed !== isFollowedNow) ? { ...prev, isFollowed: isFollowedNow } : prev);
+    };
+    handleGlobalFollowUpdate();
+    if (typeof window !== 'undefined') {
+      window.addEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+      window.addEventListener('storage', handleGlobalFollowUpdate);
+      return () => {
+        window.removeEventListener(FOLLOW_EVENT_NAME, handleGlobalFollowUpdate);
+        window.removeEventListener('storage', handleGlobalFollowUpdate);
+      };
+    }
+  }, [selectedUserProfile?.id, selectedUserProfile?.name, fetchedBandData?.id, fetchedBandData?.name]);
 
   if (!selectedUserProfile) return null;
 
@@ -781,6 +911,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     targetRole.includes('pro') ||
     targetRole.includes('listener') ||
     targetRole.includes('supporter') ||
+    (baseTarget?.name && (baseTarget.name.toLowerCase().includes('tyler hansard') || baseTarget.name.toLowerCase().includes('tyler slamson'))) ||
+    (baseTarget?.custom_slug && (baseTarget.custom_slug.toLowerCase().includes('tyler-hansard') || baseTarget.custom_slug.toLowerCase().includes('tyler-slamson'))) ||
     (baseTarget?.type === 'user' && !baseTarget?.isBandProfile && (portalRole !== 'band' || !baseTarget?.band_name))
   );
 
@@ -790,41 +922,66 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     if (localStr) localSavedBand = JSON.parse(localStr);
   } catch (e) {}
 
+  const isOwnBand = Boolean(baseTarget?.isYou || selectedUserProfile?.isYou || (targetId && userProfile?.id === targetId) || (fetchedBandData?.id && userProfile?.band_id === fetchedBandData?.id) || (userProfile?.band_name && (userProfile.band_name === fetchedBandData?.band_name || userProfile.band_name === fetchedBandData?.name)));
+
   const bData = React.useMemo(() => {
     if (isExplicitPersonal) return null;
-    const isOwnBand = Boolean(baseTarget?.isYou || selectedUserProfile?.isYou || (targetId && userProfile?.id === targetId) || (fetchedBandData?.id && userProfile?.band_id === fetchedBandData?.id) || (userProfile?.band_name && (userProfile.band_name === fetchedBandData?.band_name || userProfile.band_name === fetchedBandData?.name)));
 
-    const candidateName = selectedUserProfile?.band_name || selectedUserProfile?.bandName || (selectedUserProfile?.isBandProfile ? selectedUserProfile?.name : null) || targetProfile?.band_name || targetProfile?.bandName || (targetProfile?.isBandProfile ? targetProfile?.name : null);
+    const candidateName = selectedUserProfile?.band_name || selectedUserProfile?.bandName || selectedUserProfile?.name || targetProfile?.band_name || targetProfile?.bandName || targetProfile?.name || baseTarget?.band_name || baseTarget?.name;
     const directMatch = communityArchiveMatch || (candidateName ? (communityBandManager.findMatch(candidateName) || communityBandManager.findByName(candidateName)) : null);
     if (!fetchedBandData && !directMatch && !(isOwnBand && localSavedBand)) return null;
 
-    const customUserLogo = isOwnBand ? (userProfile?.band_logo || userProfile?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null)) : null;
-    const rawLogo = customUserLogo || fetchedBandData?.logo_url || fetchedBandData?.avatar_url || (isOwnBand ? localSavedBand?.logo_url : null) || directMatch?.logo_url || directMatch?.avatar_url;
-    const rawAvatar = customUserLogo || fetchedBandData?.avatar_url || fetchedBandData?.logo_url || (isOwnBand ? localSavedBand?.avatar_url : null) || directMatch?.avatar_url || directMatch?.logo_url;
-
+    const isGorg = isGorgasmBand(candidateName || fetchedBandData?.id || directMatch?.id, directMatch?.custom_slug || fetchedBandData?.custom_slug);
     const targetBandUUID = userProfile?.band_id || fetchedBandData?.id || '';
-    const customUserCover = isOwnBand ? ((typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_banner') || localStorage.getItem('nexus_core_band_cover_' + targetBandUUID)) : null) || userProfile?.band_cover || userProfile?.banner_url) : null;
-    let rawCover = customUserCover || fetchedBandData?.cover_url || fetchedBandData?.banner_url;
-    if ((!rawCover || (typeof rawCover === 'string' && rawCover.includes('unsplash'))) && (directMatch?.cover_url || directMatch?.banner_url)) {
-      rawCover = directMatch.cover_url || directMatch.banner_url;
-    }
-    if (!rawCover) {
-      rawCover = fetchedBandData?.cover_url || fetchedBandData?.banner_url || directMatch?.cover_url || directMatch?.banner_url || (isOwnBand ? (localSavedBand?.cover_url || localSavedBand?.banner_url) : null);
+    const bandLogoFromStorage = typeof window !== 'undefined' ? (localStorage.getItem('nexus_core_band_avatar_' + targetBandUUID) || localStorage.getItem('nexus_band_logo')) : null;
+    const customUserLogo = isOwnBand ? (userProfile?.band_logo || bandLogoFromStorage) : null;
+    const rawLogo = pickBestBandImage(
+      customUserLogo,
+      fetchedBandData?.logo_url,
+      fetchedBandData?.avatar_url,
+      isOwnBand ? localSavedBand?.logo_url : null,
+      directMatch?.logo_url,
+      directMatch?.avatar_url,
+      isGorg ? GORGASM_OFFICIAL_LOGO : null
+    ) || customUserLogo || fetchedBandData?.logo_url || fetchedBandData?.avatar_url || (isOwnBand ? localSavedBand?.logo_url : null) || directMatch?.logo_url || directMatch?.avatar_url;
+    const rawAvatar = rawLogo;
+
+    const bandBannerFromStorage = typeof window !== 'undefined' ? (localStorage.getItem('nexus_core_band_cover_' + targetBandUUID) || localStorage.getItem('nexus_band_cover')) : null;
+    const customUserCover = isOwnBand ? (bandBannerFromStorage || userProfile?.band_cover) : null;
+    let rawCover = pickBestBandImage(
+      customUserCover,
+      fetchedBandData?.cover_url,
+      fetchedBandData?.banner_url,
+      directMatch?.cover_url,
+      directMatch?.banner_url,
+      isOwnBand ? (localSavedBand?.cover_url || localSavedBand?.banner_url) : null
+    ) || customUserCover || fetchedBandData?.cover_url || fetchedBandData?.banner_url || directMatch?.cover_url || directMatch?.banner_url || (isOwnBand ? (localSavedBand?.cover_url || localSavedBand?.banner_url) : null);
+
+    const parsedOwnLineup = isOwnBand ? parseBandLineup(localSavedBand?.lineup) : [];
+    const parsedFetchedLineup = parseBandLineup(fetchedBandData?.lineup);
+    const parsedDirectLineup = parseBandLineup(directMatch?.lineup);
+    let resolvedLineupList = parsedFetchedLineup.length > 0
+      ? parsedFetchedLineup
+      : (parsedDirectLineup.length > 0 ? parsedDirectLineup : parsedOwnLineup);
+    if (isGorg && isStaleGorgasmLineup(resolvedLineupList)) {
+      resolvedLineupList = GORGASM_OFFICIAL_LINEUP;
     }
 
     return {
+      ...(isOwnBand ? (localSavedBand || {}) : {}),
       ...(directMatch || {}),
       ...(fetchedBandData || {}),
-      ...(isOwnBand ? (localSavedBand || {}) : {}),
       logo_url: rawLogo,
       avatar_url: rawAvatar,
       cover_url: rawCover,
       banner_url: rawCover,
-      bio: isOwnBand ? (localSavedBand?.bio || fetchedBandData?.bio || directMatch?.bio) : (fetchedBandData?.bio || directMatch?.bio || ''),
-      lineup: isOwnBand && localSavedBand?.lineup?.length ? localSavedBand.lineup : (fetchedBandData?.lineup?.length ? fetchedBandData.lineup : (directMatch?.lineup || [])),
-      discography: isOwnBand && localSavedBand?.discography?.length ? localSavedBand.discography : (fetchedBandData?.discography?.length ? fetchedBandData.discography : (directMatch?.discography || [])),
+      bio: fetchedBandData?.bio || (isOwnBand ? localSavedBand?.bio : null) || directMatch?.bio || '',
+      lineup: resolvedLineupList,
+      discography: fetchedBandData?.discography?.length
+        ? fetchedBandData.discography
+        : (directMatch?.discography?.length ? directMatch.discography : (isOwnBand && localSavedBand?.discography?.length ? localSavedBand.discography : [])),
     };
-  }, [isExplicitPersonal, fetchedBandData, communityArchiveMatch, localSavedBand, selectedUserProfile, targetProfile, userProfile, baseTarget, targetId]);
+  }, [isExplicitPersonal, fetchedBandData, communityArchiveMatch, localSavedBand, selectedUserProfile?.id, selectedUserProfile?.name, targetProfile?.id, targetProfile?.name, userProfile?.id, baseTarget?.id, targetId]);
 
   const isArtistOrBand = !isExplicitPersonal && Boolean(
     baseTarget?.isBandProfile ||
@@ -884,6 +1041,25 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   })();
 
   const rawResolvedBandLogo = isBandTarget ? (
+    pickBestBandImage(
+      fetchedBandData?.logo_url,
+      fetchedBandData?.avatar_url,
+      bData?.logo_url,
+      bData?.avatar_url,
+      (bData as any)?.avatar,
+      (bData as any)?.image,
+      communityArchiveMatch?.avatar_url,
+      communityArchiveMatch?.logo_url,
+      (communityArchiveMatch as any)?.avatar,
+      (communityArchiveMatch as any)?.image,
+      baseTarget?.logo_url,
+      baseTarget?.avatar_url,
+      baseTarget?.avatar,
+      baseTarget?.band_logo,
+      (fetchedProfileData as any)?.band_logo,
+      (fetchedProfileData as any)?.logo_url,
+      isGorgasmBand(rawResolvedBandName || bData?.id || baseTarget?.id, bData?.custom_slug || baseTarget?.custom_slug) ? GORGASM_OFFICIAL_LOGO : null
+    ) ||
     fetchedBandData?.logo_url || fetchedBandData?.avatar_url ||
     bData?.logo_url || bData?.avatar_url || (bData as any)?.avatar || (bData as any)?.image ||
     communityArchiveMatch?.avatar_url || communityArchiveMatch?.logo_url || (communityArchiveMatch as any)?.avatar || (communityArchiveMatch as any)?.image ||
@@ -892,24 +1068,20 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   ) : null;
 
   const resolvedBandBio = (() => {
-    // 1. Check if bData has a real custom bio (not default fallback)
-    if (bData?.bio && !bData.bio.startsWith('Community-curated archive')) return bData.bio;
-    // 2. Check if local profileBlurb state has a real custom bio
-    if (profileBlurb && profileBlurb !== fetchedProfileData?.bio && !profileBlurb.startsWith('Community-curated archive')) return profileBlurb;
+    const userBio = userProfile?.bio || userProfile?.profileBlurb;
+
+    // 1. Check if bData has a real custom bio (not default fallback and not viewing user's personal bio)
+    if (bData?.bio && !bData.bio.startsWith('Community-curated archive') && bData.bio !== userBio && bData.bio !== profileBlurb) return bData.bio;
+    // 2. Check if communityArchiveMatch has a real custom bio
+    if ((communityArchiveMatch as any)?.bio && !(communityArchiveMatch as any).bio.startsWith('Community-curated archive') && (communityArchiveMatch as any).bio !== userBio && (communityArchiveMatch as any).bio !== profileBlurb) return (communityArchiveMatch as any).bio;
     // 3. Check if localSavedBand has a real bio
-    if (localSavedBand?.bio && !localSavedBand.bio.startsWith('Community-curated archive')) return localSavedBand.bio;
-    // 4. Check if communityArchiveMatch has a real custom bio
-    if ((communityArchiveMatch as any)?.bio && !(communityArchiveMatch as any).bio.startsWith('Community-curated archive')) return (communityArchiveMatch as any).bio;
-    // 5. Fall back to any available non-empty bio
-    return (
-      bData?.bio ||
-      (communityArchiveMatch as any)?.bio ||
-      localSavedBand?.bio ||
-      baseTarget?.band_bio ||
-      (baseTarget?.isBandProfile ? baseTarget?.bio : '') ||
-      (isBandTarget && profileBlurb ? profileBlurb : '') ||
-      ''
-    );
+    if (localSavedBand?.bio && !localSavedBand.bio.startsWith('Community-curated archive') && localSavedBand.bio !== userBio && localSavedBand.bio !== profileBlurb) return localSavedBand.bio;
+    // 4. Check baseTarget.band_bio
+    if (baseTarget?.band_bio && baseTarget.band_bio !== userBio && baseTarget.band_bio !== profileBlurb) return baseTarget.band_bio;
+    // 5. Check baseTarget.bio IF baseTarget is explicitly a band profile and not personal
+    if (baseTarget?.isBandProfile && baseTarget?.bio && baseTarget.bio !== userBio && baseTarget.bio !== profileBlurb) return baseTarget.bio;
+
+    return 'Not written yet.';
   })();
 
   const isSelfTarget = Boolean(
@@ -1013,17 +1185,21 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     ...(bData ? {
       name: isBandTarget ? (bData.band_name || bData.name || baseTarget.name) : (fetchedProfileData?.full_name || fetchedProfileData?.name || baseTarget.name),
       band_name: bData.band_name || bData.name || baseTarget.band_name,
-      avatar: (isBandTarget && !isSelfTarget) ? (bData.logo_url || bData.avatar_url || baseTarget.avatar || baseTarget.avatar_url) : (liveUserAvatar || (isExplicitPersonal ? null : (bData.logo_url || bData.avatar_url))),
-      avatar_url: (isBandTarget && !isSelfTarget) ? (bData.logo_url || bData.avatar_url || baseTarget.avatar_url || baseTarget.avatar) : (liveUserAvatar || (isExplicitPersonal ? null : (bData.logo_url || bData.avatar_url))),
-      banner: (isBandTarget && !isSelfTarget) 
-        ? (bData.cover_url || bData.banner_url || baseTarget.banner || baseTarget.banner_url) 
-        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || bData.banner_url || baseTarget.banner))),
-      banner_url: (isBandTarget && !isSelfTarget) 
-        ? (bData.cover_url || bData.banner_url || baseTarget.banner_url || baseTarget.banner) 
-        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || bData.banner_url || baseTarget.banner_url))),
-      cover_url: (isBandTarget && !isSelfTarget) 
-        ? (bData.cover_url || baseTarget.cover_url) 
-        : (liveUserBanner || (isExplicitPersonal ? null : (bData.cover_url || baseTarget.cover_url))),
+      avatar: isBandTarget
+        ? (rawResolvedBandLogo || bData?.logo_url || bData?.avatar_url || communityArchiveMatch?.logo_url || communityArchiveMatch?.avatar_url || fetchedBandData?.logo_url || fetchedBandData?.avatar_url || baseTarget?.logo_url || baseTarget?.avatar_url || baseTarget?.avatar || liveUserAvatar)
+        : liveUserAvatar,
+      avatar_url: isBandTarget
+        ? (rawResolvedBandLogo || bData?.logo_url || bData?.avatar_url || communityArchiveMatch?.logo_url || communityArchiveMatch?.avatar_url || fetchedBandData?.logo_url || fetchedBandData?.avatar_url || baseTarget?.logo_url || baseTarget?.avatar_url || baseTarget?.avatar || liveUserAvatar)
+        : liveUserAvatar,
+      banner: isBandTarget
+        ? (bData?.cover_url || bData?.banner_url || communityArchiveMatch?.cover_url || communityArchiveMatch?.banner_url || fetchedBandData?.cover_url || fetchedBandData?.banner_url || baseTarget?.cover_url || baseTarget?.banner_url || baseTarget?.banner || liveUserBanner)
+        : liveUserBanner,
+      banner_url: isBandTarget
+        ? (bData?.cover_url || bData?.banner_url || communityArchiveMatch?.cover_url || communityArchiveMatch?.banner_url || fetchedBandData?.cover_url || fetchedBandData?.banner_url || baseTarget?.cover_url || baseTarget?.banner_url || baseTarget?.banner || liveUserBanner)
+        : liveUserBanner,
+      cover_url: isBandTarget
+        ? (bData?.cover_url || bData?.banner_url || communityArchiveMatch?.cover_url || communityArchiveMatch?.banner_url || fetchedBandData?.cover_url || fetchedBandData?.banner_url || baseTarget?.cover_url || baseTarget?.banner_url || baseTarget?.banner || liveUserBanner)
+        : liveUserBanner,
       logo_url: isBandTarget ? (bData.logo_url || baseTarget.logo_url) : (isExplicitPersonal ? null : baseTarget.logo_url),
       city: isBandTarget ? (bData.city || baseTarget.city) : (fetchedProfileData?.city || baseTarget.city),
       state_province: isBandTarget ? (bData.state_province || baseTarget.state_province) : (fetchedProfileData?.state_province || baseTarget.state_province),
@@ -1071,65 +1247,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
   const userPresence = useUserPresence(effTarget?.id || effTarget?.email || effTarget?.handle || effTarget?.name || selectedUserProfile?.id || selectedUserProfile?.email || selectedUserProfile?.name);
   const isOnline = selectedUserProfile?.isYou || userPresence?.isOnline || userPresence?.formatted?.statusType === 'online';
   const isRecentlyActive = userPresence?.formatted?.isRecentlyActive || userPresence?.formatted?.statusType === 'recent';
-  const workspaces = prof?.registered_workspaces || prof?.allowed_workspaces || prof?.workspaces || (prof?.isYou || prof?.id === userProfile?.id ? userProfile?.registered_workspaces || userProfile?.allowed_workspaces : []) || [];
+  const workspaces = prof?.registered_workspaces || prof?.workspaces || (prof?.isYou || prof?.id === userProfile?.id ? (userProfile?.registered_workspaces || userProfile?.workspaces) : []) || [];
   const isPro = prof?.is_pro === true;
   const r = (prof?.portalRole || prof?.role || prof?.account_type || targetRole || '').toLowerCase();
-  const isBandProfile = !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
+  const isBandProfile = !isExplicitPersonal && !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
 
   const parseLineup = (raw: any): any[] => {
-    let parsed: any[] = [];
-    if (!raw) {
-      parsed = [];
-    } else if (Array.isArray(raw)) {
-      parsed = raw;
-    } else if (typeof raw === 'string') {
-      const trimmed = raw.trim();
-      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch (_) {}
-      } else {
-        parsed = trimmed.split(',').map((part, idx) => {
-          const itemStr = part.trim();
-          if (!itemStr) return null;
-          
-          const match = itemStr.match(/^(.*?)\s*\((.*?)\)$/);
-          if (match) {
-            const name = match[1].trim();
-            const inner = match[2].trim();
-            let role = inner;
-            let level = 5;
-            
-            if (inner.includes('- Lvl')) {
-              const roleParts = inner.split('- Lvl');
-              role = roleParts[0].trim();
-              const levelVal = parseInt(roleParts[1].trim(), 10);
-              if (!isNaN(levelVal)) {
-                level = levelVal;
-              }
-            }
-            
-            return {
-              id: `db-mem-${idx}-${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-              name,
-              role,
-              clearanceLevel: level,
-              status: 'active',
-              activeOnNexus: true
-            };
-          }
-          
-          return {
-            id: `db-mem-${idx}-${itemStr.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-            name: itemStr,
-            role: 'Member',
-            clearanceLevel: 5,
-            status: 'active',
-            activeOnNexus: true
-          };
-        }).filter(Boolean) as any[];
-      }
-    }
+    let parsed: any[] = parseBandLineup(raw).map((m: any, idx: number) => ({
+      ...m,
+      id: m.id || `db-mem-${idx}-${String(m.name || '').toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+      clearanceLevel: m.clearanceLevel || 5,
+      status: m.status || 'active',
+      activeOnNexus: m.activeOnNexus ?? true
+    }));
 
     const isVE = isBandTarget && (bData?.id === 'cbddb810-259b-4230-9968-3d402dfdb872' || bData?.band_name?.toLowerCase() === 'virulent excision' || bData?.name?.toLowerCase() === 'virulent excision' || ((effTarget?.isYou || baseTarget?.isYou) && isMiguelNameOrProfile(userProfile)));
     if (isVE) {
@@ -1169,9 +1299,45 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     return parsed;
   };
 
-  const rawLineupSource = bData?.lineup || communityArchiveMatch?.lineup || selectedUserProfile?.lineup || '';
-  
-  const displayLineup = parseLineup(rawLineupSource);
+  const effectiveNameForLineup = rawResolvedBandName || bData?.band_name || bData?.name || selectedUserProfile?.band_name || selectedUserProfile?.name || targetProfile?.band_name || targetProfile?.name || '';
+  const publicEnrichedForLineup = resolvePublicBandData(effectiveNameForLineup);
+
+  const localCachedLineup = (() => {
+    if (!effectiveNameForLineup) return null;
+    const cleanName = effectiveNameForLineup.toLowerCase().trim();
+    const cleanSlug = cleanName.replace(/[^a-z0-9]/g, '_');
+    const cleanDash = cleanName.replace(/[^a-z0-9]/g, '-');
+    const targetUUID = targetId ? extractUUID(targetId) : null;
+    const keys = [
+      `nexus_core_band_lineup_${cleanName}`,
+      `nexus_core_band_lineup_${cleanSlug}`,
+      `nexus_core_band_lineup_${cleanDash}`,
+      targetId ? `nexus_core_band_lineup_${targetId}` : null,
+      targetUUID ? `nexus_core_band_lineup_${targetUUID}` : null,
+    ].filter(Boolean) as string[];
+    for (const key of keys) {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        } catch (_) {}
+      }
+    }
+    return null;
+  })();
+
+  const rawLineupSource = (Array.isArray(bData?.lineup) && bData.lineup.length > 0 ? bData.lineup : null) ||
+    (Array.isArray(communityArchiveMatch?.lineup) && communityArchiveMatch.lineup.length > 0 ? communityArchiveMatch.lineup : null) ||
+    localCachedLineup ||
+    (Array.isArray(selectedUserProfile?.lineup) && selectedUserProfile.lineup.length > 0 ? selectedUserProfile.lineup : null) ||
+    (publicEnrichedForLineup?.lineup && publicEnrichedForLineup.lineup.length > 0 ? publicEnrichedForLineup.lineup : null) ||
+    bData?.lineup || communityArchiveMatch?.lineup || selectedUserProfile?.lineup || '';
+
+  const parsedDisplayLineup = parseLineup(rawLineupSource);
+  const displayLineup = (isGorgasmBand(rawResolvedBandName || bData?.id || baseTarget?.id, bData?.custom_slug || baseTarget?.custom_slug) && isStaleGorgasmLineup(parsedDisplayLineup))
+    ? GORGASM_OFFICIAL_LINEUP
+    : parsedDisplayLineup;
 
   const hasLineup = displayLineup.length > 0;
 
@@ -1241,10 +1407,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
 
     if (matchedProf) {
       setSelectedUserProfile(matchedProf);
-      triggerNotification?.(`🔗 Opening ${mem.name}'s Profile...`);
     }
   };
 
+  const isSelfUserPro = Boolean(
+    (userProfile?.id === effTarget?.id || effTarget?.isYou) &&
+    (
+      userProfile?.is_pro === true ||
+      userProfile?.account_type === 'industry pro' ||
+      userProfile?.account_type === 'industry_pro' ||
+      userProfile?.account_type === 'pro' ||
+      userProfile?.account_type === 'admin'
+    )
+  );
   const isProAccount = !!(
     prof?.account_type === 'industry pro' ||
     prof?.account_type === 'industry_pro' ||
@@ -1256,9 +1431,9 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
     r.includes('creative') ||
     r.includes('promoter') ||
     r.includes('label') ||
-    (Array.isArray(workspaces) && workspaces.some((w: any) => ['industry_pro', 'industry pro', 'pro', 'creative', 'promoter', 'label', 'band'].includes(typeof w === 'string' ? w : w?.type))) ||
-    (Array.isArray(selectedUserProfile?.registered_workspaces) && selectedUserProfile.registered_workspaces.some((w: any) => ['industry_pro', 'industry pro', 'pro', 'creative', 'promoter', 'label', 'band'].includes(typeof w === 'string' ? w : w?.type))) ||
-    (userProfile?.id === effTarget?.id || effTarget?.isYou)
+    (Array.isArray(workspaces) && workspaces.some((w: any) => ['industry_pro', 'industry pro', 'pro', 'creative', 'promoter', 'label', 'band'].includes(typeof w === 'string' ? w.toLowerCase() : String(w?.type || '').toLowerCase()))) ||
+    (Array.isArray(selectedUserProfile?.registered_workspaces) && selectedUserProfile.registered_workspaces.some((w: any) => ['industry_pro', 'industry pro', 'pro', 'creative', 'promoter', 'label', 'band'].includes(typeof w === 'string' ? w.toLowerCase() : String(w?.type || '').toLowerCase()))) ||
+    isSelfUserPro
   );
   
   return (
@@ -1466,11 +1641,67 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                 {/* Identity: Band Name, Handle, Location right under avatar */}
                 <div className="w-full mt-1">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-xl font-black text-white uppercase tracking-tight font-display flex items-center gap-1.5">
-                      {isBandTarget
-                        ? (effTarget.band_name || effTarget.name || effTarget.full_name || (selectedUserProfile as any)?.band_name || selectedUserProfile.name || 'Band')
-                        : (effTarget.full_name || effTarget.name || effTarget.legalName || effTarget.band_name || (selectedUserProfile as any)?.full_name || selectedUserProfile.name || 'User')}
+                    <h2 className="text-xl font-black text-white uppercase tracking-tight font-display flex items-center gap-1.5 flex-wrap">
+                      <span>
+                        {isBandTarget
+                          ? (effTarget.band_name || effTarget.name || effTarget.full_name || (selectedUserProfile as any)?.band_name || selectedUserProfile.name || 'Band')
+                          : (effTarget.full_name || effTarget.name || effTarget.legalName || effTarget.band_name || (selectedUserProfile as any)?.full_name || selectedUserProfile.name || 'User')}
+                      </span>
                       {selectedUserProfile.isYou && <Shield className={`w-4 h-4 ${(selectedUserProfile?.role || '').toLowerCase().includes('label') ? 'text-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'text-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.4)]'}`} />}
+                      {(() => {
+                        const isSelfProfile = Boolean(selectedUserProfile?.isYou || effTarget?.isYou);
+                        const birthdayTarget = isSelfProfile
+                          ? { ...effTarget, ...userProfile }
+                          : { ...selectedUserProfile, ...effTarget };
+                        const mutualWithTarget =
+                          !isSelfProfile &&
+                          (isMutualConnection(birthdayTarget, userProfile) ||
+                            Boolean(selectedUserProfile?.isFollowed || isProfileFollowedGlobally(effTarget)));
+                        const targetDisplayName =
+                          effTarget?.full_name ||
+                          effTarget?.name ||
+                          selectedUserProfile?.full_name ||
+                          selectedUserProfile?.name ||
+                          'Scene Member';
+
+                        return (
+                          <BirthdayShoutoutBadge
+                            profile={birthdayTarget}
+                            currentUserProfile={userProfile}
+                            isOwnProfile={isSelfProfile}
+                            isMutual={mutualWithTarget}
+                            onSendBirthdayHorns={async () => {
+                              const hornsText = buildBirthdayHornsMessage(targetDisplayName);
+                              const targetId =
+                                effTarget?.id ||
+                                selectedUserProfile?.id ||
+                                targetDisplayName;
+                              if (userProfile?.id && targetId && userProfile.id !== targetId) {
+                                await sendDirectMessage(userProfile.id, String(targetId), hornsText, {
+                                  senderName:
+                                    userProfile?.full_name ||
+                                    userProfile?.name ||
+                                    userProfile?.console_handle,
+                                }).catch(() => {});
+                              }
+                              window.dispatchEvent(
+                                new CustomEvent('nexus_open_chat', {
+                                  detail: {
+                                    profile_id: targetId,
+                                    name: targetDisplayName,
+                                    username: targetDisplayName,
+                                    avatar_url: effTarget?.avatar || effTarget?.avatar_url || null,
+                                    message: hornsText,
+                                  },
+                                })
+                              );
+                              triggerNotification?.(
+                                `🤘 Sent Birthday Horns to ${targetDisplayName}!`
+                              );
+                            }}
+                          />
+                        );
+                      })()}
                     </h2>
                   </div>
 
@@ -1519,7 +1750,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             {/* Button for fans to edit/curate without forms */}
                             <button
                               type="button"
-                              onClick={() => setShowCuratorModal(true)}
+                              onClick={() => handleCurateBandClick()}
                               className="px-2 py-0.5 rounded-full font-mono font-bold text-[9px] uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-all bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
                               title="Edit fan archive info & discography"
                             >
@@ -1543,7 +1774,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   {(() => {
                     const prof = effTarget;
                     const r = (prof?.portalRole || prof?.role || prof?.account_type || '').toLowerCase();
-                    const isBandProfile = !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
+                    const isBandProfile = !isExplicitPersonal && !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
 
                     if (!isBandProfile) return null;
 
@@ -1600,12 +1831,34 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           </div>
                         )}
 
-                        {/* Location and Founded Year */}
-                        {effTarget?.founded_year && (
+                        {/* Location, Founded Year, and Activity Status */}
+                        {(effTarget?.founded_year || bData?.founded_year || communityArchiveMatch?.founded_year || isBandProfile) && (
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zinc-400 text-xs mt-1">
                             <div className="flex items-center">
                               <Calendar className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-amber-500" />
-                              <span className="font-mono text-[11px] text-zinc-300 font-bold">Year Formed: {effTarget?.founded_year}</span>
+                              <span className="font-mono text-[11px] text-zinc-300 font-bold">
+                                Year Formed: {effTarget?.founded_year || bData?.founded_year || communityArchiveMatch?.founded_year || '2005'}
+                                {(() => {
+                                  const effectiveStatusTarget = {
+                                    ...communityArchiveMatch,
+                                    ...bData,
+                                    ...effTarget,
+                                    ...selectedUserProfile
+                                  };
+                                  const resolvedStatus = resolveBandStatus(effectiveStatusTarget);
+                                  const statusLabel = getBandStatusLabel(resolvedStatus);
+                                  return (
+                                    <span className={`ml-1.5 font-black uppercase tracking-wider text-[11px] ${
+                                      resolvedStatus === 'split-up' ? 'text-rose-400' :
+                                      resolvedStatus === 'on-hold' ? 'text-amber-400' :
+                                      resolvedStatus === 'unknown' ? 'text-zinc-400' :
+                                      'text-emerald-400'
+                                    }`}>
+                                      {statusLabel}
+                                    </span>
+                                  );
+                                })()}
+                              </span>
                             </div>
                           </div>
                         )}
@@ -1695,10 +1948,12 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                         <button
                           onClick={async () => {
                             if (isYou) {
-                              triggerNotification?.("Profile Preview: Follow button is active for your audience.");
                               return;
                             }
-                            const nextFollowed = !selectedUserProfile?.isFollowed;
+                            const isCurrentlyFollowed = isProfileFollowedGlobally(effTarget) || isProfileFollowedGlobally(selectedUserProfile);
+                            const nextFollowed = !isCurrentlyFollowed;
+                            saveFollowStateGlobally(effTarget, nextFollowed);
+                            saveFollowStateGlobally(selectedUserProfile, nextFollowed);
                             const diff = nextFollowed ? 1 : -1;
                             setSelectedUserProfile((prev: any) => {
                               if (!prev) return null;
@@ -1760,7 +2015,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             e.preventDefault();
                             e.stopPropagation();
                             setShowEventsModal(true);
-                            triggerNotification?.(isTargetPromoter ? "⚡ Loading upcoming events & festival schedule..." : "📅 Opening upcoming shows list...");
                           }}
                           className={`w-full py-2.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all uppercase font-mono cursor-pointer active:scale-95 ${
                             isTargetPromoter
@@ -1779,7 +2033,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             e.preventDefault();
 
                             if (isYou) {
-                              triggerNotification?.("Profile Preview: Direct Message button is active for visitors.");
                               return;
                             }
 
@@ -1824,7 +2077,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                               e.stopPropagation();
                               e.preventDefault();
                               setShowArchivesModal(true);
-                              triggerNotification?.("📜 Accessing promoter historical show archives...");
                             }}
                             className={`${showStorefront ? 'col-span-1' : 'col-span-2'} w-full py-2.5 px-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 hover:border-yellow-500/40 text-yellow-400 hover:text-yellow-300 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-all uppercase font-mono shadow-md cursor-pointer active:scale-95`}
                             title="All past shows and historic festival archives"
@@ -1841,10 +2093,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                               e.preventDefault();
                               e.stopPropagation();
                               const targetData = effTarget || selectedUserProfile;
-                              const targetBandName = effTarget?.band_name || effTarget?.name || selectedUserProfile?.band_name || selectedUserProfile?.name || 'Band';
                               setStorefrontBandData(targetData);
                               setIsIsolatedStorefrontOpen(true);
-                              triggerNotification?.(`🛒 Opening ${targetBandName}'s Official Storefront...`);
                             }}
                             className={`${isTargetPromoter ? 'col-span-1' : 'col-span-2'} w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors uppercase font-mono shadow-md cursor-pointer`}
                           >
@@ -1869,7 +2119,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     (userProfile?.email && effTarget?.email && String(effTarget.email).toLowerCase() === String(userProfile.email).toLowerCase()) ||
                     (userProfile?.email && baseTarget?.email && String(baseTarget.email).toLowerCase() === String(userProfile.email).toLowerCase())
                   );
-                  const rawWs = prof?.registered_workspaces || prof?.allowed_workspaces || prof?.workspaces || (isTargetSelf ? (userProfile?.registered_workspaces || userProfile?.allowed_workspaces || userProfile?.workspaces) : []) || [];
+                  const rawWs = prof?.registered_workspaces || prof?.workspaces || (isTargetSelf ? (userProfile?.registered_workspaces || userProfile?.workspaces) : []) || [];
                   const workspaces = Array.isArray(rawWs)
                     ? rawWs.map((w: any) => (typeof w === 'string' ? w.toLowerCase() : w?.type?.toLowerCase() || ''))
                     : [];
@@ -1877,7 +2127,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   const badgesToRender: Array<{ label: string; classes: string }> = [];
 
                   const r = (prof?.portalRole || prof?.role || prof?.account_type || '').toLowerCase();
-                  const isBandProfile = !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
+                  const isProfExplicitFan = (prof?.account_type === 'fan' || prof?.account_type === 'fan_only' || r === 'fan' || r === 'fan_only' || r === 'fan listener') && !isPro;
+                  const isBandProfile = !isExplicitPersonal && !!(prof?.isBandProfile || prof?.type === 'band' || ((r.includes('artist') || r.includes('band')) && !prof?.isPersonal && prof?.type !== 'user' && !r.includes('industry') && !r.includes('creative') && !r.includes('pro')));
 
                   if (!isBandProfile) {
                     if (isProAccount) {
@@ -1906,11 +2157,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     });
                   }
 
-                  // 🎸 Musician Badge: Associated with anyone tied to a band profile
+                  const confirmedBandId = prof?.band_id && String(prof.band_id) !== String(prof?.id || '') ? prof.band_id : null;
+                  const confirmedBandProfileId = prof?.band_profile_id && String(prof.band_profile_id) !== String(prof?.id || '') ? prof.band_profile_id : null;
+
+                  // 🎸 Musician Badge: Associated with anyone tied to a confirmed band profile
                   const isTiedToBand = Boolean(
-                    workspaces.includes('band') ||
-                    prof?.band_id ||
-                    prof?.band_profile_id ||
+                    (!isProfExplicitFan && workspaces.includes('band')) ||
+                    confirmedBandId ||
+                    confirmedBandProfileId ||
                     (typeof prof?.band_name === 'string' && prof.band_name.trim()) ||
                     prof?.is_musician === true ||
                     prof?.isMusician === true ||
@@ -1921,7 +2175,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       prof.role.toLowerCase().includes('vocal') ||
                       prof.role.toLowerCase().includes('bass')
                     )) ||
-                    (isTargetSelf && (userProfile?.band_id || (typeof userProfile?.band_name === 'string' && userProfile.band_name.trim()) || userProfile?.band_profile_id)) ||
+                    (isTargetSelf && ((userProfile?.band_id && String(userProfile.band_id) !== String(userProfile?.id || '')) || (typeof userProfile?.band_name === 'string' && userProfile.band_name.trim()) || userProfile?.band_profile_id)) ||
                     (isTargetSelf && isMiguelProfile)
                   );
 
@@ -1933,16 +2187,27 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   }
 
                   const isProfMiguel = isMiguelNameOrProfile(prof);
+                  const cleanBadgeName = (val: any, forbidden: string) => {
+                    const s = typeof val === 'string' ? val.trim() : '';
+                    if (!s) return '';
+                    if (!isProfMiguel && s.toLowerCase() === forbidden.toLowerCase()) return '';
+                    return s;
+                  };
+                  const validPromoterMetaBrand = cleanBadgeName(prof?.promoter_metadata?.brand_name || prof?.promoter_metadata?.agency_name || prof?.promoter_metadata?.promoter_name, 'Nexus Live Productions');
+                  const validPromoterTopName = cleanBadgeName(prof?.promoter_name || prof?.promoter_agency || prof?.promoter_brand || prof?.agency_name, 'Nexus Live Productions');
+                  const confirmedPromoterIdBadge = prof?.promoter_id && String(prof.promoter_id) !== String(prof?.id || '') ? prof.promoter_id : null;
+
                   const hasPromoterBadge = Boolean(
                     prof?.account_type === 'promoter' ||
                     prof?.active_workspace === 'promoter' ||
+                    isProfMiguel ||
                     (prof?.promoter_metadata && typeof prof.promoter_metadata === 'object' && (
-                      prof.promoter_metadata.is_registered === true ||
-                      (isProfMiguel && (prof.promoter_metadata.brand_name || prof.promoter_agency)) ||
-                      (!isProfMiguel && prof.promoter_metadata.brand_name && prof.promoter_metadata.brand_name !== 'Nexus Live Productions')
+                      Boolean(validPromoterMetaBrand) ||
+                      (!isProfExplicitFan && prof.promoter_metadata.is_registered === true && prof.promoter_metadata.brand_name !== 'Nexus Live Productions' && prof.promoter_metadata.agency_name !== 'Nexus Live Productions')
                     )) ||
-                    (isProfMiguel && (prof?.promoter_id || prof?.promoter_name)) ||
-                    (workspaces.includes('promoter') && (isProfMiguel || (prof?.promoter_metadata && prof.promoter_metadata.is_registered)))
+                    Boolean(validPromoterTopName) ||
+                    Boolean(confirmedPromoterIdBadge) ||
+                    (!isProfExplicitFan && workspaces.includes('promoter') && (Boolean(validPromoterMetaBrand) || Boolean(validPromoterTopName) || Boolean(confirmedPromoterIdBadge)))
                   );
 
                   if (hasPromoterBadge) {
@@ -1952,15 +2217,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     });
                   }
 
+                  const confirmedLabelIdBadge = prof?.label_id && String(prof.label_id) !== String(prof?.id || '') ? prof.label_id : null;
+                  const validLabelNameBadge = (typeof prof?.label_name === 'string' && prof.label_name.trim()) || (typeof prof?.labelName === 'string' && prof.labelName.trim()) || (typeof prof?.label_metadata?.label_name === 'string' && prof.label_metadata.label_name.trim()) || '';
+
                   const hasLabelBadge = Boolean(
-                    workspaces.includes('label') ||
-                    prof?.label_id ||
-                    (typeof prof?.label_name === 'string' && prof.label_name.trim()) ||
-                    (typeof prof?.labelName === 'string' && prof.labelName.trim()) ||
-                    (prof?.label_metadata && typeof prof.label_metadata === 'object' && (
-                      (typeof prof.label_metadata.label_name === 'string' && prof.label_metadata.label_name.trim()) ||
-                      prof.label_metadata.is_registered === true
-                    ))
+                    (!isProfExplicitFan && workspaces.includes('label')) ||
+                    confirmedLabelIdBadge ||
+                    validLabelNameBadge ||
+                    (!isProfExplicitFan && prof?.label_metadata && typeof prof.label_metadata === 'object' && prof.label_metadata.is_registered === true)
                   );
 
                   if (hasLabelBadge) {
@@ -1970,18 +2234,18 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     });
                   }
 
+                  const validCreativeMetaBrand = cleanBadgeName(prof?.creative_metadata?.business_name || prof?.creative_metadata?.creative_name, 'Vortex Graphics');
+                  const validCreativeTopName = cleanBadgeName(prof?.creative_name || prof?.creative_business_name || prof?.business_name, 'Vortex Graphics');
+                  const confirmedCreativeIdBadge = prof?.creative_id && String(prof.creative_id) !== String(prof?.id || '') ? prof.creative_id : null;
+
                   const hasCreativeBadge = Boolean(
-                    workspaces.includes('creative') ||
-                    prof?.creative_id ||
-                    (typeof prof?.creative_name === 'string' && prof.creative_name.trim()) ||
-                    (typeof prof?.creative_business_name === 'string' && prof.creative_business_name.trim()) ||
-                    (typeof prof?.business_name === 'string' && prof.business_name.trim()) ||
+                    isProfMiguel ||
+                    Boolean(validCreativeTopName) ||
+                    Boolean(validCreativeMetaBrand) ||
+                    Boolean(confirmedCreativeIdBadge) ||
                     (prof?.category === 'creative') ||
-                    (prof?.creative_metadata && typeof prof.creative_metadata === 'object' && (
-                      (typeof prof.creative_metadata.business_name === 'string' && prof.creative_metadata.business_name.trim()) ||
-                      (typeof prof.creative_metadata.creative_name === 'string' && prof.creative_metadata.creative_name.trim()) ||
-                      prof.creative_metadata.is_registered === true
-                    ))
+                    (!isProfExplicitFan && prof?.creative_metadata && typeof prof.creative_metadata === 'object' && prof.creative_metadata.is_registered === true && prof.creative_metadata.business_name !== 'Vortex Graphics' && prof.creative_metadata.creative_name !== 'Vortex Graphics') ||
+                    (!isProfExplicitFan && workspaces.includes('creative') && (Boolean(validCreativeTopName) || Boolean(validCreativeMetaBrand) || Boolean(confirmedCreativeIdBadge)))
                   );
 
                   if (hasCreativeBadge) {
@@ -2024,7 +2288,27 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       })
                     : communityList;
 
-                  const resolvedDiscography = [...rawResolved].sort((a: any, b: any) => {
+                  const filteredRawResolved = rawResolved.filter((r: any) => {
+                    if (!r) return false;
+                    const title = (r.title || '').toLowerCase().trim();
+                    const year = String(r.year || r.release_year || r.release_date || r.date || '').trim();
+                    if (title.includes('drug-induced psychosis') && (year === '2019' || r.id === 'rel-ve-2019')) return false;
+                    return true;
+                  });
+
+                  const seenTitles = new Set<string>();
+                  const uniqueResolvedDiscography: any[] = [];
+                  for (const rel of filteredRawResolved) {
+                    const normTitle = (rel.title || '').toLowerCase().trim();
+                    if (normTitle && !seenTitles.has(normTitle)) {
+                      seenTitles.add(normTitle);
+                      uniqueResolvedDiscography.push(rel);
+                    } else if (!normTitle) {
+                      uniqueResolvedDiscography.push(rel);
+                    }
+                  }
+
+                  const resolvedDiscography = [...uniqueResolvedDiscography].sort((a: any, b: any) => {
                     const parseY = (r: any) => {
                       const raw = r.year || r.release_year || r.release_date || r.date || '0';
                       const num = parseInt(String(raw).replace(/\D/g, ''), 10);
@@ -2071,7 +2355,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                         referrerPolicy="no-referrer"
                                         onError={(e) => {
-                                          (e.target as HTMLElement).style.display = 'none';
+                                          const target = e.currentTarget;
+                                          const master = findMasterReleaseCover(release.title, fetchedBandData?.name || targetProfile?.name);
+                                          if (master && target.src !== master) {
+                                            target.src = master;
+                                            target.style.display = 'block';
+                                          } else {
+                                            target.style.display = 'none';
+                                          }
                                         }}
                                       />
                                     ) : (
@@ -2086,7 +2377,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                       <span className="uppercase tracking-wider text-[8px] bg-amber-500/10 text-amber-400 px-1.5 py-0.2 rounded border border-amber-500/20">
                                         {release.type || 'LP'}
                                       </span>
-                                      <span>{release.year || '2024'}</span>
+                                      <span>{resolveAuthenticReleaseYear(release) || release.year || '2024'}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -2134,7 +2425,16 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                     isActive ? 'border-emerald-500/40 text-emerald-400 group-hover:border-emerald-400' : 'border-zinc-800 text-zinc-600'
                                   }`}>
                                     {avatarUrl && (avatarUrl.startsWith('http') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
-                                      <img src={avatarUrl} alt={mem.name} className="w-full h-full object-cover rounded-md sm:rounded-lg" referrerPolicy="no-referrer" />
+                                      <img
+                                        src={avatarUrl}
+                                        alt={mem.name}
+                                        className="w-full h-full object-cover rounded-md sm:rounded-lg"
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => {
+                                          e.currentTarget.onerror = null;
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                      />
                                     ) : (
                                       initials
                                     )}
@@ -2186,8 +2486,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     (userProfile?.email && baseTarget?.email && String(baseTarget.email).toLowerCase() === String(userProfile.email).toLowerCase())
                   );
                   const registeredWorkspaces = isTargetSelf
-                    ? (userProfile?.registered_workspaces || effTarget?.registered_workspaces || userProfile?.allowed_workspaces || effTarget?.allowed_workspaces || effTarget?.workspaces || [])
-                    : (effTarget?.registered_workspaces || effTarget?.allowed_workspaces || effTarget?.workspaces || []);
+                    ? (userProfile?.registered_workspaces || effTarget?.registered_workspaces || effTarget?.workspaces || [])
+                    : (effTarget?.registered_workspaces || effTarget?.workspaces || []);
 
                   const hasWorkspaceType = (type: string) => {
                     if (!registeredWorkspaces || !Array.isArray(registeredWorkspaces)) return false;
@@ -2234,7 +2534,23 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   );
 
                   const isEffTargetMiguel = (isTargetSelf && isMiguelNameOrProfile(userProfile)) || (!isTargetSelf && (isMiguelNameOrProfile(effTarget) || isMiguelNameOrProfile(baseTarget) || isMiguelNameOrProfile(selectedUserProfile)));
-                  const targetBandId = isEffTargetMiguel ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (effTarget?.band_id || (isTargetSelf ? userProfile?.band_id : null));
+                  const targetAccTypeLower = String(effTarget?.account_type || baseTarget?.account_type || '').toLowerCase();
+                  const isTargetFanAccount = (targetAccTypeLower === 'fan' || targetAccTypeLower === 'fan_only' || targetAccTypeLower === 'listener') && effTarget?.is_pro !== true;
+                  const cleanNonMiguelPromoterName = (val: any) => {
+                    const s = typeof val === 'string' ? val.trim() : '';
+                    if (!s) return '';
+                    if (!isEffTargetMiguel && s.toLowerCase() === 'nexus live productions') return '';
+                    return s;
+                  };
+                  const cleanNonMiguelCreativeName = (val: any) => {
+                    const s = typeof val === 'string' ? val.trim() : '';
+                    if (!s) return '';
+                    if (!isEffTargetMiguel && s.toLowerCase() === 'vortex graphics') return '';
+                    return s;
+                  };
+
+                  const rawTargetBandId = isEffTargetMiguel ? 'cbddb810-259b-4230-9968-3d402dfdb872' : (effTarget?.band_id || (isTargetSelf ? userProfile?.band_id : null));
+                  const targetBandId = rawTargetBandId && String(rawTargetBandId) !== String(effTarget?.id || '') ? rawTargetBandId : null;
 
                   const targetBandNameDirect = (
                     effTarget?.band_name ||
@@ -2301,21 +2617,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     }
                   }
 
-                  // If still no band found, look up by member name in community band lineups (e.g. Christopher Wirstrom -> Cranial Impalement, Andre Gonzalez -> Cordyceps)
+                  // Only apply verified email/account band overrides for confirmed members (no unconfirmed name-based auto-assignment)
                   if (!matchingBandProfile && !isEffTargetMiguel) {
-                    if (targetFullName) {
-                      matchingBandProfile = communityBandManager.findByMember(targetFullName);
-                    }
-                    if (!matchingBandProfile) {
-                      const targetEmailLower = (effTarget?.email || baseTarget?.email || selectedUserProfile?.email || (isTargetSelf ? userProfile?.email : '') || '').toLowerCase();
-                      const targetWords = (targetFullName || '').toLowerCase().trim().split(/[\s._-]+/).filter(Boolean);
-                      const isTargetAndreGonzalez = targetWords.some((w: string) => w === 'andre' || w === 'andré') && (targetFullName.toLowerCase().includes('gonzal') || targetEmailLower.includes('exposedentrails'));
-
-                      if (targetEmailLower.includes('exposedentrails') || isTargetAndreGonzalez) {
-                        matchingBandProfile = communityBandManager.findByName('Cordyceps');
-                      } else if (targetEmailLower.includes('wirstrom84') || targetFullName.toLowerCase().includes('wirstrom')) {
-                        matchingBandProfile = communityBandManager.findByName('Cranial Impalement');
-                      }
+                    const targetEmailLower = (effTarget?.email || baseTarget?.email || selectedUserProfile?.email || (isTargetSelf ? userProfile?.email : '') || '').toLowerCase();
+                    if (targetEmailLower.includes('exposedentrails')) {
+                      matchingBandProfile = communityBandManager.findByName('Cordyceps');
+                    } else if (targetEmailLower.includes('wirstrom84')) {
+                      matchingBandProfile = communityBandManager.findByName('Cranial Impalement');
                     }
                   }
 
@@ -2328,7 +2636,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   }
 
                   const lbd = matchingBandProfile || (
-                    isTargetSelf && (userProfile?.band_name || userProfile?.band_id) ? (
+                    isTargetSelf && (userProfile?.band_name || (userProfile?.band_id && String(userProfile.band_id) !== String(userProfile?.id || ''))) ? (
                       (typeof fetchedBandData !== 'undefined' && fetchedBandData) ? fetchedBandData : localSavedBand
                     ) : null
                   );
@@ -2350,23 +2658,23 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     isEffTargetMiguel ||
                     Boolean(matchingBandProfile) ||
                     Boolean(targetBandNameDirect) ||
-                    hasWorkspaceType('band') ||
                     Boolean(targetBandId) ||
-                    (isTargetSelf && Boolean(userProfile?.band_name || userProfile?.band_id))
+                    (typeof bandWsRef === 'object' && Boolean(bandWsRef?.name)) ||
+                    (isTargetSelf && Boolean(userProfile?.band_name || (userProfile?.band_id && String(userProfile.band_id) !== String(userProfile?.id || ''))))
                   ) && Boolean(rawBandName) && String(rawBandName).trim() !== '';
 
                    const hasBand = !isCurrentProfileBand && hasBandWorkspace;
 
-                   const promoterRefLogo = effTarget?.promoter_logo || effTarget?.promoter_metadata?.logo_url || (isTargetSelf ? (userProfile?.promoter_logo || userProfile?.promoter_metadata?.logo_url) : null) || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null);
+                   const promoterRefLogo = effTarget?.promoter_logo || effTarget?.promoter_metadata?.logo_url || (isTargetSelf ? (userProfile?.promoter_logo || userProfile?.promoter_metadata?.logo_url) : null) || (isTargetSelf && typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null);
 
                    const isLogoPromoterLogo = (candidateLogo?: string | null) => {
                      if (!candidateLogo) return false;
                      if (promoterRefLogo && candidateLogo === promoterRefLogo) return true;
                      if (effTarget?.promoter_logo && candidateLogo === effTarget.promoter_logo) return true;
                      if (effTarget?.promoter_metadata?.logo_url && candidateLogo === effTarget.promoter_metadata.logo_url) return true;
-                     if (userProfile?.promoter_logo && candidateLogo === userProfile.promoter_logo) return true;
-                     if (userProfile?.promoter_metadata?.logo_url && candidateLogo === userProfile.promoter_metadata.logo_url) return true;
-                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_promoter_logo') === candidateLogo) return true;
+                     if (isTargetSelf && userProfile?.promoter_logo && candidateLogo === userProfile.promoter_logo) return true;
+                     if (isTargetSelf && userProfile?.promoter_metadata?.logo_url && candidateLogo === userProfile.promoter_metadata.logo_url) return true;
+                     if (isTargetSelf && typeof window !== 'undefined' && localStorage.getItem('nexus_promoter_logo') === candidateLogo) return true;
                      return false;
                    };
 
@@ -2376,24 +2684,21 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                      if (effTarget?.avatar_url && candidateLogo === effTarget.avatar_url) return true;
                      if (baseTarget?.avatar && candidateLogo === baseTarget.avatar) return true;
                      if (baseTarget?.avatar_url && candidateLogo === baseTarget.avatar_url) return true;
-                     if (userProfile?.avatar && candidateLogo === userProfile.avatar) return true;
-                     if (userProfile?.avatar_url && candidateLogo === userProfile.avatar_url) return true;
                      if (selectedUserProfile?.avatar && candidateLogo === selectedUserProfile.avatar) return true;
                      if (selectedUserProfile?.avatar_url && candidateLogo === selectedUserProfile.avatar_url) return true;
-                     if (userProfile?.creative_avatar && candidateLogo === userProfile.creative_avatar) return true;
-                     if (userProfile?.label_avatar && candidateLogo === userProfile.label_avatar) return true;
-                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_user_avatar') === candidateLogo) return true;
-                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_creative_avatar') === candidateLogo) return true;
-                     if (typeof window !== 'undefined' && localStorage.getItem('nexus_label_avatar') === candidateLogo) return true;
+                     if (isTargetSelf && userProfile?.avatar && candidateLogo === userProfile.avatar) return true;
+                     if (isTargetSelf && userProfile?.avatar_url && candidateLogo === userProfile.avatar_url) return true;
+                     if (isTargetSelf && userProfile?.creative_avatar && candidateLogo === userProfile.creative_avatar) return true;
+                     if (isTargetSelf && userProfile?.label_avatar && candidateLogo === userProfile.label_avatar) return true;
+                     if (isTargetSelf && typeof window !== 'undefined' && localStorage.getItem('nexus_user_avatar') === candidateLogo) return true;
+                     if (isTargetSelf && typeof window !== 'undefined' && localStorage.getItem('nexus_creative_avatar') === candidateLogo) return true;
+                     if (isTargetSelf && typeof window !== 'undefined' && localStorage.getItem('nexus_label_avatar') === candidateLogo) return true;
                      return false;
                    };
 
                    const isValidBandLogo = (candidateLogo?: string | null) => {
-                     if (!candidateLogo || typeof candidateLogo !== 'string') return false;
-                     if (candidateLogo.trim() === '') return false;
-                     if (candidateLogo.includes('unsplash')) return false;
-                     if (candidateLogo.startsWith('data:image')) return false;
-                     if (candidateLogo.includes('default') || candidateLogo.includes('photo-')) return false;
+                     if (!isValidBandImageUrl(candidateLogo, false)) return false;
+                     if ((candidateLogo as string).includes('default') || (candidateLogo as string).includes('photo-')) return false;
                      if (isLogoPromoterLogo(candidateLogo)) return false;
                      if (isPersonalOrOtherAvatar(candidateLogo)) return false;
                      return true;
@@ -2405,11 +2710,11 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     const isVirulentExcision = name.toLowerCase() === 'virulent excision' || isVeOverride;
                     const veLogo = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396';
                     const veBanner = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-cover_1787467851123.jpg?t=1787467851123';
+                    const commBandFallback = !isVirulentExcision ? (communityBandManager.findByName(name) || communityBandManager.findMatch(name)) : null;
                     
                     const savedCoreBandLogo = (typeof window !== 'undefined') ? (
-                      localStorage.getItem('nexus_core_band_logo_cbddb810-259b-4230-9968-3d402dfdb872') ||
-                      localStorage.getItem('nexus_band_logo_cbddb810-259b-4230-9968-3d402dfdb872') ||
-                      (targetBandId ? localStorage.getItem(`nexus_core_band_logo_${targetBandId}`) : null)
+                      (isVirulentExcision ? (localStorage.getItem('nexus_core_band_logo_cbddb810-259b-4230-9968-3d402dfdb872') || localStorage.getItem('nexus_band_logo_cbddb810-259b-4230-9968-3d402dfdb872')) : null) ||
+                      (isTargetSelf && targetBandId ? localStorage.getItem(`nexus_core_band_logo_${targetBandId}`) : null)
                     ) : null;
 
                     const candidateBandLogo = (
@@ -2423,6 +2728,9 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       (lbd?.logo_url && isValidBandLogo(lbd.logo_url) ? lbd.logo_url : null) ||
                       (lbd?.avatar_url && isValidBandLogo(lbd.avatar_url) ? lbd.avatar_url : null) ||
                       (lbd?.avatar && isValidBandLogo(lbd.avatar) ? lbd.avatar : null) ||
+                      (commBandFallback?.logo_url && isValidBandLogo(commBandFallback.logo_url) ? commBandFallback.logo_url : null) ||
+                      (commBandFallback?.avatar_url && isValidBandLogo(commBandFallback.avatar_url) ? commBandFallback.avatar_url : null) ||
+                      (isGorgasmBand(name) ? GORGASM_OFFICIAL_LOGO : null) ||
                       null
                     );
 
@@ -2480,7 +2788,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           bio: isVirulentExcision ? 'V.E. is brutal death metal, fusing old-school NYDM weight with modern technical slam. Driven by themes of biological reconfiguration and systemic depopulation, the project stands as an uncompromising, heavy-hitting soundtrack to humanity’s extinction..' : (lbd?.bio || lbd?.description || targetBandProfile?.bio || `Official Nexus Artist Profile for ${name}.`)
                         };
                         setSelectedUserProfile(bandProfileObj);
-                        triggerNotification?.(`🎸 Opening Public Band Profile for ${name}...`);
                       }
                     });
                   }
@@ -2492,46 +2799,58 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     (targetRole && targetRole.toLowerCase() === 'promoter')
                   );
 
-                  const matchingPromoterProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
+                  const rawMatchingPromoterProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
                     const isPromoterType = p.type === 'promoter' || p.role === 'Promoter' || p.category === 'venues' || p.account_type === 'promoter';
                     if (!isPromoterType) return false;
-                    if (effTarget.promoter_id && (p.id === effTarget.promoter_id || p.promoter_id === effTarget.promoter_id)) return true;
+                    if (effTarget.promoter_id && String(effTarget.promoter_id) !== String(effTarget.id || '') && (p.id === effTarget.promoter_id || p.promoter_id === effTarget.promoter_id)) return true;
                     if (effTarget.id && (p.user_id === effTarget.id || p.owner_id === effTarget.id)) return true;
                     if (typeof promoterWsRef === 'object' && promoterWsRef?.workspace_id && (p.id === promoterWsRef.workspace_id || p.promoter_id === promoterWsRef.workspace_id)) return true;
                     return false;
                   }) : null;
+                  const matchingPromoterProfile = rawMatchingPromoterProfile && (
+                    isEffTargetMiguel ||
+                    cleanNonMiguelPromoterName(rawMatchingPromoterProfile.brand_name || rawMatchingPromoterProfile.promoter_name || rawMatchingPromoterProfile.agency_name || rawMatchingPromoterProfile.name) !== ''
+                  ) ? rawMatchingPromoterProfile : null;
 
+                  const confirmedPromoterId = effTarget.promoter_id && String(effTarget.promoter_id) !== String(effTarget.id || '') ? effTarget.promoter_id : null;
                   const rawPromoterName = 
-                    matchingPromoterProfile?.brand_name ||
-                    matchingPromoterProfile?.promoter_name || 
-                    matchingPromoterProfile?.promoterName || 
-                    matchingPromoterProfile?.agency_name || 
-                    matchingPromoterProfile?.company_name ||
-                    effTarget.promoter_agency ||
-                    effTarget.promoter_brand ||
-                    effTarget.promoter_name || 
-                    effTarget.promoterName || 
-                    effTarget.agency_name || 
-                    effTarget.company_name ||
-                    effTarget.promoter_metadata?.brand_name ||
-                    effTarget.promoter_metadata?.agency_name ||
-                    effTarget.promoter_metadata?.promoter_name ||
-                    (isTargetSelf ? (userProfile?.promoter_metadata?.brand_name || userProfile?.promoter_metadata?.agency_name || userProfile?.promoter_agency || userProfile?.promoter_brand || userProfile?.promoter_name) : null) ||
-                    (typeof promoterWsRef === 'object' && promoterWsRef?.name ? promoterWsRef.name : null) ||
-                    (hasWorkspaceType('promoter') ? 'Nexus Live Productions' : null) ||
-                    matchingPromoterProfile?.name ||
-                    'Nexus Live Productions';
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.brand_name) ||
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.promoter_name) || 
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.promoterName) || 
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.agency_name) || 
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.company_name) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_agency) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_brand) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_name) || 
+                    cleanNonMiguelPromoterName(effTarget.promoterName) || 
+                    cleanNonMiguelPromoterName(effTarget.agency_name) || 
+                    cleanNonMiguelPromoterName(effTarget.company_name) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_metadata?.brand_name) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_metadata?.agency_name) ||
+                    cleanNonMiguelPromoterName(effTarget.promoter_metadata?.promoter_name) ||
+                    (isTargetSelf ? (cleanNonMiguelPromoterName(userProfile?.promoter_metadata?.brand_name) || cleanNonMiguelPromoterName(userProfile?.promoter_metadata?.agency_name) || cleanNonMiguelPromoterName(userProfile?.promoter_agency) || cleanNonMiguelPromoterName(userProfile?.promoter_brand) || cleanNonMiguelPromoterName(userProfile?.promoter_name)) : '') ||
+                    (typeof promoterWsRef === 'object' && promoterWsRef?.name ? cleanNonMiguelPromoterName(promoterWsRef.name) : '') ||
+                    cleanNonMiguelPromoterName(matchingPromoterProfile?.name) ||
+                    (isEffTargetMiguel ? 'Nexus Live Productions' : '');
 
-                  const hasPromoterWorkspace = (hasWorkspaceType('promoter') || Boolean(matchingPromoterProfile) || Boolean(effTarget.agency_name) || Boolean(effTarget.promoter_name) || Boolean(effTarget.promoter_agency) || Boolean(effTarget.promoter_id)) && Boolean(rawPromoterName) && String(rawPromoterName).trim() !== '';
+                  const hasPromoterWorkspace = (
+                    isEffTargetMiguel ||
+                    Boolean(matchingPromoterProfile) ||
+                    (!isTargetFanAccount && (
+                      hasWorkspaceType('promoter') ||
+                      Boolean(confirmedPromoterId) ||
+                      Boolean(cleanNonMiguelPromoterName(effTarget.agency_name || effTarget.promoter_name || effTarget.promoter_agency || effTarget.promoter_brand || effTarget.promoter_metadata?.brand_name || effTarget.promoter_metadata?.agency_name))
+                    ))
+                  ) && Boolean(rawPromoterName) && String(rawPromoterName).trim() !== '';
 
                   const hasPromoter = !isCurrentProfilePromoter && hasPromoterWorkspace;
 
                   if (hasPromoter) {
                     const name = String(rawPromoterName).trim();
                     const logo = 
-                      (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 
+                      (isTargetSelf && typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null) || 
                       matchingPromoterProfile?.promoter_logo || 
-                      (matchingPromoterProfile?.logo_url && !matchingPromoterProfile.logo_url.includes('unsplash') && matchingPromoterProfile.logo_url !== userProfile?.avatar_url ? matchingPromoterProfile.logo_url : null) || 
+                      (matchingPromoterProfile?.logo_url && !matchingPromoterProfile.logo_url.includes('unsplash') && (!isTargetSelf || matchingPromoterProfile.logo_url !== userProfile?.avatar_url) ? matchingPromoterProfile.logo_url : null) || 
                       effTarget?.promoter_logo || 
                       effTarget?.promoter_metadata?.logo_url || 
                       (isTargetSelf ? (userProfile?.promoter_logo || userProfile?.promoter_metadata?.logo_url) : null) || 
@@ -2551,7 +2870,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       onClick: () => {
                         const promoterProfileObj = {
                           ...effTarget,
-                          id: effTarget.promoter_id || (typeof promoterWsRef === 'object' && promoterWsRef?.id) || (isTargetSelf && isOwnerMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : `promoter_${effTarget.id || Date.now()}`),
+                          id: confirmedPromoterId || (typeof promoterWsRef === 'object' && promoterWsRef?.id) || (isEffTargetMiguel ? '5403162d-1947-43aa-b5f6-38a1bd2a1b80' : `promoter_${effTarget.id || Date.now()}`),
                           name,
                           agency_name: name,
                           promoter_agency: name,
@@ -2578,7 +2897,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           bio: effTarget.promoter_bio || effTarget.promoter_metadata?.bio || (isTargetSelf ? (userProfile?.promoter_metadata?.bio || userProfile?.promoter_bio) : null) || effTarget.bio || `Official Promoter & Booking entity for ${name}.`
                         };
                         setSelectedUserProfile(promoterProfileObj);
-                        triggerNotification?.(`🎪 Opening Promoter Profile for ${name}...`);
                       }
                     });
                   }
@@ -2590,33 +2908,49 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     (targetRole && targetRole.toLowerCase() === 'creative')
                   );
 
-                  const matchingCreativeProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
+                  const rawMatchingCreativeProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
                     const isCreativeType = p.type === 'creative' || p.role === 'Creative' || p.category === 'creatives' || p.account_type === 'creative';
                     if (!isCreativeType) return false;
-                    if (effTarget.creative_id && (p.id === effTarget.creative_id || p.creative_id === effTarget.creative_id)) return true;
+                    if (effTarget.creative_id && String(effTarget.creative_id) !== String(effTarget.id || '') && (p.id === effTarget.creative_id || p.creative_id === effTarget.creative_id)) return true;
                     if (effTarget.id && (p.user_id === effTarget.id || p.owner_id === effTarget.id)) return true;
                     if (typeof creativeWsRef === 'object' && creativeWsRef?.workspace_id && (p.id === creativeWsRef.workspace_id || p.creative_id === creativeWsRef.workspace_id)) return true;
                     return false;
                   }) : null;
+                  const matchingCreativeProfile = rawMatchingCreativeProfile && (
+                    isEffTargetMiguel ||
+                    cleanNonMiguelCreativeName(rawMatchingCreativeProfile.creative_name || rawMatchingCreativeProfile.creative_business_name || rawMatchingCreativeProfile.business_name || rawMatchingCreativeProfile.name) !== ''
+                  ) ? rawMatchingCreativeProfile : null;
 
+                  const confirmedCreativeId = effTarget.creative_id && String(effTarget.creative_id) !== String(effTarget.id || '') ? effTarget.creative_id : null;
                   const rawCreativeName = 
-                    matchingCreativeProfile?.creative_name || 
-                    matchingCreativeProfile?.creative_business_name || 
-                    matchingCreativeProfile?.business_name || 
-                    effTarget.creative_name || 
-                    effTarget.creative_business_name || 
-                    effTarget.business_name || 
-                    (isTargetSelf ? (userProfile?.creative_business_name || userProfile?.creative_name || userProfile?.creative_metadata?.business_name) : null) ||
-                    (typeof creativeWsRef === 'object' && creativeWsRef?.name ? creativeWsRef.name : null) || 
-                    'Vortex Graphics';
-                  const hasCreativeWorkspace = (hasWorkspaceType('creative') || Boolean(matchingCreativeProfile) || Boolean(effTarget.business_name) || Boolean(effTarget.creative_name) || Boolean(effTarget.creative_id) || (isTargetSelf && Boolean(userProfile?.creative_id || userProfile?.creative_name || userProfile?.creative_business_name))) && Boolean(rawCreativeName) && String(rawCreativeName).trim() !== '';
+                    cleanNonMiguelCreativeName(matchingCreativeProfile?.creative_name) || 
+                    cleanNonMiguelCreativeName(matchingCreativeProfile?.creative_business_name) || 
+                    cleanNonMiguelCreativeName(matchingCreativeProfile?.business_name) || 
+                    cleanNonMiguelCreativeName(effTarget.creative_name) || 
+                    cleanNonMiguelCreativeName(effTarget.creative_business_name) || 
+                    cleanNonMiguelCreativeName(effTarget.business_name) || 
+                    cleanNonMiguelCreativeName(effTarget.creative_metadata?.business_name) ||
+                    cleanNonMiguelCreativeName(effTarget.creative_metadata?.creative_name) ||
+                    (isTargetSelf ? (cleanNonMiguelCreativeName(userProfile?.creative_business_name) || cleanNonMiguelCreativeName(userProfile?.creative_name) || cleanNonMiguelCreativeName(userProfile?.creative_metadata?.business_name)) : '') ||
+                    (typeof creativeWsRef === 'object' && creativeWsRef?.name ? cleanNonMiguelCreativeName(creativeWsRef.name) : '') || 
+                    (isEffTargetMiguel ? 'Vortex Graphics' : '');
+                  const hasCreativeWorkspace = (
+                    isEffTargetMiguel ||
+                    Boolean(matchingCreativeProfile) ||
+                    (!isTargetFanAccount && (
+                      hasWorkspaceType('creative') ||
+                      Boolean(confirmedCreativeId) ||
+                      Boolean(cleanNonMiguelCreativeName(effTarget.business_name || effTarget.creative_name || effTarget.creative_business_name || effTarget.creative_metadata?.business_name)) ||
+                      (isTargetSelf && Boolean((userProfile?.creative_id && String(userProfile.creative_id) !== String(userProfile?.id || '')) || cleanNonMiguelCreativeName(userProfile?.creative_name || userProfile?.creative_business_name)))
+                    ))
+                  ) && Boolean(rawCreativeName) && String(rawCreativeName).trim() !== '';
 
                   const hasCreative = !isCurrentProfileCreative && hasCreativeWorkspace;
 
                   if (hasCreative) {
                     const name = String(rawCreativeName).trim();
                     const logo = 
-                      (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null) || 
+                      (isTargetSelf && typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null) || 
                       matchingCreativeProfile?.creative_avatar || 
                       effTarget?.creative_avatar || 
                       effTarget?.creative_metadata?.avatar_url || 
@@ -2634,14 +2968,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       logo,
                       subtitle,
                       onClick: () => {
-                        const creativeBanner = matchingCreativeProfile?.creative_banner || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_creative_banner') || localStorage.getItem('nexus_creative_cover')) : null) || effTarget?.creative_banner || (isTargetSelf ? userProfile?.creative_banner : null) || VORTEX_GRAPHICS_DEFAULT_COVER;
-                        const creativeHandle = matchingCreativeProfile?.creative_handle || matchingCreativeProfile?.console_handle || matchingCreativeProfile?.handle || effTarget?.creative_handle || (isTargetSelf ? userProfile?.creative_handle : null) || 'vortexgraphics';
-                        const creativeName = name || matchingCreativeProfile?.business_name || matchingCreativeProfile?.creative_name || effTarget?.creative_name || (isTargetSelf ? userProfile?.creative_business_name : null) || 'Vortex Graphics';
+                        const creativeBanner = matchingCreativeProfile?.creative_banner || (isTargetSelf && typeof window !== 'undefined' ? (localStorage.getItem('nexus_creative_banner') || localStorage.getItem('nexus_creative_cover')) : null) || effTarget?.creative_banner || (isTargetSelf ? userProfile?.creative_banner : null) || VORTEX_GRAPHICS_DEFAULT_COVER;
+                        const creativeHandle = matchingCreativeProfile?.creative_handle || matchingCreativeProfile?.console_handle || matchingCreativeProfile?.handle || effTarget?.creative_handle || (isTargetSelf ? userProfile?.creative_handle : null) || (isEffTargetMiguel ? 'vortexgraphics' : name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+                        const creativeName = name;
 
                         const creativeProfileObj = {
                           ...(matchingCreativeProfile || {}),
                           ...(!matchingCreativeProfile ? effTarget : {}),
-                          id: matchingCreativeProfile?.id || effTarget.creative_id || (typeof creativeWsRef === 'object' && creativeWsRef?.id) || (isTargetSelf && isOwnerMiguel ? 'c-vortex' : `creative_${effTarget.id || Date.now()}`),
+                          id: matchingCreativeProfile?.id || confirmedCreativeId || (typeof creativeWsRef === 'object' && creativeWsRef?.id) || (isEffTargetMiguel ? 'c-vortex' : `creative_${effTarget.id || Date.now()}`),
                           name: creativeName,
                           business_name: creativeName,
                           creative_name: creativeName,
@@ -2671,7 +3005,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           bio: matchingCreativeProfile?.bio || effTarget?.creative_bio || effTarget?.creative_metadata?.bio || (isTargetSelf ? (userProfile?.creative_metadata?.bio || userProfile?.creative_bio) : null) || effTarget.bio || `Official Creative Specialist Profile for ${creativeName}.`
                         };
                         setSelectedUserProfile(creativeProfileObj);
-                        triggerNotification?.(`🎨 Opening Creative Profile for ${creativeName}...`);
                       }
                     });
                   }
@@ -2686,12 +3019,13 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   const matchingLabelProfile = Array.isArray(allProfiles) ? allProfiles.find((p: any) => {
                     const isLabelType = p.type === 'label' || p.role === 'Label' || p.category === 'labels' || p.account_type === 'label';
                     if (!isLabelType) return false;
-                    if (effTarget.label_id && (p.id === effTarget.label_id || p.label_id === effTarget.label_id)) return true;
+                    if (effTarget.label_id && String(effTarget.label_id) !== String(effTarget.id || '') && (p.id === effTarget.label_id || p.label_id === effTarget.label_id)) return true;
                     if (effTarget.id && (p.user_id === effTarget.id || p.owner_id === effTarget.id)) return true;
                     if (typeof labelWsRef === 'object' && labelWsRef?.workspace_id && (p.id === labelWsRef.workspace_id || p.label_id === labelWsRef.workspace_id)) return true;
                     return false;
                   }) : null;
 
+                  const confirmedLabelId = effTarget.label_id && String(effTarget.label_id) !== String(effTarget.id || '') ? effTarget.label_id : null;
                   const rawLabelName = 
                     matchingLabelProfile?.label_company_name || 
                     matchingLabelProfile?.label_name || 
@@ -2699,11 +3033,23 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     effTarget.label_company_name || 
                     effTarget.label_name || 
                     effTarget.labelName || 
+                    effTarget.label_metadata?.label_name ||
                     (isTargetSelf ? userProfile?.label_company_name : null) ||
                     matchingLabelProfile?.name || 
                     (typeof labelWsRef === 'object' && labelWsRef?.name ? labelWsRef.name : null) || 
-                    (hasWorkspaceType('label') ? (effTarget.name ? `${effTarget.name} Records` : 'Record Label') : null);
-                  const hasLabelWorkspace = (hasWorkspaceType('label') || Boolean(matchingLabelProfile) || Boolean(effTarget?.label_name) || Boolean(effTarget?.labelName) || Boolean(effTarget?.label_id) || (isTargetSelf && Boolean(userProfile?.label_id || userProfile?.label_company_name))) && Boolean(rawLabelName) && String(rawLabelName).trim() !== '';
+                    null;
+                  const hasLabelWorkspace = (
+                    Boolean(matchingLabelProfile) ||
+                    (!isTargetFanAccount && (
+                      Boolean(effTarget?.label_name) ||
+                      Boolean(effTarget?.labelName) ||
+                      Boolean(effTarget?.label_company_name) ||
+                      Boolean(effTarget?.label_metadata?.label_name) ||
+                      Boolean(confirmedLabelId) ||
+                      (typeof labelWsRef === 'object' && Boolean(labelWsRef?.name)) ||
+                      (isTargetSelf && Boolean((userProfile?.label_id && String(userProfile.label_id) !== String(userProfile?.id || '')) || userProfile?.label_company_name))
+                    ))
+                  ) && Boolean(rawLabelName) && String(rawLabelName).trim() !== '';
 
                   const hasLabel = !isCurrentProfileLabel && hasLabelWorkspace;
 
@@ -2739,7 +3085,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           bio: effTarget.bio || `Official Record Label Profile for ${name}.`
                         };
                         setSelectedUserProfile(labelProfileObj);
-                        triggerNotification?.(`🏷️ Opening Record Label Profile for ${name}...`);
                       }
                     });
                   }
@@ -2797,6 +3142,25 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                         ))}
                       </div>
                     </div>
+                  );
+                })()}
+
+                {(() => {
+                  const targetRoleStr = (effTarget?.portalRole || effTarget?.role || effTarget?.account_type || '').toLowerCase();
+                  const isTargetBand = !!(
+                    effTarget?.isBandProfile ||
+                    effTarget?.type === 'band' ||
+                    ((targetRoleStr.includes('artist') || targetRoleStr.includes('band')) && !effTarget?.isPersonal && effTarget?.type !== 'user' && !targetRoleStr.includes('industry') && !targetRoleStr.includes('creative') && !targetRoleStr.includes('pro'))
+                  );
+                  if (isTargetBand) return null;
+                  return (
+                    <AffiliatedEntitiesSection
+                      variant="cards"
+                      userProfile={userProfile}
+                      targetProfile={effTarget}
+                      isOwnProfile={Boolean(effTarget?.isYou)}
+                      triggerNotification={triggerNotification}
+                    />
                   );
                 })()}
 
@@ -2951,7 +3315,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                         setSelectedUserProfile(null);
                         window.dispatchEvent(new CustomEvent('nexus_open_chat', { detail: { profile_id: targetUser?.email || targetUser?.name, name: targetUser?.name, username: targetUser?.name, avatar_url: targetUser?.avatar } }));
                         window.dispatchEvent(new CustomEvent('nexus_open_chat_thread', { detail: { profile_id: targetUser?.email || targetUser?.name, name: targetUser?.name, username: targetUser?.name, avatar_url: targetUser?.avatar } }));
-                        triggerNotification?.(`⚡ Opened encrypted channel with ${targetUser?.name || 'Unknown Label'}`);
                       }}
                       className="flex items-center justify-center gap-1.5 py-2 px-3 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-500/30 hover:border-orange-500/60 text-orange-400 text-[10px] font-black rounded-xl uppercase tracking-wider font-mono transition-all cursor-pointer shadow-sm"
                     >
@@ -2960,7 +3323,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                     <button
                       onClick={() => {
                         setShowSubmitEpkModal?.(true);
-                        triggerNotification?.("⚡ EPK Submission Terminal active");
                       }}
                       className="flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 text-[10px] font-black rounded-xl uppercase tracking-wider font-mono transition-all cursor-pointer shadow-sm"
                     >
@@ -2973,10 +3335,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                         e.preventDefault();
                         e.stopPropagation();
                         const targetData = selectedUserProfile || effTarget;
-                        const labelName = selectedUserProfile?.name || effTarget?.name || 'Store';
                         setStorefrontBandData(targetData);
                         setIsIsolatedStorefrontOpen(true);
-                        triggerNotification?.(`🛒 Opening ${labelName}'s Official Storefront...`);
                       }}
                       className="col-span-2 mt-2 w-full flex items-center justify-center gap-2 py-2 px-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-[10px] font-black rounded-xl uppercase tracking-widest font-mono transition-all cursor-pointer shadow-[0_0_15px_rgba(249,115,22,0.3)] border border-orange-400/40 hover:scale-[1.01]"
                     >
@@ -3006,7 +3366,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                  communityBandManager.upsertCommunityBand({
                                    name: candidateName,
                                    bio: val
-                                 });
+                                 }, { isNew: false, skipRemoteSync: true });
                                }
 
                                try {
@@ -3029,7 +3389,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                saveProfileData(true);
                              }
                              setIsEditingBio(false);
-                             triggerNotification?.("💾 Bio updated in your node matrix.");
                            }}
                            className="px-2 py-0.5 bg-[#39ff14]/10 hover:bg-[#39ff14]/20 border border-[#39ff14]/40 text-[#39ff14] text-[9.5px] font-mono font-bold rounded flex items-center gap-1 transition-all cursor-pointer"
                          >
@@ -3070,7 +3429,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                communityBandManager.upsertCommunityBand({
                                  name: candidateName,
                                  bio: val
-                               });
+                               }, { isNew: false, skipRemoteSync: true });
                              }
                              const bandUUID = bData?.id || selectedUserProfile?.band_id || (isCurrentUserBand ? userProfile?.band_id : null) || baseTarget?.id;
                              if (bandUUID) {
@@ -3333,8 +3692,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                   );
                 })()}
 
-
-
               {/* Ever-Present Embedded Player Card */}
               {(() => {
                 const r = (selectedUserProfile?.role || '').toLowerCase();
@@ -3504,7 +3861,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                 onClick={() => {
                                   saveProfileData(true);
                                   setIsEditingTopSong(false);
-                                  triggerNotification?.("💾 Anthem updated.");
                                 }}
                                 className="px-2 py-0.5 bg-[#39ff14]/10 hover:bg-[#39ff14]/20 border border-[#39ff14]/40 text-[#39ff14] text-[9.5px] font-mono font-bold rounded flex items-center gap-1 transition-all"
                               >
@@ -3537,7 +3893,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                               }}
                               onBlur={() => {
                                 saveProfileData(true);
-                                triggerNotification?.("💾 Band/Artist name updated.");
                               }}
                               placeholder="e.g. Dying Fetus"
                               className="w-full bg-black/80 border border-zinc-800 focus:border-emerald-500 rounded px-2 py-1 text-xs text-white font-mono outline-none"
@@ -3569,7 +3924,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                               }}
                               onBlur={() => {
                                 saveProfileData(true);
-                                triggerNotification?.("💾 Song/Track title updated.");
                               }}
                               placeholder="e.g. Liege of Inveracity"
                               className="w-full bg-black/80 border border-zinc-800 focus:border-emerald-500 rounded px-2 py-1 text-xs text-white font-mono outline-none"
@@ -3603,7 +3957,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             }}
                             onBlur={() => {
                               saveProfileData(true);
-                              triggerNotification?.("💾 Embed URL updated.");
                             }}
                             placeholder="https://www.youtube.com/watch?v=... or Spotify link"
                             className="w-full bg-black/80 border border-zinc-800 focus:border-emerald-500 rounded px-2 py-1 text-xs text-white font-mono outline-none"
@@ -3746,9 +4099,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           <div className="mt-2">
                             <SonicFootprint 
                               profile={selectedUserProfile} 
-                              onActionClick={(actionLabel) => {
-                                triggerNotification?.(`⚡ Navigating to ${actionLabel}...`);
-                              }} 
+                              onActionClick={() => {}} 
                             />
                           </div>
                         )}
@@ -3832,7 +4183,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       </div>
                       {selectedUserProfile.isYou && (
                         <button
-                          onClick={() => triggerNotification?.("Add new portfolio project modal opened.")}
+                          onClick={() => {}}
                           className="px-2.5 py-1 bg-fuchsia-600/20 hover:bg-fuchsia-600/30 text-fuchsia-400 border border-fuchsia-500/30 rounded text-[10px] font-mono font-bold transition-colors flex items-center gap-1"
                         >
                           <Plus className="w-3 h-3" /> Add Project
@@ -3895,7 +4246,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       </div>
                       {selectedUserProfile.isYou && (
                         <button
-                          onClick={() => triggerNotification?.("Create new ticket listing modal opened.")}
+                          onClick={() => {}}
                           className="px-2.5 py-1 bg-yellow-600/20 hover:bg-yellow-600/30 text-yellow-400 border border-yellow-500/30 rounded text-[10px] font-mono font-bold transition-colors flex items-center gap-1"
                         >
                           <Plus className="w-3 h-3" /> List Event Tickets
@@ -3933,7 +4284,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             <button
                               onClick={() => {
                                 openCheckout?.('ticket', { name: event.title, price: parseFloat(event.price.replace('$','')), venue: event.venue });
-                                triggerNotification?.(`Adding ticket for ${event.title} to checkout...`);
                               }}
                               className="mt-1.5 px-3 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-black font-black rounded text-[10px] uppercase font-mono transition-colors shadow-lg"
                             >
@@ -4207,7 +4557,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           value={selectedLabelBand}
                           onChange={(e) => {
                             setSelectedLabelBand(e.target.value);
-                            triggerNotification?.(`Loading ${e.target.value}'s catalog matrix...`);
                           }}
                           className="bg-zinc-950 text-orange-400 text-[11px] font-black font-mono px-2 py-1 rounded-lg border border-orange-950/50 outline-none focus:border-orange-500/50 cursor-pointer"
                         >
@@ -4260,9 +4609,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                 {currentAlbum.tracks?.map((track: any, trackIdx: number) => (
                                   <div
                                     key={track.id ? `track-${track.id}-${trackIdx}` : `track-${trackIdx}`}
-                                    onClick={() => {
-                                      triggerNotification?.(`Playing preview of "${track.title}" by ${selectedLabelBand}...`);
-                                    }}
+                                    onClick={() => {}}
                                     className="flex items-center justify-between py-2 px-3 hover:bg-zinc-900/60 rounded-md cursor-pointer group/track transition-all"
                                   >
                                     <div className="flex items-center gap-2.5 min-w-0">
@@ -4292,8 +4639,12 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                       const userCatalog = selectedUserProfile.musicCatalog || [];
                       
                       // Combine userCatalog and rawCommunityDiscography, prioritizing unique releases
-                      const combinedReleases: any[] = [...userCatalog];
-                      rawCommunityDiscography.forEach((cr: any) => {
+                      const combinedReleases: any[] = [];
+                      [...userCatalog, ...rawCommunityDiscography].forEach((cr: any) => {
+                        if (!cr) return;
+                        const title = (cr.title || '').toLowerCase().trim();
+                        const year = String(cr.year || cr.release_year || cr.release_date || cr.date || '').trim();
+                        if (title.includes('drug-induced psychosis') && (year === '2019' || cr.id === 'rel-ve-2019')) return;
                         const exists = combinedReleases.some((ur: any) => ur.id === cr.id || (ur.title && cr.title && ur.title.toLowerCase().trim() === cr.title.toLowerCase().trim()));
                         if (!exists) {
                           combinedReleases.push(cr);
@@ -4375,7 +4726,16 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                         isActive ? 'border-emerald-500/40 text-emerald-400 group-hover:border-emerald-400' : 'border-zinc-800 text-zinc-600'
                                       }`}>
                                         {avatarUrl && (avatarUrl.startsWith('http') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
-                                          <img src={avatarUrl} alt={mem.name} className="w-full h-full object-cover rounded-md sm:rounded-lg" referrerPolicy="no-referrer" />
+                                          <img
+                                            src={avatarUrl}
+                                            alt={mem.name}
+                                            className="w-full h-full object-cover rounded-md sm:rounded-lg"
+                                            referrerPolicy="no-referrer"
+                                            onError={(e) => {
+                                              e.currentTarget.onerror = null;
+                                              e.currentTarget.style.display = 'none';
+                                            }}
+                                          />
                                         ) : (
                                           initials
                                         )}
@@ -4422,11 +4782,22 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                 <Disc className="w-3.5 h-3.5 text-amber-400" />
                                 Official Discography & Audio Player ({displayReleases.length})
                               </span>
-                              {sortedReleases.length === 0 && (
-                                <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
-                                  <span>*</span> audio files not loaded yet
-                                </span>
-                              )}
+                              
+                              <div className="flex items-center gap-2">
+                                {(selectedUserProfile?.isYou || isSelfTarget || isOwnBand || isCurrentUserBand || Boolean(userProfile?.id && selectedUserProfile?.id && userProfile.id === selectedUserProfile.id) || Boolean(userProfile?.band_name && selectedUserProfile?.name && userProfile.band_name.toLowerCase().trim() === selectedUserProfile.name.toLowerCase().trim())) && (
+                                  <button
+                                    onClick={() => setIsAudioUploaderOpen(true)}
+                                    className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-black text-[9px] font-mono font-black uppercase rounded-lg transition cursor-pointer flex items-center gap-1 shadow-md shadow-emerald-950/40 shrink-0"
+                                  >
+                                    <FileUp className="w-3.5 h-3.5 text-black" /> Upload WAV/MP3
+                                  </button>
+                                )}
+                                {sortedReleases.length === 0 && (
+                                  <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+                                    <span>*</span> audio files not loaded yet
+                                  </span>
+                                )}
+                              </div>
                             </div>
 
                             <div className="space-y-6">
@@ -4474,15 +4845,19 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                 
                                 return (
                                   <div key={release.id ? `rel-${release.id}-${rIdx}` : `rel-${rIdx}`} className="bg-[#0c0e12] border border-zinc-800/80 rounded-2xl overflow-hidden shadow-2xl relative flex flex-col">
-                                    <div className="flex items-center justify-between p-3 border-b border-zinc-800/80 bg-black/40 gap-3">
+                                    <div className="flex items-center justify-between p-3 border-b border-zinc-800/80 bg-black/40 gap-3 min-w-0 w-full">
                                       <div 
-                                        className="flex flex-col items-start gap-1 cursor-pointer group/title min-w-0 flex-1"
+                                        className="flex flex-col items-start gap-1 cursor-pointer group/title min-w-0 flex-1 overflow-hidden"
                                         onClick={() => setSelectedRelease(fullRel)}
                                         title="View Release Details & Full Tracklist"
                                       >
-                                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                                          <span className="px-1.5 py-0.5 rounded bg-[#FF9900]/10 text-[#FF9900] border border-[#FF9900]/20 text-[8px] font-mono font-black uppercase tracking-widest shrink-0">{release.format || release.type || fullRel.type || 'Release'}</span>
-                                          <h4 className="text-xs font-bold text-white uppercase tracking-wider group-hover/title:text-[#FF9900] transition-colors truncate">{release.title || fullRel.title}</h4>
+                                        <div className="flex items-center gap-2 min-w-0 w-full overflow-hidden">
+                                          <span className="px-1.5 py-0.5 rounded bg-[#FF9900]/10 text-[#FF9900] border border-[#FF9900]/20 text-[8px] font-mono font-black uppercase tracking-widest shrink-0">
+                                            {release.format || release.type || fullRel.type || 'Release'}
+                                          </span>
+                                          <h4 className="text-xs font-bold text-white uppercase tracking-wider group-hover/title:text-[#FF9900] transition-colors truncate min-w-0 flex-1">
+                                            {release.title || fullRel.title}
+                                          </h4>
                                         </div>
                                         {!hasAnyAudio && (
                                           <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded inline-flex items-center gap-1 shrink-0">
@@ -4491,9 +4866,9 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                         )}
                                       </div>
                                       <div className="flex items-center gap-2 shrink-0">
-                                        <button className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/90 hover:bg-purple-800 text-white rounded-md text-[10px] font-black uppercase tracking-wider transition-colors shadow-lg border border-purple-600/40">
-                                          <ShoppingCart className="w-3 h-3" />
-                                          <span>BUY • $9.99</span>
+                                        <button className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/90 hover:bg-purple-800 text-white rounded-md text-[10px] font-black uppercase tracking-wider transition-colors shadow-lg border border-purple-600/40 shrink-0">
+                                          <ShoppingCart className="w-3 h-3 shrink-0" />
+                                          <span className="whitespace-nowrap">BUY • {release.price || fullRel.price ? (String(release.price || fullRel.price).startsWith('$') ? String(release.price || fullRel.price) : `$${release.price || fullRel.price}`) : '$9.99'}</span>
                                         </button>
                                       </div>
                                     </div>
@@ -4512,7 +4887,14 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                                               className="w-full h-full object-cover transition-all duration-500 group-hover:scale-105" 
                                               referrerPolicy="no-referrer"
                                               onError={(e) => {
-                                                (e.target as HTMLElement).style.display = 'none';
+                                                const target = e.currentTarget;
+                                                const master = findMasterReleaseCover(release.title || fullRel.title, fetchedBandData?.name || targetProfile?.name);
+                                                if (master && target.src !== master) {
+                                                  target.src = master;
+                                                  target.style.display = 'block';
+                                                } else {
+                                                  target.style.display = 'none';
+                                                }
                                               }}
                                             />
                                           ) : (
@@ -4670,7 +5052,7 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                           </p>
                           {selectedUserProfile.isYou && (
                             <button
-                              onClick={() => triggerNotification?.("Catalog release manager opened.")}
+                              onClick={() => {}}
                               className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded text-xs font-mono font-bold transition-colors inline-flex items-center gap-1.5"
                             >
                               <Plus className="w-3.5 h-3.5" /> Upload Release Catalog
@@ -4736,7 +5118,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             setProfileActivePlaybackTrackId(firstTrack);
                             setProfileIsPlaying(true);
                             setProfilePlaybackProgress(0);
-                            triggerNotification?.(`Loading ${e.target.value}'s catalog matrix...`);
                           }}
                           className="bg-black border border-orange-500/30 text-orange-400 text-[10px] uppercase font-bold tracking-widest pl-3 pr-7 py-1.5 rounded-full outline-none cursor-pointer appearance-none min-w-[120px] text-center shadow-[0_0_10px_rgba(255,153,0,0.1)]"
                         >
@@ -4853,7 +5234,6 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
                             sizes: [],
                             bandName: selectedLabelBand
                           });
-                          triggerNotification?.(`Adding ${selectedLabelBand} - ${currentAlbum.albumName} (${link.format}) to order...`);
                         }}
                         className="flex flex-col items-center justify-center p-3 rounded-xl border border-zinc-800 hover:border-orange-500/40 bg-zinc-950 hover:bg-orange-950/20 text-center transition-all cursor-pointer group/btn shadow-inner"
                       >
@@ -4888,27 +5268,8 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
       onClose={() => setShowCuratorModal(false)}
       initialBand={
         communityArchiveMatch ||
-        (rawResolvedBandName && rawResolvedBandName !== 'Band' ? communityBandManager.findByName(rawResolvedBandName) : null) ||
-        (bData ? {
-          id: bData.id || generateUUID(),
-          name: rawResolvedBandName || bData.name || bData.band_name || 'Band',
-          band_name: rawResolvedBandName || bData.name || bData.band_name || 'Band',
-          genre: bData.genre || 'Extreme Metal',
-          micro_genres: bData.micro_genres || bData.subgenres || [],
-          bio: resolvedBandBio || bData.bio || '',
-          avatar_url: rawResolvedBandLogo || bData.avatar_url || '',
-          cover_url: bData.cover_url || bData.banner_url || '',
-          city: bData.city || '',
-          state_province: bData.state_province || bData.state || '',
-          country: bData.country || 'USA',
-          record_label: bData.record_label || bData.label || '',
-          spotify_url: bData.spotify_url || '',
-          bandcamp_url: bData.bandcamp_url || '',
-          metal_archives_url: bData.metal_archives_url || '',
-          youtube_url: bData.youtube_url || '',
-          lineup: bData.lineup || [],
-          discography: bData.discography || []
-        } as CommunityBandRecord : null)
+        (rawResolvedBandName && rawResolvedBandName !== 'Band' ? (communityBandManager.findMatch(rawResolvedBandName) || communityBandManager.findByName(rawResolvedBandName)) : null) ||
+        null
       }
       userProfile={userProfile}
       triggerNotification={triggerNotification}
@@ -4998,6 +5359,15 @@ export const ProfileCard: React.FC<PublicProfileModalProps> = ({
         />
       </div>
     )}
+
+    {/* MASTER AUDIO UPLOADER MODAL */}
+    <MasterAudioUploaderModal
+      isOpen={isAudioUploaderOpen}
+      onClose={() => setIsAudioUploaderOpen(false)}
+      bandId={selectedUserProfile?.id || fetchedBandData?.id}
+      bandName={selectedUserProfile?.name || fetchedBandData?.band_name || 'Virulent Excision'}
+      triggerNotification={triggerNotification}
+    />
   </>
 );
 };

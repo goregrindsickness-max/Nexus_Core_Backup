@@ -1,7 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { FeedItem } from '../../../data/socialFeedMockData';
 import { getSupabase } from '../../../supabase';
 import { syncPostToSupabase } from '../utils/postSyncUtils';
+import { submitGlobalComment, generateValidUUID } from '../../../services/postInteractionsService';
+import { pushManager } from '../../../lib/pushNotifications';
 
 export function getYouTubeId(url: string): string {
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -145,11 +147,6 @@ export function useSocialFeedActions({
     setFeed(prev => prev.map(post => {
       if (post.id === postId) {
         const isBookmarked = !post.bookmarked;
-        if (isBookmarked) {
-          triggerNotification?.("Post saved to bookmarks!");
-        } else {
-          triggerNotification?.("Removed from bookmarks.");
-        }
         return { ...post, bookmarked: isBookmarked };
       }
       return post;
@@ -187,13 +184,14 @@ export function useSocialFeedActions({
   }, [feed, userProfile?.id]);
 
   // Add comment
-  const handleAddComment = useCallback(async (postId: string, textOverride?: string, parentCommentId?: string | null) => {
+  const handleAddComment = useCallback(async (postId: string, textOverride?: string, parentCommentId?: string | null, mediaUrl?: string | null) => {
     const text = (textOverride || commentInputs[postId] || '').trim();
-    if (!text) return;
+    if (!text && !mediaUrl) return;
 
-    const commentId = `comment_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const userId = userProfile?.id || userProfile?.email || userProfile?.name || 'anonymous';
-    const authorName = userProfile?.name || userProfile?.console_handle || profileHandle || 'Fan';
+    const commentId = generateValidUUID();
+    const userId = userProfile?.id || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_active_profile_id') || localStorage.getItem('nexus_user_profile_id')) : null) || '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+    const authorName = userProfile?.full_name || userProfile?.name || userProfile?.console_handle || profileHandle || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_name') || localStorage.getItem('nexus_username')) : null) || 'Miguel Goregrinder Medina';
+    const activeAvatar = profileAvatarUrl || userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || (typeof window !== 'undefined' ? (localStorage.getItem('nexus_user_avatar') || localStorage.getItem('nexus_avatar')) : null) || 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80';
 
     const newCommentObj = {
       id: commentId,
@@ -202,8 +200,12 @@ export function useSocialFeedActions({
       parent_comment_id: parentCommentId || null,
       username: authorName,
       author: authorName,
+      avatar: activeAvatar,
+      userAvatar: activeAvatar,
       text: text,
       content: text,
+      mediaUrl: mediaUrl || null,
+      media_url: mediaUrl || null,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       timeAgo: 'Just now',
       timestamp: new Date().toISOString(),
@@ -224,24 +226,57 @@ export function useSocialFeedActions({
 
     setCommentInputs(prev => ({ ...prev, [postId]: '' }));
 
+    // Persist globally across all sessions and devices
+    try {
+      await submitGlobalComment(postId, {
+        id: commentId,
+        userId,
+        username: authorName,
+        avatar: activeAvatar,
+        text,
+        mediaUrl: mediaUrl || null,
+        parentCommentId: parentCommentId || null
+      });
+    } catch (err) {
+      console.warn('Failed to submit global comment:', err);
+    }
+
+    // Best-effort client Supabase attempt (if credentials allow)
     const supabase = getSupabase();
     if (supabase) {
       try {
-        await supabase.from('nexus_post_comments').insert([{
-          id: commentId,
-          post_id: postId,
-          user_id: userId,
-          parent_comment_id: parentCommentId || null,
-          content: text,
-          created_at: new Date().toISOString()
-        }]);
-      } catch (err) {
-        console.warn('Failed to save comment to nexus_post_comments:', err);
-      }
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const cleanPostId = postId.replace(/^nexus_post_/, '');
+        if (uuidRegex.test(cleanPostId)) {
+          const safeCommentId = uuidRegex.test(commentId) ? commentId : generateValidUUID();
+          const safeUserId = uuidRegex.test(userId) ? userId : '5403162d-1947-43aa-b5f6-38a1bd2a1b80';
+          const safeParentId = (parentCommentId && uuidRegex.test(parentCommentId)) ? parentCommentId : null;
+          await supabase.from('nexus_post_comments').insert([{
+            id: safeCommentId,
+            post_id: cleanPostId,
+            user_id: safeUserId,
+            parent_comment_id: safeParentId,
+            content: text,
+            created_at: new Date().toISOString()
+          }]);
+        }
+      } catch (_) {}
     }
 
-    triggerNotification?.("Comment posted!");
-  }, [commentInputs, userProfile, profileHandle, setFeed, setCommentInputs, triggerNotification]);
+    // Send push notification to post author
+    const targetPost = feed.find(p => p.id === postId) as any;
+    const postAuthorId = targetPost?.author_id || targetPost?.user_id || targetPost?.author?.id || targetPost?.profile_id;
+    if (postAuthorId && postAuthorId !== userId) {
+      pushManager.sendPushToServer({
+        userId: postAuthorId,
+        title: 'New Comment on Your Post 💬',
+        body: `${authorName}: "${text.slice(0, 80)}"`,
+        category: 'artist_interactions',
+        targetTab: 'social',
+        data: { postId, commentId, type: 'comment' }
+      }).catch(() => {});
+    }
+  }, [commentInputs, feed, userProfile, profileHandle, setFeed, setCommentInputs]);
 
   // Vote comment
   const handleVoteComment = useCallback((postId: string, commentId: string, type: 'up' | 'down') => {
@@ -341,8 +376,7 @@ export function useSocialFeedActions({
 
     setReplyInputs(prev => ({ ...prev, [commentId]: '' }));
     setActiveReplyCommentId(null);
-    triggerNotification?.("Reply posted!");
-  }, [replyInputs, userProfile?.name, setFeed, setReplyInputs, setActiveReplyCommentId, triggerNotification]);
+  }, [replyInputs, userProfile?.name, setFeed, setReplyInputs, setActiveReplyCommentId]);
 
   // Toggle comments
   const toggleComments = useCallback((postId: string) => {
@@ -382,8 +416,7 @@ export function useSocialFeedActions({
     syncPostToSupabase(newSharedItem);
     setFeed(prev => [newSharedItem, ...prev]);
     setSharingPost(null);
-    triggerNotification?.("Shared to your timeline!");
-  }, [sharingPost, userProfile, setFeed, setSharingPost, triggerNotification]);
+  }, [sharingPost, userProfile, setFeed, setSharingPost]);
 
   // External Share
   const handleShareExternal = useCallback(async () => {
@@ -399,7 +432,6 @@ export function useSocialFeedActions({
           text: shareText,
           url: shareUrl
         });
-        triggerNotification?.("Shared successfully!");
         setSharingPost(null);
         return;
       } catch (err) {
@@ -410,7 +442,6 @@ export function useSocialFeedActions({
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
-        triggerNotification?.("Link copied to clipboard!");
       } else {
         const tempInput = document.createElement("input");
         tempInput.value = `${shareText}\n${shareUrl}`;
@@ -418,7 +449,6 @@ export function useSocialFeedActions({
         tempInput.select();
         document.execCommand("copy");
         document.body.removeChild(tempInput);
-        triggerNotification?.("Link copied to clipboard!");
       }
     } catch (err) {
       triggerNotification?.("Failed to copy link.");
@@ -514,13 +544,12 @@ export function useSocialFeedActions({
     setNewThreadPrimaryGenre?.('Extreme Metal');
     setNewThreadMicroGenre?.('Death Metal');
     setShowCreateThread?.(false);
-    triggerNotification?.("Thread published successfully!");
   }, [
     newThreadTitle, newThreadContent, newThreadCategory, newThreadMicroGenre,
     userProfile?.name, profileAvatarUrl, newThreadMediaUrl, newThreadYoutubeUrl,
     setForumThreads, setNotifications, setNewThreadTitle, setNewThreadContent,
     setNewThreadMediaUrl, setNewThreadYoutubeUrl, setNewThreadPrimaryGenre,
-    setNewThreadMicroGenre, setShowCreateThread, triggerNotification
+    setNewThreadMicroGenre, setShowCreateThread
   ]);
 
   // Forum: Vote Thread
@@ -572,8 +601,7 @@ export function useSocialFeedActions({
       }));
     }
     setThreadCommentInput?.('');
-    triggerNotification?.("Comment posted!");
-  }, [threadCommentInput, userProfile?.name, setForumThreads, setThreadCommentInput, triggerNotification]);
+  }, [threadCommentInput, userProfile?.name, setForumThreads, setThreadCommentInput]);
 
   // Forum: Vote Thread Comment
   const handleVoteThreadComment = useCallback((threadId: string, commentId: string, type: 'up' | 'down') => {
@@ -674,8 +702,7 @@ export function useSocialFeedActions({
     if (setActiveThreadReplyCommentId) {
       setActiveThreadReplyCommentId(null);
     }
-    triggerNotification?.("Reply posted!");
-  }, [threadReplyInputs, userProfile?.name, setForumThreads, setThreadReplyInputs, setActiveThreadReplyCommentId, triggerNotification]);
+  }, [threadReplyInputs, userProfile?.name, setForumThreads, setThreadReplyInputs, setActiveThreadReplyCommentId]);
 
   // Follow profile pass-through or wrapper
   const handleFollowProfile = useCallback(async (targetInput: any) => {
@@ -739,8 +766,31 @@ export function useSocialFeedActions({
     if (setShowSongShareModal) {
       setShowSongShareModal(false);
     }
-    triggerNotification?.(`Attached song: ${song.title || song.name || 'Track'}`);
-  }, [triggerNotification]);
+  }, []);
+
+  // Sync global comment edits across active feed items
+  useEffect(() => {
+    const handleCommentUpdateSync = (e: any) => {
+      const detail = e.detail;
+      if (!detail?.postId || !detail?.commentId || !detail?.text) return;
+      setFeed(prev => prev.map(p => {
+        if (p.id === detail.postId && Array.isArray(p.comments)) {
+          return {
+            ...p,
+            comments: p.comments.map(c => c.id === detail.commentId ? { ...c, text: detail.text, content: detail.text, edited: true, updated_at: new Date().toISOString() } : c)
+          };
+        }
+        return p;
+      }));
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('nexus_comment_updated', handleCommentUpdateSync as EventListener);
+      return () => {
+        window.removeEventListener('nexus_comment_updated', handleCommentUpdateSync as EventListener);
+      };
+    }
+  }, [setFeed]);
 
   return {
     handleLikePost,

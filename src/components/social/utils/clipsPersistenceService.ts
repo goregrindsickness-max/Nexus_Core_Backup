@@ -90,19 +90,94 @@ export async function getClipMediaBlob(clipId: string | number): Promise<Blob | 
   }
 }
 
-/**
- * Generates an active, playable URL for a clip.
- * If the URL is a dead/expired blob URL, attempts to revive it from IndexedDB.
- */
+export const DELETED_CLIPS_STORAGE_KEY = 'nexus_deleted_clips';
+
+export const KNOWN_GHOST_CLIP_IDS = new Set<string>([
+  'f64469f8-0340-4b31-acb5-f8b4a9d7e487',
+  '5403162d-1947-43aa-b5f6-38a1bd2a1b80',
+]);
+
+export function getDeletedClipIds(): Set<string> {
+  const result = new Set<string>(Array.from(KNOWN_GHOST_CLIP_IDS));
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = localStorage.getItem(DELETED_CLIPS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((id: any) => {
+            if (id) result.add(String(id).toLowerCase().trim());
+          });
+        }
+      }
+    }
+  } catch (_) {}
+  return result;
+}
+
+export function markClipDeleted(clipId: string | number): void {
+  if (!clipId) return;
+  try {
+    const idStr = String(clipId).toLowerCase().trim();
+    const current = getDeletedClipIds();
+    current.add(idStr);
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(DELETED_CLIPS_STORAGE_KEY, JSON.stringify(Array.from(current)));
+    }
+    purgeGhostClipsFromStorage();
+  } catch (_) {}
+}
+
+export function isGhostOrDeletedClip(clip: any): boolean {
+  if (!clip) return true;
+  const deletedSet = getDeletedClipIds();
+  const idStr = String(clip.id || '').toLowerCase().trim();
+  if (idStr && deletedSet.has(idStr)) return true;
+
+  const bandOrCreator = String(clip.bandName || clip.band_name || clip.creator || clip.username || '').toLowerCase().trim();
+  const caption = String(clip.caption || clip.title || '').toLowerCase().trim();
+  const vidUrl = String(clip.videoUrl || clip.video_url || '').toLowerCase().trim();
+  const audio = String(clip.audio || clip.songTitle || '').toLowerCase().trim();
+
+  // Specifically purge any ghost Virulent Excision clip that mistakenly embedded Devourment video
+  const isVE = bandOrCreator.includes('virulent excision') || caption.includes('virulent excision');
+  const isDevourmentEmbed = vidUrl.includes('jq26imgjbw4') || vidUrl.includes('devourment') || audio.includes('devourment') || audio.includes('pious impiety');
+
+  if (isVE && isDevourmentEmbed) {
+    return true;
+  }
+
+  return false;
+}
+
+export function purgeGhostClipsFromStorage(): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = localStorage.getItem('nexus_saved_clips');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(c => !isGhostOrDeletedClip(c));
+          localStorage.setItem('nexus_saved_clips', JSON.stringify(cleaned));
+        }
+      }
+    }
+    Array.from(KNOWN_GHOST_CLIP_IDS).forEach((id) => {
+      clipsMediaStore.removeItem(`clip_media_${id}`).catch(() => {});
+      clipsMediaStore.removeItem(id).catch(() => {});
+    });
+  } catch (_) {}
+}
+
 export async function resolveClipVideoPlaybackUrl(clipId: string | number, currentUrl: string): Promise<string> {
   const idStr = String(clipId || '').trim();
 
-  // If this is the Virulent Excision live clip with corrupted base64 or missing video URL
-  if (idStr === '5403162d-1947-43aa-b5f6-38a1bd2a1b80' && (!currentUrl || currentUrl.startsWith('/9j/') || currentUrl.startsWith('data:image'))) {
-    return 'https://www.youtube.com/watch?v=jQ26iMGJbW4';
+  // If this clip is a deleted or ghost entry, return empty to prevent playback
+  if (isGhostOrDeletedClip({ id: clipId })) {
+    return '';
   }
 
-  // If it's a valid remote http/https URL or server relative /uploads/ path that is not a blob, keep it
+  // If it's a valid remote http/https URL or server relative /uploads/ path that is NOT a blob: URL, keep it
   if (currentUrl && (currentUrl.startsWith('http://') || currentUrl.startsWith('https://') || currentUrl.startsWith('/uploads/')) && !currentUrl.startsWith('blob:')) {
     return currentUrl;
   }
@@ -119,12 +194,17 @@ export async function resolveClipVideoPlaybackUrl(clipId: string | number, curre
     console.warn(`[ClipsPersistence] Could not revive blob for clip "${clipId}":`, e);
   }
 
-  // If currentUrl was already http(s), preserve it
-  if (currentUrl && (currentUrl.startsWith('http://') || currentUrl.startsWith('https://'))) {
-    return currentUrl;
+  // If it was a blob: URL and IndexedDB did NOT have the blob (dead blob URL from previous browser session),
+  // NEVER return the dead blob URL as it will crash the player! Provide a valid fallback stream.
+  if (!currentUrl || currentUrl.startsWith('blob:') || currentUrl.startsWith('data:image')) {
+    // Pick a deterministic fallback based on clipId hash
+    const charCodeSum = idStr.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+    const fallback = SCENE_PERFORMANCE_VIDEOS[charCodeSum % SCENE_PERFORMANCE_VIDEOS.length] || 'https://www.youtube.com/watch?v=jQ26iMGJbW4';
+    console.log(`[ClipsPersistence] Replaced dead blob/missing URL for clip "${clipId}" with stream fallback -> ${fallback}`);
+    return fallback;
   }
 
-  return currentUrl || '';
+  return currentUrl;
 }
 
 /**
@@ -178,19 +258,19 @@ export function generateVideoThumbnail(file: File | Blob): Promise<string> {
   });
 }
 
-/**
- * Revives an entire array of clips, restoring any expired blob URLs from IndexedDB or resilient streams.
- */
 export async function reviveClipsArray(clips: PersistedClip[]): Promise<PersistedClip[]> {
   if (!Array.isArray(clips) || clips.length === 0) return [];
 
+  const validClips = clips.filter(c => !isGhostOrDeletedClip(c));
   const revived = await Promise.all(
-    clips.map(async (clip) => {
-      if (!clip.videoUrl || clip.videoUrl.startsWith('blob:') || clip.videoUrl.startsWith('idb:')) {
-        const resolvedUrl = await resolveClipVideoPlaybackUrl(clip.id, clip.videoUrl);
+    validClips.map(async (clip) => {
+      const rawUrl = clip.videoUrl || clip.video_url || '';
+      if (!rawUrl || rawUrl.startsWith('blob:') || rawUrl.startsWith('idb:') || rawUrl.startsWith('data:image')) {
+        const resolvedUrl = await resolveClipVideoPlaybackUrl(clip.id, rawUrl);
         return {
           ...clip,
           videoUrl: resolvedUrl,
+          video_url: resolvedUrl,
         };
       }
       return clip;
@@ -383,4 +463,27 @@ export async function resolveValidClipUserId(supabaseClient: any, userProfile: a
     } catch (_) {}
   }
   return uniqueUserUuid;
+}
+
+/**
+ * Feature flag & bucket empty/disabled guard for clips manifest lookups.
+ * Prevents querying clips/clips_manifest.json if the bucket or feature is disabled or empty.
+ */
+export const IS_CLIPS_MANIFEST_ENABLED = false;
+
+export async function fetchClipsManifest(): Promise<any[]> {
+  if (!IS_CLIPS_MANIFEST_ENABLED) {
+    // Bucket/feature is disabled or empty; return empty array immediately without egress/network requests
+    return [];
+  }
+  const client = getSupabase();
+  if (!client) return [];
+  try {
+    const { data, error } = await client.storage.from('clips').download('clips_manifest.json');
+    if (error || !data) return [];
+    const text = await data.text();
+    return JSON.parse(text);
+  } catch (_) {
+    return [];
+  }
 }

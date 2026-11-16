@@ -1,5 +1,7 @@
 // Tour Package Sync & Multi-Tour Management Module
 import { supabase } from './supabaseClient';
+import { authFetch, getSupabaseAccessToken } from '../utils/apiConfig';
+import { isShowEmbargoedOrDraft } from '../utils/showDisplayUtils';
 
 export interface TourVehicle {
   id: string;
@@ -671,11 +673,14 @@ class TourPackageManagerService {
 
     // 1. Fetch from server-side persistent endpoint (works across all devices & APK)
     try {
-      const res = await fetch('/api/tour-packages');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.tours) && json.tours.length > 0) {
-          cloudTours = json.tours.map((t: any) => this.normalizeTour(t));
+      const token = await getSupabaseAccessToken();
+      if (token) {
+        const res = await authFetch('/api/tour-packages');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.tours) && json.tours.length > 0) {
+            cloudTours = json.tours.map((t: any) => this.normalizeTour(t));
+          }
         }
       }
     } catch (_) {}
@@ -840,15 +845,20 @@ class TourPackageManagerService {
       }
 
       if (tourId) {
-        const isShowEmbargoed = s.status === 'Embargoed' || s.publication_status === 'embargoed_private' || s.is_published === false;
+        const isShowEmbargoed = isShowEmbargoedOrDraft(s);
         const resolvedHeadliner = s.headliner || s.name || 'Headliner Band';
+        const resolvedPubStatus =
+          s.publication_status ||
+          extra.publication_status ||
+          extra.publicationStatus ||
+          (isShowEmbargoed ? 'embargoed_private' : 'public_announced');
         
         if (!tourMetaMap.has(tourId)) {
           tourMetaMap.set(tourId, {
             tourTitle: tourTitle || `${resolvedHeadliner} Tour 2026`,
             headliner: resolvedHeadliner,
-            publicationStatus: s.publication_status || (isShowEmbargoed ? 'embargoed_private' : 'public_announced'),
-            embargoUntilDate: s.embargo_until_date
+            publicationStatus: resolvedPubStatus,
+            embargoUntilDate: s.embargo_until_date || extra.embargo_until_date
           });
         }
 
@@ -976,23 +986,28 @@ class TourPackageManagerService {
 
     // 1. Push to server persistent API endpoint
     try {
-      fetch('/api/tour-packages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tour })
-      }).catch(() => {});
+      const token = await getSupabaseAccessToken();
+      if (token) {
+        authFetch('/api/tour-packages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tour })
+        }).catch(() => {});
+      }
     } catch (_) {}
 
     // 2. Sync all stops directly to Supabase `shows` table with embargo & publication flags
     try {
       if (Array.isArray(tour.stops) && tour.stops.length > 0) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const sessionUserId = sessionData?.session?.user?.id || localStorage.getItem('nexus_auth_user_id') || '';
         for (const stop of tour.stops) {
           const hexId = (stop.id || '').replace(/[^a-f0-9]/gi, '').padEnd(32, '0').slice(0, 32);
           const stopUuid = hexId.slice(0, 8) + '-' + hexId.slice(8, 12) + '-4' + hexId.slice(13, 16) + '-a' + hexId.slice(17, 20) + '-' + hexId.slice(20, 32);
 
           const showRecord = {
             id: stopUuid,
-            creator_id: '24523979-7f72-422b-8fb6-85634345d81c',
+            ...(sessionUserId ? { creator_id: sessionUserId } : {}),
             show_name: `${tour.title} - ${stop.city || 'Tour Stop'}`,
             headliner: tour.headlinerClientName || 'Headliner Band',
             date: stop.date,
@@ -1007,7 +1022,7 @@ class TourPackageManagerService {
             set_time: stop.showStartTime || '20:00',
             promoter_contact: stop.venueContactName || '',
             parking_arrangements: stop.parkingNotes || '',
-            status: isEmbargoed ? 'Embargoed' : 'Active',
+            status: 'Active',
             is_managed_client_booking: true,
             additional_notes: JSON.stringify({
               tour_id: tour.id,
@@ -1075,7 +1090,10 @@ class TourPackageManagerService {
 
   private async deleteFromCloud(tourId: string) {
     try {
-      fetch(`/api/tour-packages/${tourId}`, { method: 'DELETE' }).catch(() => {});
+      const token = await getSupabaseAccessToken();
+      if (token) {
+        authFetch(`/api/tour-packages/${tourId}`, { method: 'DELETE' }).catch(() => {});
+      }
       await supabase.from('tour_packages').delete().eq('id', tourId);
     } catch (_) {}
   }

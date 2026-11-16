@@ -2,7 +2,7 @@ import React from 'react';
 import { User, Settings, Bell } from 'lucide-react';
 import { LeftProfileDrawer } from '../drawers/LeftProfileDrawer';
 import { RightNotificationsDrawer } from '../drawers/RightNotificationsDrawer';
-import { SceneRadioPlayer } from '../player/SceneRadioPlayer';
+
 
 export interface FeedSideDrawersProps {
   leftDrawerOpen: boolean;
@@ -28,6 +28,7 @@ export interface FeedSideDrawersProps {
   setViewingReceipt: (val: any) => void;
   isMiguelNameOrProfile: any;
   userProfile?: any;
+  setUserProfile?: React.Dispatch<React.SetStateAction<any>>;
   activeBand?: any;
   portalRole: string;
   isEmbedded?: boolean;
@@ -61,6 +62,12 @@ export interface FeedSideDrawersProps {
   setProfileStealthMode: (val: boolean) => void;
   profileFavoriteSong: string;
   setProfileFavoriteSong: (val: string) => void;
+  profileBirthdayMonth?: number | null;
+  setProfileBirthdayMonth?: (val: number | null) => void;
+  profileBirthdayDay?: number | null;
+  setProfileBirthdayDay?: (val: number | null) => void;
+  profileShowBirthdayShoutout?: boolean;
+  setProfileShowBirthdayShoutout?: (val: boolean) => void;
   profileEmail: string;
   setProfileEmail: (val: string) => void;
   profilePassword: string;
@@ -131,6 +138,7 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
   setViewingReceipt,
   isMiguelNameOrProfile,
   userProfile,
+  setUserProfile,
   activeBand,
   portalRole,
   isEmbedded,
@@ -164,6 +172,12 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
   setProfileStealthMode,
   profileFavoriteSong,
   setProfileFavoriteSong,
+  profileBirthdayMonth,
+  setProfileBirthdayMonth,
+  profileBirthdayDay,
+  setProfileBirthdayDay,
+  profileShowBirthdayShoutout,
+  setProfileShowBirthdayShoutout,
   profileEmail,
   setProfileEmail,
   profilePassword,
@@ -234,6 +248,7 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
         isMiguelNameOrProfile={typeof isMiguelNameOrProfile === "function" ? isMiguelNameOrProfile : () => Boolean(isMiguelNameOrProfile)}
         setLeftDrawerOpen={setLeftDrawerOpen}
         userProfile={userProfile}
+        setUserProfile={setUserProfile}
         activeBand={activeBand}
         portalRole={portalRole}
         isEmbedded={isEmbedded}
@@ -267,6 +282,12 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
         setProfileStealthMode={setProfileStealthMode}
         profileFavoriteSong={profileFavoriteSong}
         setProfileFavoriteSong={setProfileFavoriteSong}
+        profileBirthdayMonth={profileBirthdayMonth}
+        setProfileBirthdayMonth={setProfileBirthdayMonth}
+        profileBirthdayDay={profileBirthdayDay}
+        setProfileBirthdayDay={setProfileBirthdayDay}
+        profileShowBirthdayShoutout={profileShowBirthdayShoutout}
+        setProfileShowBirthdayShoutout={setProfileShowBirthdayShoutout}
         profileEmail={profileEmail}
         setProfileEmail={setProfileEmail}
         profilePassword={profilePassword}
@@ -310,16 +331,7 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
         userProfile={userProfile}
       />
 
-      <SceneRadioPlayer
-        showSceneRadio={showSceneRadio}
-        setShowSceneRadio={setShowSceneRadio}
-        activeTab={activeTab}
-        selectedChatId={selectedChatId}
-        traysHiddenOnMobile={traysHiddenOnMobile}
-        triggerNotification={triggerNotification}
-        portalRole={portalRole}
-        userProfile={userProfile}
-      />
+
 
       {/* Floating Left Handle - Pull to open User/Profile settings */}
       {activeTab !== 'reels' && activeTab !== 'messages' && !traysHiddenOnMobile && (
@@ -347,14 +359,22 @@ export const FeedSideDrawers: React.FC<FeedSideDrawersProps> = ({
           {/* Floating Right Handle - Pull to open Notifications */}
           <button
             onClick={() => setRightDrawerOpen(true)}
-            className={`fixed right-0 top-[55%] z-30 bg-zinc-900/95 border border-r-0 border-zinc-800 rounded-l-xl py-4 px-1.5 flex flex-col items-center gap-1.5 group transition-all duration-300 ${
-              portalRole === 'band'
-                ? 'hover:bg-emerald-950/95 hover:border-emerald-500/50 shadow-[-4px_0_20px_rgba(57,255,20,0.2)]'
+            className={`fixed right-0 top-[55%] z-30 bg-zinc-900/95 border border-r-0 rounded-l-xl py-4 px-1.5 flex flex-col items-center gap-1.5 group transition-all duration-300 ${
+              unreadNotifsCount > 0
+                ? portalRole === 'band'
+                  ? 'border-[#39ff14]/70 shadow-[-3px_0_14px_rgba(57,255,20,0.42)] hover:bg-emerald-950/95'
+                  : portalRole === 'promoter'
+                  ? 'border-yellow-400/75 shadow-[-3px_0_14px_rgba(234,179,8,0.42)] hover:bg-yellow-950/95'
+                  : portalRole === 'fan_only'
+                  ? 'border-cyan-400/75 shadow-[-3px_0_14px_rgba(34,211,238,0.42)] hover:bg-cyan-950/95'
+                  : 'border-rose-500 shadow-[0_0_12px_#f43f5e] hover:bg-rose-950/95'
+                : portalRole === 'band'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-emerald-950/95 hover:border-emerald-500/50'
                 : portalRole === 'promoter'
-                ? 'hover:bg-yellow-950/95 hover:border-yellow-500/50 shadow-[-4px_0_20px_rgba(234,179,8,0.2)]'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-yellow-950/95 hover:border-yellow-500/50'
                 : portalRole === 'fan_only'
-                ? 'hover:bg-cyan-950/95 hover:border-cyan-500/50 shadow-[-4px_0_20px_rgba(34,211,238,0.2)]'
-                : 'hover:bg-rose-950/95 hover:border-rose-500/50 shadow-[-4px_0_20px_rgba(244,63,94,0.15)]'
+                ? 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-cyan-950/95 hover:border-cyan-500/50'
+                : 'border-zinc-800 shadow-[-2px_0_12px_rgba(0,0,0,0.7)] hover:bg-rose-950/95 hover:border-rose-500/50'
             }`}
             title="Open Notifications"
           >

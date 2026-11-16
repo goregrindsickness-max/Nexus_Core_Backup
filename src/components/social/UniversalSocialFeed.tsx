@@ -1,5 +1,12 @@
 import { SocialThemeShell } from "./SocialThemeShell";
 import { FeedViewRouter } from "./FeedViewRouter";
+import {
+  ProfileCommandBar,
+  PostComposerTrigger,
+  ENABLE_COMPACT_COMPOSER_STRIP_AB_TEST,
+  UpcomingShowsCarousel,
+} from "../feed";
+import { resolveActivePersona } from "./utils/personaResolution";
 import { useTapePlayer } from "./hooks/useTapePlayer";
 import { useSocialFollowsAndProfiles } from "./hooks/useSocialFollowsAndProfiles";
 import { useSocialMarketplaceState } from "./hooks/useSocialMarketplaceState";
@@ -51,29 +58,11 @@ import { resolveActiveUserId, syncPostToSupabase, generateUUID } from './utils/p
 import { mergePostWithReactions } from './utils/reactionStore';
 import { useSocialProfileState } from './hooks/useSocialProfileState';
 import { FeedTopHeader } from './navigation/FeedTopHeader';
-import { FeedSideDrawers } from './navigation/FeedSideDrawers';
-import { SocialModalsOverlay } from './modals/SocialModalsOverlay';
-import { SceneRadioPlayer } from './player/SceneRadioPlayer';
-import { CartDrawer } from './drawers/CartDrawer';
-import { AlbumDetailsModal } from './modals/AlbumDetailsModal';
-import { AttachSongModal } from './modals/AttachSongModal';
-import { PhotoLightboxModal } from './modals/PhotoLightboxModal';
-import { ClipsOverlaysModal } from './modals/ClipsOverlaysModal';
-import { TicketEscrowModal } from './modals/TicketEscrowModal';
-import { FanPitWallDrawer } from './drawers/FanPitWallDrawer';
-import { StripeCartCheckoutModal } from './modals/StripeCartCheckoutModal';
-import { LeftProfileDrawer } from './drawers/LeftProfileDrawer';
-import { RightNotificationsDrawer } from './drawers/RightNotificationsDrawer';
-import { UploadClipModal } from './modals/UploadClipModal';
-import { UploadStoryModal } from './modals/UploadStoryModal';
-import { StoryViewerModal } from './modals/StoryViewerModal';
-import { EventCompanionModal } from './modals/EventCompanionModal';
 import { formatTimeAgo, isPastShowDate } from '../../utils/socialFeedUtils';
+import { isShowEmbargoedOrDraft, parseShowExtraNotes } from '../../utils/showDisplayUtils';
 import { isValidStorageOrImageUrl } from '../../services/storageService';
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { InteractiveCropperModal } from '../InteractiveCropperModal';
-import { ProfileMarketplaceTab } from '../profile/ProfileMarketplaceTab';
 import { MapPin, Calendar, Clock, ArrowRight, ArrowLeft, Share2, Flame, Zap, Check,
   CheckCircle, X, Tag, ShoppingCart, Ticket, Briefcase, Volume2, VolumeX, Shield, MessageSquare, MessageCircle, Repeat, TrendingUp, Image, Home, Bell, Settings, Search, User, CreditCard, Crown, Library, Users, PlayCircle, Youtube, Wifi, WifiOff, Database, AlertTriangle, Lock, Unlock, Trash2, Plus, Minus, RefreshCw, ArrowUp, ArrowDown, Edit2, FileUp, Folder, Heart, Send, Award, UserPlus, UserCheck,
    Music, Activity, Disc, Play, Pause, Square, SkipBack, SkipForward, Link as LinkIcon, Network, Pin as PinIcon, Image as ImageIcon, Upload, Compass, MoreVertical, LayoutGrid, ArrowUpRight, Menu, LogOut, ChevronRight, ChevronDown, ChevronUp, Filter, ShoppingBag, PauseCircle, FastForward, Rewind, Maximize2, Star, Globe, Fingerprint, Box, Hash, Mic, Settings2, SlidersHorizontal, Info, Phone, FileText, BellOff, Users as UsersGroup, Archive, Download, EyeOff, ShieldAlert, UserMinus, Sparkles, PlaySquare, Radio, Video, Camera, Smile, ThumbsUp, CornerUpLeft , Palette, DollarSign, MinusCircle, Slash, Eye, Shirt} from 'lucide-react';
@@ -81,41 +70,32 @@ import { BAND_PORTAL_BILLING } from '../../config/billingMatrix';
 import { PLATFORM_TRANSACTION_FEES } from '../../constants/fees';
 import { profileStore, socialFeedStore } from '../../utils/indexedDB';
 import { supabase } from '../../lib/supabaseClient';
-import { getSupabase, subscribeToTable, executeWithSchemaResilience, uploadBase64ToStorage, normalizeLoadedProfile, createShopMerchItem, fetchShopMerchItems, sanitizeMicroGenres, formatBandLocation, sanitizeShowForDb, ensureUUID } from '../../supabase';
+import { getSupabase, subscribeToTable, executeWithSchemaResilience, uploadBase64ToStorage, normalizeLoadedProfile, createShopMerchItem, fetchShopMerchItems, sanitizeMicroGenres, formatBandLocation, sanitizeShowForDb, ensureUUID, syncCommunityShowToCloud, reconcilePendingCommunityShows } from '../../supabase';
 import { uploadFeedMedia } from '../../lib/storage';
-import { communityBandManager } from '../../lib/communityBands';
+import { communityBandManager, pickBestBandImage, isGorgasmBand, GORGASM_OFFICIAL_LOGO } from '../../lib/communityBands';
+import { isProfileFollowedGlobally, saveFollowStateGlobally, FOLLOW_EVENT_NAME, getScopedFollowsMap, isEntityTargetObject } from '../../utils/followSyncService';
 import { hasRegisteredWorkspace } from '../../types';
 import { tourPackageManager } from '../../lib/tourPackageManager';
-import Barcode from 'react-barcode';
 import { MASTER_GENRES } from '../../constants/genres';
-import { InboxPreferences } from '../messaging/InboxPreferences';
 import MarqueeText from '../MarqueeText';
 import { getProfileGlowInfo } from '../../utils/profileGlow';
 import { triggerPictureViewer } from '../../utils/avatarPopupEvents';
-import { TimelineTab } from '../profile/TimelineTab';
-import { SocialSubNav } from './SocialSubNav';
 import { formatTimeTo12Hour } from '../../lib/timeUtils';
-import { SocialMapOverlay } from './SocialMapOverlay';
-import { SubViewControlPanels } from './SubViewControlPanels';
-import PromoterArchivesModal from './modals/PromoterArchivesModal';
-import CreateCommunityShowModal from './modals/CreateCommunityShowModal';
-import { InlineShareModal } from './modals/InlineShareModal';
-import { InlineReactionsModal } from './modals/InlineReactionsModal';
-import { PollCreationModal } from './modals/PollCreationModal';
-import { SongShareModal } from './modals/SongShareModal';
-import { AddItemModal } from './modals/AddItemModal';
-import { PollCreationModal as PollCreateModal } from './modals/PollCreationModal';
-import { MerchDropModal } from './modals/MerchDropModal';
-import { ReportProfileModal } from './modals/ReportProfileModal';
-import { SubmitEpkModal, ViewEpksModal, EpkModals } from './modals/EpkModals';
-import { AdminPinModal } from './modals/AdminPinModal';
-import { AdminConsoleModal } from './modals/AdminConsoleModal';
 import { formatLocationDisplay } from '../../constants/location';
-import { PublicProfileModal } from './modals/PublicProfileModal';
-import { DirectMessageDrawer } from './modals/DirectMessageDrawer';
-import { ProfileHubCard } from './ProfileHubCard';
-import { FollowersModal } from './follows';
 import { PROFILE_REGISTRY, isMiguelNameOrProfile } from './utils/profileUtils';
+import { consumePendingShowDeepLink, peekPendingDmThread } from '../../lib/pushClient';
+
+const FeedSideDrawers = React.lazy(() =>
+  import('./navigation/FeedSideDrawers').then((m) => ({ default: m.FeedSideDrawers }))
+);
+const SocialModalsOverlay = React.lazy(() =>
+  import('./modals/SocialModalsOverlay').then((m) => ({ default: m.SocialModalsOverlay }))
+);
+const StoryViewerModal = React.lazy(() =>
+  import('./modals/StoryViewerModal').then((m) => ({ default: m.StoryViewerModal }))
+);
+const PromoterArchivesModal = React.lazy(() => import('./modals/PromoterArchivesModal'));
+const CreateCommunityShowModal = React.lazy(() => import('./modals/CreateCommunityShowModal'));
 import { DEFAULT_LABEL_POSTS, DEFAULT_INBOUND_INQUIRIES } from '../../data/mockSocialData';
 import { handleMarkAllAsRead } from '../../lib/chat';
 import { useNexusMessaging } from '../messaging/useNexusMessaging';
@@ -125,7 +105,6 @@ import {
   type FeedItem,
   mockLiveTonight,
   bandSetlists,
-  mockStories,
   mockInAppSongs,
   mockFeed,
   ROSTER_CATALOGS,
@@ -133,6 +112,7 @@ import {
   FRONTEND_FALLBACK_PLAYLISTS
 } from '../../data/socialFeedMockData';
 import { playAmbientMetalDrone as playAmbientMetalDroneEngine } from '../../utils/audioEngine';
+import { formatCleanLocation } from '../../utils/bandProfileUtils';
 import {
   isAudioUrl,
   getCollectionsTrackDuration,
@@ -154,6 +134,7 @@ export function UniversalSocialFeed({
   setUserProfile,
   activeBand,
   activeBandId,
+  setActiveBandId,
   onLogout, 
   onUpgradeToPro, 
   triggerNotification, 
@@ -172,7 +153,9 @@ export function UniversalSocialFeed({
   setDashboardV2ActiveNav,
   dashboardV2ActiveNav,
   shows: propShows,
-  setShows: propSetShows
+  setShows: propSetShows,
+  showSceneRadio: propShowSceneRadio,
+  setShowSceneRadio: propSetShowSceneRadio
 }: any) {
   const portalRoleState = useSocialPortalRole({
     initialRole: propPortalRole,
@@ -299,6 +282,17 @@ export function UniversalSocialFeed({
   });
   const [showSettings, setShowSettings] = useState(false);
   const [drawerCurrentView, setDrawerCurrentView] = useState<string>('root');
+
+  useEffect(() => {
+    const handleOpenProfileSettings = () => {
+      setDrawerCurrentView('profile');
+      setLeftDrawerOpen(true);
+    };
+    window.addEventListener('nexus:open-profile-settings', handleOpenProfileSettings);
+    return () => {
+      window.removeEventListener('nexus:open-profile-settings', handleOpenProfileSettings);
+    };
+  }, []);
   const [followingActiveTab, setFollowingActiveTab] = useState<'bands' | 'venues' | 'creatives' | 'labels' | 'friends'>('bands');
   const [followingSearchQuery, setFollowingSearchQuery] = useState('');
   const [selectedGigOnMap, setSelectedGigOnMap] = useState<any>(null);
@@ -315,6 +309,13 @@ export function UniversalSocialFeed({
   const [activeFeedCategoryFilter, setActiveFeedCategoryFilter] = useState<string>('all');
 
   const handleCommunityShowSubmit = async (payload: any) => {
+    if (payload?._isBatch) {
+      setIsCommunityShowModalOpen(false);
+      setEditingCommunityShow(null);
+      fetchEventsAndSetlists();
+      return;
+    }
+
     let currentUserId = userProfile?.id;
     if (!currentUserId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentUserId)) {
       try {
@@ -337,7 +338,6 @@ export function UniversalSocialFeed({
     const headlinerVal = payload.headliner || payload.name || 'Live Show';
     const inputTitle = payload.show_name || payload.festival_name || payload.title || payload.name || payload.headliner;
     const finalShowName = inputTitle || `${headlinerVal} Live`;
-    const venueVal = payload.venue || payload.venue_name || payload.venue_address || payload.name || 'Underground Venue';
 
     const newShow: any = {
       id: showId,
@@ -422,7 +422,7 @@ export function UniversalSocialFeed({
         }
       });
 
-      localStorageShowsMap[showId] = { ...newShow };
+      localStorageShowsMap[showId] = { ...newShow, _pendingCloudSync: true };
       localStorage.setItem('nexus_core_shows_extended', JSON.stringify(localStorageShowsMap));
 
       // Record in user's created shows cache
@@ -443,76 +443,25 @@ export function UniversalSocialFeed({
       }
     } catch (_) {}
 
-    try {
-      const sb = getSupabase();
-      if (sb) {
-        const pruned = sanitizeShowForDb(newShow);
-        const { error } = await executeWithSchemaResilience(async (payload) => {
-          return await sb.from('shows').upsert([payload]);
-        }, pruned);
+    const syncResult = await syncCommunityShowToCloud(newShow, {
+      userProfileId: currentUserId,
+    });
 
-        if (error) {
-          console.error('Supabase community show upsert error:', error);
-          triggerNotification?.(`⚠️ Supabase error saving show: ${error.message || 'Check connection'}`);
-        } else {
-          console.log('Supabase community show synced successfully:', showId);
-          triggerNotification?.(editingCommunityShow ? `✏️ Community show "${newShow.name}" updated & synced to Supabase!` : `🌍 Community show "${newShow.name}" posted & synced to Supabase!`);
-          setIsCommunityShowModalOpen(false);
-          setEditingCommunityShow(null);
-          
-          try {
-            const formattedDoors = newShow.doors_time ? formatTimeTo12Hour(newShow.doors_time) : '';
-            const doorsDisplay = formattedDoors 
-              ? (String(formattedDoors).toLowerCase().includes('door') ? formattedDoors : `Doors ${formattedDoors}`)
-              : (newShow.set_time ? `Set ${formatTimeTo12Hour(newShow.set_time)}` : 'Doors 7:30 PM');
-
-            const newGig = {
-              ...newShow,
-              id: showId,
-              venue: newShow.venue || newShow.venue_name || 'Underground Venue',
-              venue_name: newShow.venue_name || newShow.venue || 'Underground Venue',
-              venue_address: newShow.venue_address || undefined,
-              capacity: newShow.capacity,
-              venue_capacity: newShow.capacity,
-              headliner: newShow.headliner || newShow.name || 'Live Show',
-              time: doorsDisplay,
-              date: newShow.date || 'Upcoming',
-              city: newShow.city,
-              state_province: newShow.state_province,
-              country: newShow.country,
-              distance: undefined,
-              price: newShow.price || (newShow.external_ticket_url ? 'External Tickets' : 'Free / Crowdsourced'),
-              isFollowed: false,
-              is_community_submitted: true,
-              external_ticket_url: newShow.external_ticket_url,
-              ticket_url: newShow.ticket_url,
-              ticketsAvailable: true,
-              ticketStatus: 'active'
-            };
-            setLiveEvents(prev => {
-              const normNewHeadliner = String(newGig.headliner || '').toLowerCase().trim();
-              const normNewDate = String(newGig.date || '').toLowerCase().trim();
-              const filtered = prev.filter(g => {
-                if (g.id === showId || g.id === payload.id) return false;
-                const gHeadliner = String(g.headliner || (g as any).name || '').toLowerCase().trim();
-                const gDate = String(g.date || '').toLowerCase().trim();
-                if (gHeadliner && normNewDate && gHeadliner === normNewHeadliner && gDate === normNewDate) return false;
-                return true;
-              });
-              return [newGig, ...filtered];
-            });
-          } catch (_) {}
-          return;
-        }
-      } else {
-        triggerNotification?.('⚠️ Supabase client not configured. Saved locally.');
-      }
-    } catch (e) {
-      console.warn('Community show db upsert exception:', e);
-      triggerNotification?.('⚠️ Supabase connection exception: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    if (syncResult.synced) {
+      console.log('Supabase community show synced successfully:', showId);
+      triggerNotification?.(
+        editingCommunityShow
+          ? `✏️ Community show "${newShow.name}" updated & synced to Supabase!`
+          : `🌍 Community show "${newShow.name}" posted & synced to Supabase!`
+      );
+    } else {
+      console.warn('Supabase community show queued for retry:', syncResult.error);
+      const reason = syncResult.error?.code === 'AUTH_REQUIRED'
+        ? 'Sign in to publish globally'
+        : (syncResult.error?.message || 'Saved locally & queued for cloud sync');
+      triggerNotification?.(`⚠️ "${newShow.name}" saved locally & queued for cloud sync (${reason}).`);
     }
 
-    triggerNotification?.(editingCommunityShow ? `✏️ Community show "${newShow.name}" updated locally.` : `🌍 Community show "${newShow.name}" posted locally (Supabase offline/unconfigured).`);
     setIsCommunityShowModalOpen(false);
     setEditingCommunityShow(null);
 
@@ -925,6 +874,11 @@ export function UniversalSocialFeed({
 
 
 
+  // Dispatch feed loaded event for Scene Radio coordination
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('nexus_feed_loaded'));
+  }, []);
+
   // Global Notification Listener
   useEffect(() => {
     const handleAddNotification = (e: any) => {
@@ -1039,10 +993,7 @@ export function UniversalSocialFeed({
       if (!supabaseClient) return;
 
       try {
-        let localFollows: Record<string, boolean> = {};
-        try {
-          localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
-        } catch (e) {}
+        const localFollows: Record<string, boolean> = getScopedFollowsMap(userProfile?.id);
 
         let extendedMap: Record<string, any> = {};
         try {
@@ -1078,6 +1029,7 @@ export function UniversalSocialFeed({
         if (!eventsError && eventsData && eventsData.length > 0) {
           compiledGigs = eventsData
             .filter(e => {
+              if (isShowEmbargoedOrDraft(e, allActiveTours)) return false;
               const eId = String(e.id || '').toLowerCase().trim();
               const eH = String(e.headliner || e.band_name || e.name || '').toLowerCase().trim();
               const eD = String(e.date || '').toLowerCase().trim();
@@ -1092,6 +1044,8 @@ export function UniversalSocialFeed({
             const isFollowed = !!(localFollows[headlinerClean.toLowerCase()] || (e.band_id && localFollows[e.band_id]));
             const venueClean = extra?.venue || extra?.venue_name || e.venue || e.venue_name || e.venue_address || 'Metal Venue';
             const priceClean = extra?.price || e.price || (extra?.day_of_show_price ? `$${extra.day_of_show_price}` : undefined) || (extra?.presale_price ? `$${extra.presale_price}` : undefined) || (e.ticket_price ? `$${e.ticket_price}` : undefined);
+            const rawFlyer = extra?.flyer_url || extra?.flyerUrl || e.flyer_url || e.flyerUrl || e.image_url || e.cover_url || undefined;
+            const cleanFlyer = (typeof rawFlyer === 'string' && !rawFlyer.includes('photo-1514525253161-7a46d19cd819') && !rawFlyer.includes('photo-1470225620780-dba8ba36b745') && !rawFlyer.includes('photo-1516450360452-9312f5e86fc7')) ? rawFlyer : undefined;
             return {
               id: e.id,
               venue: venueClean,
@@ -1102,6 +1056,8 @@ export function UniversalSocialFeed({
               distance: e.distance,
               price: priceClean,
               isFollowed,
+              flyer_url: cleanFlyer,
+              flyerUrl: cleanFlyer,
               external_ticket_url: extra?.external_ticket_url || e.external_ticket_url,
               ticket_url: extra?.ticket_url || e.ticket_url || extra?.external_ticket_url || e.external_ticket_url,
               ticketsAvailable: !!(extra?.external_ticket_url || e.external_ticket_url || extra?.ticket_url || e.ticket_url || priceClean),
@@ -1114,11 +1070,12 @@ export function UniversalSocialFeed({
         try {
           const allRawShows: any[] = [];
 
-          // 1. Fetch from Supabase shows table
+          // 1. Fetch from Supabase shows table (beyond default 1000-row cap)
           const { data: showsData } = await supabaseClient
             .from('shows')
             .select('*')
-            .order('date', { ascending: true });
+            .order('date', { ascending: true })
+            .range(0, 4999);
 
           if (showsData && Array.isArray(showsData) && showsData.length > 0) {
             allRawShows.push(...showsData);
@@ -1129,10 +1086,18 @@ export function UniversalSocialFeed({
             }
           }
 
+          // Reconcile any locally-created community shows (e.g. stranded on APK) up to Supabase
+          try {
+            const reconcileRes = await reconcilePendingCommunityShows(showsData || [], deletedShowIds);
+            if (reconcileRes.syncedShows.length > 0) {
+              allRawShows.push(...reconcileRes.syncedShows);
+            }
+          } catch (_) {}
+
           if (allRawShows.length > 0) {
-            // Deduplicate raw shows by id or headliner + date
+            // Deduplicate raw shows by id or headliner + date, merging flyer_url if present on duplicate
             const dedupedRawShows: any[] = [];
-            const seenShowMap = new Set<string>();
+            const seenShowMap = new Map<string, number>();
 
             allRawShows.forEach(s => {
               if (!s) return;
@@ -1141,15 +1106,25 @@ export function UniversalSocialFeed({
               const sD = String(s.date || s.show_date || '').toLowerCase().trim();
               const sig = sId ? `id_${sId}` : `h_${sH}__${sD}`;
               if (!seenShowMap.has(sig)) {
-                seenShowMap.add(sig);
+                seenShowMap.set(sig, dedupedRawShows.length);
                 dedupedRawShows.push(s);
+              } else {
+                const existingIdx = seenShowMap.get(sig)!;
+                const existing = dedupedRawShows[existingIdx];
+                if (existing && !(existing.flyer_url || existing.flyerUrl) && (s.flyer_url || s.flyerUrl)) {
+                  dedupedRawShows[existingIdx] = {
+                    ...existing,
+                    flyer_url: s.flyer_url || s.flyerUrl,
+                    flyerUrl: s.flyerUrl || s.flyer_url
+                  };
+                }
               }
             });
 
             const todayStr = new Date().toISOString().split('T')[0];
             const showsGigs = dedupedRawShows
               .filter(s => {
-                if (s.is_published === false || s.publication_status === 'embargoed_private' || s.publication_status === 'draft' || s.status === 'Draft' || s.status === 'Embargoed') {
+                if (isShowEmbargoedOrDraft(s, allActiveTours)) {
                   return false;
                 }
                 const sDate = s.date || s.show_date;
@@ -1159,13 +1134,8 @@ export function UniversalSocialFeed({
                 if (!sH.includes('nile') && (isPastShowDate(sDate) || sId === '5c8a0bc3-aff4-491f-9693-d3ca3ed406ee' || (sH.includes('vader') && String(sDate).includes('2026-09-24')))) {
                   return false;
                 }
-                if (s.additional_notes) {
-                  try {
-                    const extra = typeof s.additional_notes === 'string' ? JSON.parse(s.additional_notes) : s.additional_notes;
-                    if (extra.archived || extra.status === 'Archived' || extra.completed) return false;
-                    if (extra.tour_id && isTourEmbargoed(extra.tour_id)) return false;
-                  } catch (_) {}
-                }
+                const extra = parseShowExtraNotes(s);
+                if (extra.archived || extra.status === 'Archived' || extra.completed) return false;
                 const sD = String(s.date || s.show_date || '').toLowerCase().trim();
                 const sig = `${sH}__${sD}`;
                 if (sId && deletedShowIds.has(sId)) return false;
@@ -1174,6 +1144,7 @@ export function UniversalSocialFeed({
               })
               .map(s => {
               const extra = extendedMap[s.id] || (s.show_name ? Object.values(extendedMap).find((v: any) => v.name === s.show_name || v.show_name === s.show_name || (v.date === s.date && v.city === s.city)) : null);
+              const extraNotes = parseShowExtraNotes(s);
               const headlinerClean = (extra?.headliner || s.headliner || s.band_name || s.name || s.show_name || extra?.name || 'Headliner').trim();
               const isFollowed = !!(localFollows[headlinerClean.toLowerCase()] || (s.band_id && localFollows[s.band_id]));
               
@@ -1197,7 +1168,12 @@ export function UniversalSocialFeed({
                     } else if (parsedDate.getTime() === tomorrowNorm.getTime()) {
                       dateDisplay = 'Tomorrow';
                     } else {
-                      dateDisplay = parsedDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+                      dateDisplay = parsedDate.toLocaleDateString(undefined, {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                        ...(year !== today.getFullYear() ? { year: 'numeric' } : {}),
+                      });
                     }
                   }
                 } catch (e) {}
@@ -1240,6 +1216,8 @@ export function UniversalSocialFeed({
               const venueNameVal = extra?.venue_name || s.venue_name || extra?.venue || s.venue || 'Underground Venue';
               const venueAddrVal = extra?.venue_address || s.venue_address;
               const capVal = extra?.capacity || s.capacity || extra?.venue_capacity || s.venue_capacity || extra?.expected_attendance || s.expected_attendance;
+              const rawFlyer = extra?.flyer_url || extra?.flyerUrl || s.flyer_url || s.flyerUrl || extraNotes?.flyer_url || extraNotes?.flyerUrl || s.image_url || s.cover_url || undefined;
+              const resolvedFlyer = (typeof rawFlyer === 'string' && !rawFlyer.includes('photo-1514525253161-7a46d19cd819') && !rawFlyer.includes('photo-1470225620780-dba8ba36b745') && !rawFlyer.includes('photo-1516450360452-9312f5e86fc7')) ? rawFlyer : undefined;
 
               return {
                 ...s,
@@ -1261,6 +1239,8 @@ export function UniversalSocialFeed({
                 day_of_show_price: extra?.day_of_show_price || s.day_of_show_price,
                 presale_price: extra?.presale_price || s.presale_price,
                 safety_code: extra?.safety_code || s.safety_code,
+                flyer_url: resolvedFlyer,
+                flyerUrl: resolvedFlyer,
                 isFollowed,
                 isFromShowsTable: true,
                 source: 'shows_table',
@@ -1285,7 +1265,18 @@ export function UniversalSocialFeed({
             const ext = extendedMap[k];
             if (ext) {
               const extSig = `${String(ext.headliner || ext.name || '').toLowerCase().trim()}__${String(ext.date || ext.show_date || '').toLowerCase().trim()}`;
+              // Before deleting a synced sh_comm_ entry, ensure its flyer_url is preserved on the matching compiledGig
               if (syncedSignatures.has(extSig) && k.startsWith('sh_comm_')) {
+                const extFlyer = ext.flyer_url || ext.flyerUrl;
+                if (extFlyer) {
+                  compiledGigs.forEach(g => {
+                    const gSig = `${String(g.headliner || '').toLowerCase().trim()}__${String(g.rawDate || g.date || '').toLowerCase().trim()}`;
+                    if ((g.id === ext.id || gSig === extSig) && !(g.flyer_url || g.flyerUrl)) {
+                      g.flyer_url = extFlyer;
+                      g.flyerUrl = extFlyer;
+                    }
+                  });
+                }
                 delete extendedMap[k];
                 hasCleanedExtended = true;
               }
@@ -1302,14 +1293,8 @@ export function UniversalSocialFeed({
           const localGigs = Object.values(extendedMap)
             .filter((localShow: any) => {
               if (!localShow) return false;
-              if (localShow.is_published === false || localShow.publication_status === 'embargoed_private' || localShow.publication_status === 'draft' || localShow.status === 'Draft' || localShow.status === 'Embargoed') {
+              if (isShowEmbargoedOrDraft(localShow, allActiveTours)) {
                 return false;
-              }
-              if (localShow.additional_notes) {
-                try {
-                  const extra = typeof localShow.additional_notes === 'string' ? JSON.parse(localShow.additional_notes) : localShow.additional_notes;
-                  if (extra.tour_id && isTourEmbargoed(extra.tour_id)) return false;
-                } catch (_) {}
               }
               const localId = String(localShow.id || '').toLowerCase().trim();
               const localH = String(localShow.headliner || localShow.name || '').toLowerCase().trim();
@@ -1318,8 +1303,15 @@ export function UniversalSocialFeed({
               
               if (localId && deletedShowIds.has(localId)) return false;
               if (localH && localD && deletedShowIds.has(localSig)) return false;
-              if (compiledGigs.some(g => g.id === localShow.id)) return false;
-              if (localH && localD && syncedSignatures.has(localSig)) return false;
+              const matchingGig = compiledGigs.find(g => g.id === localShow.id || (localH && localD && `${String(g.headliner || '').toLowerCase().trim()}__${String(g.rawDate || g.date || '').toLowerCase().trim()}` === localSig));
+              if (matchingGig) {
+                const localFlyer = localShow.flyer_url || localShow.flyerUrl;
+                if (localFlyer && !(matchingGig.flyer_url || matchingGig.flyerUrl)) {
+                  matchingGig.flyer_url = localFlyer;
+                  matchingGig.flyerUrl = localFlyer;
+                }
+                return false;
+              }
               return true;
             })
             .map((localShow: any) => {
@@ -1345,6 +1337,8 @@ export function UniversalSocialFeed({
                 state_province: localShow.state_province,
                 country: localShow.country,
                 price: localShow.price || (localShow.external_ticket_url ? 'External Tickets' : 'Free / DIY'),
+                flyer_url: localShow.flyer_url || localShow.flyerUrl || undefined,
+                flyerUrl: localShow.flyerUrl || localShow.flyer_url || undefined,
                 isFollowed,
                 is_community_submitted: true,
                 external_ticket_url: localShow.external_ticket_url,
@@ -1358,8 +1352,8 @@ export function UniversalSocialFeed({
         }
 
         // Strict Deduplication Pass: Ensure each gig is strictly unique by ID and headliner + date signature
-        const seenIds = new Set<string>();
-        const seenSignatures = new Set<string>();
+        const seenIds = new Map<string, number>();
+        const seenSignatures = new Map<string, number>();
         const deduplicatedGigs: any[] = [];
 
         for (const gig of compiledGigs) {
@@ -1377,15 +1371,50 @@ export function UniversalSocialFeed({
           }
 
           if (gigId && seenIds.has(gigId)) {
+            const idx = seenIds.get(gigId)!;
+            const existing = deduplicatedGigs[idx];
+            if (existing && !(existing.flyer_url || existing.flyerUrl) && (gig.flyer_url || gig.flyerUrl)) {
+              existing.flyer_url = gig.flyer_url || gig.flyerUrl;
+              existing.flyerUrl = gig.flyerUrl || gig.flyer_url;
+            }
             continue;
           }
           if (hClean && dClean && seenSignatures.has(sig)) {
+            const idx = seenSignatures.get(sig)!;
+            const existing = deduplicatedGigs[idx];
+            if (existing && !(existing.flyer_url || existing.flyerUrl) && (gig.flyer_url || gig.flyerUrl)) {
+              existing.flyer_url = gig.flyer_url || gig.flyerUrl;
+              existing.flyerUrl = gig.flyerUrl || gig.flyer_url;
+            }
             continue;
           }
 
-          if (gigId) seenIds.add(gigId);
-          if (hClean && dClean) seenSignatures.add(sig);
+          const newIdx = deduplicatedGigs.length;
+          if (gigId) seenIds.set(gigId, newIdx);
+          if (hClean && dClean) seenSignatures.set(sig, newIdx);
           deduplicatedGigs.push(gig);
+        }
+
+        // Propagate tour flyers across stops sharing the same tour_name / festival_name / headliner
+        const tourFlyerLookup = new Map<string, string>();
+        for (const gig of deduplicatedGigs) {
+          const f = gig.flyer_url || gig.flyerUrl;
+          if (!f) continue;
+          const tKey = String(gig.tour_name || gig.festival_name || '').toLowerCase().trim();
+          const hKey = String(gig.headliner || '').toLowerCase().trim();
+          if (tKey && !tourFlyerLookup.has(`t:${tKey}`)) tourFlyerLookup.set(`t:${tKey}`, f);
+          if (hKey && !tourFlyerLookup.has(`h:${hKey}`)) tourFlyerLookup.set(`h:${hKey}`, f);
+        }
+        for (const gig of deduplicatedGigs) {
+          if (!(gig.flyer_url || gig.flyerUrl)) {
+            const tKey = String(gig.tour_name || gig.festival_name || '').toLowerCase().trim();
+            const hKey = String(gig.headliner || '').toLowerCase().trim();
+            const inherited = (tKey && tourFlyerLookup.get(`t:${tKey}`)) || (hKey && tourFlyerLookup.get(`h:${hKey}`));
+            if (inherited) {
+              gig.flyer_url = inherited;
+              gig.flyerUrl = inherited;
+            }
+          }
         }
 
         if (deduplicatedGigs.length > 0) {
@@ -1489,7 +1518,6 @@ export function UniversalSocialFeed({
       }
       return updated;
     });
-    triggerNotification?.('All notifications marked as read.');
   };
 
   const clearAllNotifs = () => {
@@ -1509,7 +1537,6 @@ export function UniversalSocialFeed({
           if (error) console.warn("Error clearing notifications in Supabase:", error);
         });
     }
-    triggerNotification?.('All notifications cleared.');
   };
 
   const deleteNotif = (id: string) => {
@@ -1537,7 +1564,9 @@ export function UniversalSocialFeed({
   const [activeReactions, setActiveReactions] = useState<{ id: string; emoji: string; x: number }[]>([]);
 
   // New Feature States
-  const [showSceneRadio, setShowSceneRadio] = useState(true);
+  const [internalShowSceneRadio, setInternalShowSceneRadio] = useState(true);
+  const showSceneRadio = propShowSceneRadio !== undefined ? propShowSceneRadio : internalShowSceneRadio;
+  const setShowSceneRadio = propSetShowSceneRadio || setInternalShowSceneRadio;
   const [sceneRadioTrack, setSceneRadioTrack] = useState<{title: string, artist: string, albumArt: string}>({
     title: 'Phobophile',
     artist: 'CRYPTOPSY',
@@ -1626,6 +1655,12 @@ export function UniversalSocialFeed({
     setPrefPushNotifications,
     prefLocationServices,
     setPrefLocationServices,
+    profileBirthdayMonth,
+    setProfileBirthdayMonth,
+    profileBirthdayDay,
+    setProfileBirthdayDay,
+    profileShowBirthdayShoutout,
+    setProfileShowBirthdayShoutout,
     saveProfileData,
 
     // Collections
@@ -1683,7 +1718,7 @@ export function UniversalSocialFeed({
     setProfileAudioVolume,
     rotationIsPlaying,
     setRotationIsPlaying
-  } = useSocialProfileState({ portalRole, userProfile, activeBand: resolvedActiveBand || activeBand, quantity });
+  } = useSocialProfileState({ portalRole, userProfile, activeBand: resolvedActiveBand || activeBand, setUserProfile, quantity });
 
   const [hypeAnimations, setHypeAnimations] = useState<Record<string, boolean>>({});
   const [reactionMenuOpenFor, setReactionMenuOpenFor] = useState<string | null>(null);
@@ -1921,14 +1956,13 @@ export function UniversalSocialFeed({
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      triggerNotification?.(`🚀 Scene Radio track loaded into Post Creator! Edit & click Post when ready.`);
     };
 
     window.addEventListener('nexus_share_radio_track', handleRadioShare);
     return () => {
       window.removeEventListener('nexus_share_radio_track', handleRadioShare);
     };
-  }, [setNewPostText, setYoutubeUrl, setShowYoutubeInput, setNewPostTag, triggerNotification]);
+  }, [setNewPostText, setYoutubeUrl, setShowYoutubeInput, setNewPostTag]);
 
   // Retro Tape Player hook
   const {
@@ -1973,19 +2007,19 @@ export function UniversalSocialFeed({
   useEffect(() => {
     if (portalRole === 'band' && activeBand) {
       if (activeBand.homebase) {
-        setLabelHeadquarters(activeBand.homebase);
+        setLabelHeadquarters(prev => (prev === activeBand.homebase ? prev : activeBand.homebase));
       }
       if (activeBand.founded_year) {
-        setLabelFoundedYear(activeBand.founded_year);
+        setLabelFoundedYear(prev => (prev === activeBand.founded_year ? prev : activeBand.founded_year));
       }
       if (activeBand.ticker) {
-        setLabelRosterTicker(activeBand.ticker);
+        setLabelRosterTicker(prev => (prev === activeBand.ticker ? prev : activeBand.ticker));
       }
       if (activeBand.blurb) {
-        setProfileBlurb(activeBand.blurb);
+        setProfileBlurb(prev => (prev === activeBand.blurb ? prev : activeBand.blurb));
       }
     }
-  }, [portalRole, activeBand]);
+  }, [portalRole, activeBand?.id, activeBand?.homebase, activeBand?.founded_year, activeBand?.ticker, activeBand?.blurb]);
 
 
   // On-mount: Load from caches & Register network event listeners
@@ -2151,13 +2185,20 @@ export function UniversalSocialFeed({
 
       // Reset to defaults first based on portalRole to avoid state leaking / overwriting professional profiles
       
-      const signupLocation = (userProfile?.city && userProfile?.state_province) ? `${userProfile.city}, ${userProfile.state_province}` : null;
+      const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+      const savedUserLoc = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_location') : null;
+      const signupLocation = (userProfile?.city && userProfile?.state_province) ? formatCleanLocation(userProfile.city, userProfile.state_province) : (userProfile?.city ? userProfile.city : null);
+      const fallbackHometown = (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit')))
+        ? formatCleanLocation(savedUserLoc)
+        : 'Denison, TX';
       
       let defaultName = '';
       let defaultHandle = '';
       let defaultAvatar = null;
       let defaultCover = null;
-      let defaultLocation = signupLocation || userProfile?.location_code || userProfile?.city_state || 'Detroit, MI';
+      let defaultLocation = (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit')))
+        ? formatCleanLocation(savedUserLoc)
+        : (signupLocation || userProfile?.location_code || userProfile?.city_state || fallbackHometown);
       let defaultGenres = (userProfile?.genre_tags && userProfile.genre_tags.length > 0) ? userProfile.genre_tags : ['Death Metal', 'Technical Death Metal', 'Grindcore'];
       let defaultFavoriteSong = '';
       let defaultBlurb = '';
@@ -2173,14 +2214,18 @@ export function UniversalSocialFeed({
         defaultHandle = userProfile?.console_handle || userProfile?.screen_name?.replace(/\s+/g, '') || 'fan_core';
         defaultAvatar = userProfile?.avatar_url || 'FL';
         defaultCover = userProfile?.banner_url || null;
-        defaultLocation = signupLocation || userProfile?.location_code || 'Denison, TX';
+        defaultLocation = (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit')))
+          ? formatCleanLocation(savedUserLoc)
+          : (signupLocation || userProfile?.location_code || 'Denison, TX');
         defaultGenres = (userProfile?.genre_tags && userProfile.genre_tags.length > 0) ? userProfile.genre_tags : ['Goregrind', 'Slam', 'Brutal Death Metal', 'Death Metal'];
       } else if (portalRole === 'industry_pro' || portalRole === 'industry pro') {
         defaultName = userProfile?.full_name || userProfile?.legal_name || userProfile?.name || 'Industry Pro';
         defaultHandle = userProfile?.console_handle || userProfile?.handle || (userProfile?.screen_name || userProfile?.name || '').replace(/\s+/g, '') || 'pro_user';
         defaultAvatar = userProfile?.avatar_url || null;
         defaultCover = userProfile?.banner_url || null;
-        defaultLocation = signupLocation || userProfile?.location_code || 'Detroit, MI';
+        defaultLocation = (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit')))
+          ? formatCleanLocation(savedUserLoc)
+          : (signupLocation || userProfile?.location_code || userProfile?.city_state || 'Denison, TX');
         defaultGenres = (userProfile?.genre_tags && userProfile.genre_tags.length > 0) ? userProfile.genre_tags : ['Death Metal', 'Technical Death Metal', 'Grindcore'];
         defaultFavoriteSong = '';
       } else {
@@ -2213,7 +2258,7 @@ export function UniversalSocialFeed({
           : portalRole === 'label' && userProfile?.label_headquarters ? userProfile.label_headquarters 
           : portalRole === 'creative' && userProfile?.creative_metadata?.base_location ? userProfile.creative_metadata.base_location
           : portalRole === 'promoter' ? resolvePromoterLocation(userProfile)
-          : (signupLocation || userProfile?.location_code || userProfile?.city_state || 'Detroit, MI');
+          : (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit'))) ? formatCleanLocation(savedUserLoc) : (signupLocation || userProfile?.location_code || userProfile?.city_state || fallbackHometown);
       }
 
       setProfileFullLegalName(defaultName);
@@ -2271,9 +2316,9 @@ try {
         setProfileHandle(parsed.profileHandle);
       }
 
-      const parentAvatar = portalRole === 'label' ? userProfile?.label_avatar 
-        : portalRole === 'creative' ? (userProfile?.creative_avatar || userProfile?.creative_metadata?.avatar_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_creative_avatar') : null) || userProfile?.avatar_url)
-        : portalRole === 'promoter' ? ((userProfile as any)?.promoter_logo || userProfile?.promoter_metadata?.logo_url || (typeof window !== 'undefined' ? localStorage.getItem('nexus_promoter_logo') : null))
+      const parentAvatar = portalRole === 'label' ? (userProfile?.label_avatar || (typeof window !== 'undefined' ? localStorage.getItem('nexus_label_avatar') : null))
+        : portalRole === 'creative' ? resolveCreativeLogo(userProfile)
+        : portalRole === 'promoter' ? resolvePromoterLogo(userProfile)
         : (userProfile?.avatar_url || userProfile?.avatar || userProfile?.profile_avatar || (typeof window !== 'undefined' ? localStorage.getItem('nexus_user_avatar') : null));
       
       if (parentAvatar) setProfileAvatarUrl(parentAvatar);
@@ -2339,11 +2384,18 @@ try {
       setProfilePin(parsed.profilePin);
     }
 
-    const uLoc = userProfile?.location_code || userProfile?.location;
-    if (uLoc && uLoc !== '') {
-      setProfileLocation(uLoc);
-    } else if (parsed.profileLocation) {
-      setProfileLocation(parsed.profileLocation);
+    const savedUserLoc = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_location') : null;
+    const uLoc = (userProfile?.city && userProfile?.state_province)
+      ? formatCleanLocation(userProfile.city, userProfile.state_province)
+      : (userProfile?.location_code || userProfile?.city_state || userProfile?.location || userProfile?.city);
+    if (savedUserLoc && (!isOwnerMiguel || !savedUserLoc.toLowerCase().includes('detroit'))) {
+      setProfileLocation(formatCleanLocation(savedUserLoc));
+    } else if (uLoc && uLoc !== '' && (!isOwnerMiguel || !uLoc.toLowerCase().includes('detroit'))) {
+      setProfileLocation(formatCleanLocation(uLoc));
+    } else if (parsed.profileLocation && (!isOwnerMiguel || !parsed.profileLocation.toLowerCase().includes('detroit'))) {
+      setProfileLocation(formatCleanLocation(parsed.profileLocation));
+    } else {
+      setProfileLocation('Denison, TX');
     }
 
     if (parsed.profileGenres) setProfileGenres(parsed.profileGenres);
@@ -2368,6 +2420,9 @@ try {
     if (parsed.filterShowFollowedOnly !== undefined) setFilterShowFollowedOnly(parsed.filterShowFollowedOnly);
     if (parsed.prefPushNotifications !== undefined) setPrefPushNotifications(parsed.prefPushNotifications);
     if (parsed.prefLocationServices !== undefined) setPrefLocationServices(parsed.prefLocationServices);
+    if (parsed.birthday_month !== undefined && parsed.birthday_month !== null) setProfileBirthdayMonth(Number(parsed.birthday_month));
+    if (parsed.birthday_day !== undefined && parsed.birthday_day !== null) setProfileBirthdayDay(Number(parsed.birthday_day));
+    if (typeof parsed.show_birthday_shoutout === 'boolean') setProfileShowBirthdayShoutout(parsed.show_birthday_shoutout);
     
     loadedFromLocalStorage = true;
     isLoadedRef.current = true;
@@ -2432,8 +2487,10 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       
       if (portalRole === 'label' && userProfile?.label_headquarters) {
         setProfileLocation(userProfile.label_headquarters);
-      } else if (data.profileLocation) {
-        setProfileLocation(data.profileLocation);
+      } else if (data.profileLocation && (!isOwnerMiguel || !data.profileLocation.toLowerCase().includes('detroit'))) {
+        setProfileLocation(formatCleanLocation(data.profileLocation));
+      } else if (isOwnerMiguel) {
+        setProfileLocation('Denison, TX');
       }
 
       if (data.profileGenres) setProfileGenres(data.profileGenres);
@@ -2458,6 +2515,9 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       if (data.filterShowFollowedOnly !== undefined) setFilterShowFollowedOnly(data.filterShowFollowedOnly);
       if (data.prefPushNotifications !== undefined) setPrefPushNotifications(data.prefPushNotifications);
       if (data.prefLocationServices !== undefined) setPrefLocationServices(data.prefLocationServices);
+      if (data.birthday_month !== undefined && data.birthday_month !== null) setProfileBirthdayMonth(Number(data.birthday_month));
+      if (data.birthday_day !== undefined && data.birthday_day !== null) setProfileBirthdayDay(Number(data.birthday_day));
+      if (typeof data.show_birthday_shoutout === 'boolean') setProfileShowBirthdayShoutout(data.show_birthday_shoutout);
     }
   }
   isLoadedRef.current = true;
@@ -2504,9 +2564,100 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
     }
   }, [activeTab]);
 
+  // Deep-link listeners for push notification taps (DM -> INBOX, Show Reminder -> Event Companion)
+  useEffect(() => {
+    const openShowByPayload = async (payload: { showId?: string; targetId?: string; title?: string }) => {
+      const targetShowId = String(payload?.showId || payload?.targetId || '').trim();
+      const targetTitle = String(payload?.title || '').toLowerCase().trim();
+      setActiveTab('feed');
+
+      const candidates = [
+        ...(Array.isArray(liveEvents) ? liveEvents : []),
+        ...(Array.isArray(propShows) ? propShows : []),
+      ];
+
+      let matched = candidates.find(
+        (ev: any) =>
+          (targetShowId && String(ev?.id || '').trim() === targetShowId) ||
+          (targetTitle &&
+            (String(ev?.headliner || '').toLowerCase().trim() === targetTitle ||
+              String(ev?.name || '').toLowerCase().trim() === targetTitle ||
+              String(ev?.show_name || '').toLowerCase().trim() === targetTitle))
+      );
+
+      if (!matched && targetShowId) {
+        try {
+          const sb = getSupabase?.();
+          if (sb) {
+            const { data: showRow } = await sb
+              .from('shows')
+              .select('*')
+              .eq('id', targetShowId)
+              .maybeSingle();
+            if (showRow) {
+              matched = {
+                ...showRow,
+                headliner: showRow.headliner || showRow.name || showRow.show_name || 'Live Show',
+                venue: showRow.venue_name || showRow.venue || 'Venue',
+                date: showRow.show_date || showRow.date || 'Upcoming',
+                time: showRow.doors_time ? `Doors ${showRow.doors_time}` : 'Doors TBA',
+              };
+            }
+          }
+        } catch {
+          // fallback below
+        }
+      }
+
+      if (matched) {
+        setActiveEventData(matched);
+        setIsEventModeActive(true);
+        setShowMapModal(false);
+      } else {
+        setShowMapModal(true);
+      }
+    };
+
+    const handleOpenInboxThread = () => {
+      setActiveTab('messages');
+    };
+
+    const handleNavigateFeedTab = (e: any) => {
+      const nextTab = String(e?.detail || '').trim();
+      if (nextTab === 'feed' || nextTab === 'shop' || nextTab === 'forum' || nextTab === 'messages' || nextTab === 'gallery' || nextTab === 'reels') {
+        setActiveTab(nextTab);
+      } else if (nextTab === 'photopit') {
+        setActiveTab('gallery');
+      }
+    };
+
+    const handleOpenShowDetails = (e: any) => {
+      openShowByPayload(e?.detail || {});
+    };
+
+    window.addEventListener('nexus_open_inbox_thread', handleOpenInboxThread);
+    window.addEventListener('nexus_navigate_feed_tab', handleNavigateFeedTab);
+    window.addEventListener('nexus_open_show_details', handleOpenShowDetails);
+
+    // Consume any pending cold-launch deep-link if already buffered before mount
+    const pendingShow = consumePendingShowDeepLink();
+    if (pendingShow) {
+      openShowByPayload(pendingShow);
+    } else if (peekPendingDmThread()) {
+      setActiveTab('messages');
+    }
+
+    return () => {
+      window.removeEventListener('nexus_open_inbox_thread', handleOpenInboxThread);
+      window.removeEventListener('nexus_navigate_feed_tab', handleNavigateFeedTab);
+      window.removeEventListener('nexus_open_show_details', handleOpenShowDetails);
+    };
+  }, [liveEvents, propShows]);
+
   // Shop merchandise state & categories
   const [selectedShopItem, setSelectedShopItem] = useState<any | null>(null);
   const [activeStory, setActiveStory] = useState<any | null>(null);
+  const [isComposerModalOpen, setIsComposerModalOpen] = useState<boolean>(false);
   const [shopPage, setShopPage] = useState<number>(1);
 
   useEffect(() => {
@@ -2590,6 +2741,19 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
     });
   }, []);
 
+  // Listen for public profile modal open triggers from Scene Radio or other components
+  useEffect(() => {
+    const handleOpenPublicProfile = (e: any) => {
+      if (e.detail?.profile) {
+        handleSelectUserProfile(e.detail.profile);
+      }
+    };
+    window.addEventListener('nexus_open_public_profile', handleOpenPublicProfile);
+    return () => {
+      window.removeEventListener('nexus_open_public_profile', handleOpenPublicProfile);
+    };
+  }, [handleSelectUserProfile]);
+
   const [liveProfileData, setLiveProfileData] = useState<any>(null);
   const [liveProfileStats, setLiveProfileStats] = useState<{ followers: number; following: number; shares: number } | null>(null);
   const [currentUserStats, setCurrentUserStats] = useState<{ followers: number; following: number; shares: number } | null>(null);
@@ -2620,8 +2784,8 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
 
   useEffect(() => {
     if (!selectedUserProfile || !supabase) {
-      setLiveProfileData(null);
-      setLiveProfileStats(null);
+      setLiveProfileData(prev => prev === null ? prev : null);
+      setLiveProfileStats(prev => prev === null ? prev : null);
       return;
     }
 
@@ -2641,7 +2805,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
           if (isValidUUID(selProfAny.raw_id)) targetId = selProfAny.raw_id;
           else if (isValidUUID(selProfAny.band_id)) targetId = selProfAny.band_id;
           else if (isValidUUID(selProfAny.id)) targetId = selProfAny.id;
-          else if (isValidUUID(selProfAny.user_id)) targetId = selProfAny.user_id;
+          else if (!isEntityTargetObject(selProfAny) && isValidUUID(selProfAny.user_id)) targetId = selProfAny.user_id;
         }
 
         const targetName = (
@@ -2657,7 +2821,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
             const { data: bMatch } = await supabase
               .from('bands')
               .select('id')
-              .or(`band_name.ilike.${targetName},name.ilike.${targetName}`)
+              .or(`band_name.ilike.${targetName}`)
               .limit(1);
             if (bMatch?.[0]?.id && isValidUUID(bMatch[0].id)) {
               targetId = bMatch[0].id;
@@ -2665,7 +2829,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data: pMatch } = await supabase
                 .from('profiles')
                 .select('id')
-                .or(`full_name.ilike.${targetName},name.ilike.${targetName},console_handle.ilike.${targetName}`)
+                .or(`full_name.ilike.${targetName},console_handle.ilike.${targetName}`)
                 .limit(1);
               if (pMatch?.[0]?.id && isValidUUID(pMatch[0].id)) {
                 targetId = pMatch[0].id;
@@ -2723,6 +2887,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
         }
 
         let isFollowedByMe = false;
+        let checkedFollowsInDb = false;
         if (targetId && isValidUUID(targetId)) {
           let myId = resolveProfileUUID(userProfile, allProfiles) || userProfile?.id;
           if (!myId && supabase) {
@@ -2731,6 +2896,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
           }
 
           if (myId && isValidUUID(myId)) {
+            checkedFollowsInDb = true;
             const { data: followRecord } = await supabase
               .from('follows')
               .select('id')
@@ -2740,6 +2906,15 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
             if (followRecord) isFollowedByMe = true;
           }
         }
+        const targetForCheck = profileData ? { ...profileData, id: targetId } : (selectedUserProfile || targetId);
+        const cleanTargetForCheck = typeof targetForCheck === 'object' && targetForCheck
+          ? { ...targetForCheck, followed: undefined, isFollowed: undefined, isFollowedByMe: undefined }
+          : targetForCheck;
+        isFollowedByMe = isProfileFollowedGlobally(
+          cleanTargetForCheck,
+          checkedFollowsInDb ? (isFollowedByMe ? [{ followed_id: targetId }] : []) : allFollows,
+          userProfile?.id
+        );
 
         if (active) {
           if (profileData) {
@@ -2747,13 +2922,28 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
           } else {
             setLiveProfileData(selectedUserProfile);
           }
-          setLiveProfileStats({
-            followers: followerCount,
-            following: followingCount,
-            shares: profileData?.reputation || profileData?.sharesCount || selectedUserProfile?.sharesCount || 0
+          setLiveProfileStats(prev => {
+            const nextShares = profileData?.reputation || profileData?.sharesCount || selectedUserProfile?.sharesCount || 0;
+            if (prev && prev.followers === followerCount && prev.following === followingCount && prev.shares === nextShares) {
+              return prev;
+            }
+            return {
+              followers: followerCount,
+              following: followingCount,
+              shares: nextShares
+            };
           });
           setSelectedUserProfile(prev => {
             if (!prev) return null;
+            if (
+              prev.isFollowed === isFollowedByMe &&
+              prev.followersCount === followerCount &&
+              prev.followingCount === followingCount &&
+              (prev as any).followers === followerCount &&
+              (prev as any).following === followingCount
+            ) {
+              return prev;
+            }
             return {
               ...prev,
               isFollowed: isFollowedByMe,
@@ -2799,10 +2989,18 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
             .eq('follower_id', currentUserId);
             
           if (active) {
-            setCurrentUserStats({
-              followers: followers || 0,
-              following: following || 0,
-              shares: userProfile?.sharesCount || 0
+            setCurrentUserStats(prev => {
+              const nextFollowers = followers || 0;
+              const nextFollowing = following || 0;
+              const nextShares = userProfile?.sharesCount || 0;
+              if (prev && prev.followers === nextFollowers && prev.following === nextFollowing && prev.shares === nextShares) {
+                return prev;
+              }
+              return {
+                followers: nextFollowers,
+                following: nextFollowing,
+                shares: nextShares
+              };
             });
           }
         }
@@ -2901,7 +3099,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       top_song_title: baseProf.top_song_title || baseProf.favoriteSong || '',
       top_song_url: baseProf.top_song_url || ''
     };
-  }, [selectedUserProfile, allProfiles, liveProfileData, liveProfileStats]);
+  }, [selectedUserProfile?.id, selectedUserProfile?.role, selectedUserProfile?.name, allProfiles, liveProfileData, liveProfileStats]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -2929,7 +3127,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
         setProfileActiveTab('timeline');
       }
     }
-  }, [selectedUserProfile, profileActiveTab]);
+  }, [selectedUserProfile?.id, selectedUserProfile?.role, profileActiveTab]);
   const [viewingFollowersOrFollowing, setViewingFollowersOrFollowing] = useState<'followers' | 'following' | null>(null);
   const [liveFollowsList, setLiveFollowsList] = useState<any[]>([]);
   const [liveFollowsLoading, setLiveFollowsLoading] = useState(false);
@@ -3027,7 +3225,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data: bMatch } = await supabase
                 .from('bands')
                 .select('id')
-                .or(`band_name.ilike.${bandSearchName},name.ilike.${bandSearchName}`)
+                .or(`band_name.ilike.${bandSearchName}`)
                 .limit(1);
               if (bMatch?.[0]?.id && isValidUUID(bMatch[0].id)) {
                 activeId = bMatch[0].id;
@@ -3069,7 +3267,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data: bMatch } = await supabase
                 .from('bands')
                 .select('id')
-                .or(`band_name.ilike.${targetName},name.ilike.${targetName}`)
+                .or(`band_name.ilike.${targetName}`)
                 .limit(1);
               if (bMatch?.[0]?.id && isValidUUID(bMatch[0].id)) {
                 activeId = bMatch[0].id;
@@ -3078,7 +3276,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data: cMatch } = await supabase
                 .from('creatives')
                 .select('id, creator_id, user_id')
-                .or(`business_name.ilike.%${targetName}%,creative_name.ilike.%${targetName}%,name.ilike.%${targetName}%`)
+                .or(`business_name.ilike.%${targetName}%,name.ilike.%${targetName}%`)
                 .limit(1);
               if (cMatch?.[0]?.id && isValidUUID(cMatch[0].id)) {
                 activeId = cMatch[0].id;
@@ -3086,7 +3284,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
                 const { data: pMatch } = await supabase
                   .from('profiles')
                   .select('id')
-                  .or(`full_name.ilike.${targetName},name.ilike.${targetName},console_handle.ilike.${targetName}`)
+                  .or(`full_name.ilike.${targetName},console_handle.ilike.${targetName}`)
                   .limit(1);
                 if (pMatch?.[0]?.id && isValidUUID(pMatch[0].id)) {
                   activeId = pMatch[0].id;
@@ -3105,13 +3303,8 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
         }
 
         if (viewingFollowersOrFollowing === 'followers') {
-          // Read local storage saved follows
-          let localFollows: Record<string, boolean> = {};
-          try {
-            localFollows = JSON.parse(localStorage.getItem('nexus_local_follows_v1') || '{}');
-          } catch (e) {}
-
-          const isLocallyFollowed = (activeId && localFollows[activeId]) === true;
+          const localFollows: Record<string, boolean> = getScopedFollowsMap(userProfile?.id);
+          const isLocallyFollowed = (activeId && localFollows[String(activeId).toLowerCase()]) === true;
 
           // Query official records in Supabase 'follows' table where followed_id = activeId or artist_id = activeId
           let followsData: any[] = [];
@@ -3120,7 +3313,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data, error: fErr } = await supabase
                 .from('follows')
                 .select('*')
-                .or(`followed_id.eq.${activeId},artist_id.eq.${activeId}`);
+                .eq('followed_id', activeId);
               if (!fErr && data && data.length > 0) {
                 followsData = data;
               } else {
@@ -3256,7 +3449,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
               const { data, error: fErr } = await supabase
                 .from('follows')
                 .select('*')
-                .or(`follower_id.eq.${activeId},fan_profile_id.eq.${activeId}`);
+                .eq('follower_id', activeId);
               if (!fErr && data && data.length > 0) {
                 followsData = data;
               } else {
@@ -3454,7 +3647,7 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       setEpkFormTracks([]);
       setEpkSubmissionSuccess(false);
     }
-  }, [selectedUserProfile]);
+  }, [selectedUserProfile?.id]);
 
   const playAmbientMetalDrone = (songName: string) => {
     if (rotationIsPlaying === songName) {
@@ -3462,7 +3655,6 @@ loadProfileIndexedDBCache(portalRole, userProfile?.id).then((data: any) => {
       return;
     }
     setRotationIsPlaying(songName);
-    triggerNotification?.(`🔊 Tuning frequency: "${songName}" stream`);
     playAmbientMetalDroneEngine(songName);
 
     setTimeout(() => {
@@ -3511,6 +3703,67 @@ const getProfileForUser = (userParam: any) => {
 
   cleanHandle = (cleanHandle || 'user').replace('@', '').replace(/[\(\)].*/, '').trim();
 
+  // Authoritative resolution for Nexus Live Productions promoter page (never links to Christopher Wirstrom or individual users)
+  const isNexusLiveQuery = Boolean(
+    (typeof userParam === 'string' && (userParam.toLowerCase().includes('nexus live') || userParam === 'promoter-nexus-live-official')) ||
+    (typeof userParam === 'object' && (
+      (userParam?.id === 'promoter-nexus-live-official') ||
+      (userParam?.raw_id === 'promoter-nexus-live-official') ||
+      (userParam?.name && userParam.name.toLowerCase().includes('nexus live')) ||
+      (userParam?.brand_name && userParam.brand_name.toLowerCase().includes('nexus live')) ||
+      (userParam?.agency_name && userParam.agency_name.toLowerCase().includes('nexus live'))
+    ))
+  );
+
+  if (isNexusLiveQuery) {
+    const NEXUS_LIVE_LOGO = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-avatar_1790307456601.webp?t=1790307456601';
+    const NEXUS_LIVE_COVER = 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/bannersv2/5403162d-1947-43aa-b5f6-38a1bd2a1b80/promoter-banner_1790307913635.webp?t=1790307913635';
+    const isOwnerMiguel = isMiguelNameOrProfile(userProfile);
+
+    return {
+      id: 'promoter-nexus-live-official',
+      raw_id: 'promoter-nexus-live-official',
+      user_id: '5403162d-1947-43aa-b5f6-38a1bd2a1b80',
+      creator_id: '5403162d-1947-43aa-b5f6-38a1bd2a1b80',
+      owner_id: '5403162d-1947-43aa-b5f6-38a1bd2a1b80',
+      name: 'Nexus Live Productions',
+      brand_name: 'Nexus Live Productions',
+      agency_name: 'Nexus Live Productions',
+      promoter_name: 'Nexus Live Productions',
+      legalName: 'Nexus Live Productions',
+      avatar: NEXUS_LIVE_LOGO,
+      avatar_url: NEXUS_LIVE_LOGO,
+      logo: NEXUS_LIVE_LOGO,
+      logo_url: NEXUS_LIVE_LOGO,
+      promoter_logo: NEXUS_LIVE_LOGO,
+      image: NEXUS_LIVE_COVER,
+      banner: NEXUS_LIVE_COVER,
+      banner_url: NEXUS_LIVE_COVER,
+      cover_url: NEXUS_LIVE_COVER,
+      promoter_cover_image: NEXUS_LIVE_COVER,
+      location: 'Chicago, IL / Texas / National Tour Booking',
+      role: 'Promoter / Venue',
+      account_type: 'promoter',
+      type: 'promoter',
+      portalRole: 'promoter',
+      isPersonal: false,
+      isBandProfile: false,
+      isPromoterProfile: true,
+      is_promoter: true,
+      isYou: isOwnerMiguel,
+      badges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+      customBadges: ['🎪 Event Promoter', '⚡ Nexus Live'],
+      bio: 'While Nexus Live Productions itself is new the history behind it is anything but. Having gone through several iterations since 2002. Lengthy history in the underground extreme metal scene with several festivals under our name most notably the Chicago/Texas Domination Fest that ran from 2014-2024.',
+      handle: 'NexusLive',
+      console_handle: '@NexusLive',
+      followersCount: 2900,
+      followingCount: 45,
+      hasProAccess: true,
+      isFollowed: isProfileFollowedGlobally({ id: 'promoter-nexus-live-official', name: 'Nexus Live Productions', type: 'promoter', isPromoterProfile: true }, allFollows, userProfile?.id),
+      isFollowedByMe: isProfileFollowedGlobally({ id: 'promoter-nexus-live-official', name: 'Nexus Live Productions', type: 'promoter', isPromoterProfile: true }, allFollows, userProfile?.id)
+    };
+  }
+
   const myId = userProfile?.id;
   const myEmail = userProfile?.email?.toLowerCase()?.trim();
   const targetEmail = typeof userParam === 'object' ? (userParam.email?.toLowerCase()?.trim() || userParam.authorEmail?.toLowerCase()?.trim() || userParam.author_email?.toLowerCase()?.trim()) : null;
@@ -3520,17 +3773,27 @@ const getProfileForUser = (userParam: any) => {
   const cleanRealLower = cleanRealName.toLowerCase().trim();
   const cleanHandleLower = cleanHandle.toLowerCase().trim();
 
-  const dbProfile = (allProfiles || []).find((p: any) => 
+  let dbProfile = (allProfiles || []).find((p: any) => 
     (targetId && p.id && String(p.id) === String(targetId)) ||
-    (targetEmail && p.email && p.email.toLowerCase().trim() === targetEmail) ||
-    (!targetId && targetNameLower && p?.name && p.name.toLowerCase().trim() === targetNameLower) || 
-    (!targetId && targetNameLower && p?.full_name && p.full_name.toLowerCase().trim() === targetNameLower) || 
-    (!targetId && targetNameLower && p?.console_handle && p.console_handle.toLowerCase().trim() === targetNameLower) || 
-    (!targetId && cleanHandleLower && cleanHandleLower !== 'user' && p?.console_handle && p.console_handle.toLowerCase().trim() === cleanHandleLower) || 
-    (!targetId && targetNameLower && p?.label_company_name && p.label_company_name.toLowerCase().trim() === targetNameLower) || 
-    (!targetId && targetNameLower && p?.promoter_name && p.promoter_name.toLowerCase().trim() === targetNameLower) || 
-    (!targetId && targetNameLower && p?.creative_name && p.creative_name.toLowerCase().trim() === targetNameLower)
+    (targetEmail && p.email && p.email.toLowerCase().trim() === targetEmail)
   );
+
+  if (!dbProfile) {
+    dbProfile = (allProfiles || []).find((p: any) => {
+      const pName = (p?.name || '').toLowerCase().trim();
+      const pFullName = (p?.full_name || '').toLowerCase().trim();
+      const pHandle = (p?.console_handle || p?.handle || '').replace(/^@/, '').toLowerCase().trim();
+      const pLabel = (p?.label_company_name || '').toLowerCase().trim();
+      const pPromoter = (p?.promoter_name || '').toLowerCase().trim();
+      const pCreative = (p?.creative_name || '').toLowerCase().trim();
+
+      if (cleanHandleLower && cleanHandleLower !== 'user' && pHandle && pHandle === cleanHandleLower) return true;
+      if (targetNameLower && (pName === targetNameLower || pFullName === targetNameLower || pHandle === targetNameLower)) return true;
+      if (cleanRealLower && (pFullName === cleanRealLower || pName === cleanRealLower)) return true;
+      if (targetNameLower && (pLabel === targetNameLower || pPromoter === targetNameLower || pCreative === targetNameLower)) return true;
+      return false;
+    });
+  }
 
   const myNameLower = (userProfile?.name || '').toLowerCase().trim();
   const myFullNameLower = (userProfile?.full_name || profileFullLegalName || '').toLowerCase().trim();
@@ -3652,7 +3915,7 @@ const getProfileForUser = (userParam: any) => {
         banner_url: cCover,
         cover_url: cCover,
         creative_banner: cCover,
-        location: resolveCreativeLocation(userProfile) || userProfile?.location || 'Detroit, MI',
+        location: resolveCreativeLocation(userProfile) || userProfile?.location || 'Denison, Texas',
         role: 'Creative',
         account_type: 'creative',
         type: 'creative',
@@ -3844,22 +4107,40 @@ const getProfileForUser = (userParam: any) => {
     };
   }
 
+  // Explicit check for registered Fan accounts or Personal users to prevent misidentifying as a band
+  const isExplicitFanUser = Boolean(
+    (dbProfile && (
+      dbProfile.account_type === 'fan' ||
+      dbProfile.account_type === 'fan_only' ||
+      dbProfile.account_type === 'user' ||
+      (Array.isArray(dbProfile.allowed_workspaces) && dbProfile.allowed_workspaces.length === 1 && dbProfile.allowed_workspaces[0] === 'fan')
+    ) && !dbProfile.isBandProfile && dbProfile.account_type !== 'band') ||
+    (typeof userParam === 'object' && (
+      userParam?.account_type === 'fan' ||
+      userParam?.account_type === 'fan_only' ||
+      userParam?.role === 'Fan Listener' ||
+      userParam?.role === 'FAN' ||
+      userParam?.isPersonal === true
+    ) && !userParam?.isBandProfile && userParam?.account_type !== 'band')
+  );
+
   // Check if target is an official band entity (Community Archive or Supabase Band)
   const candidateBandId = targetId || (typeof userParam === 'object' ? (userParam.band_id || userParam.raw_id) : null);
-  const matchedCommunityBand = 
+  const matchedCommunityBand = !isExplicitFanUser ? (
     (candidateBandId ? communityBandManager.getById(candidateBandId) : null) ||
     communityBandManager.findByName(cleanDisplayName) ||
     communityBandManager.findByName(rawName) ||
     communityBandManager.findMatch(cleanDisplayName) ||
-    communityBandManager.findMatch(rawName);
+    communityBandManager.findMatch(rawName)
+  ) : null;
 
-  const isExplicitBand = !!(
+  const isExplicitBand = !isExplicitFanUser && !!(
     (typeof userParam === 'object' && (userParam.isBandProfile || userParam.isBand || userParam.type === 'band' || userParam.category === 'bands' || userParam.account_type === 'band' || userParam.portalRole === 'band' || userParam.role === 'Artist' || userParam.role === 'Official Band' || userParam.role === 'Band' || userParam.role === 'Archive Band')) ||
     matchedCommunityBand ||
     (dbProfile && (dbProfile.isBandProfile || dbProfile.account_type === 'band' || dbProfile.role === 'Artist' || dbProfile.role === 'Band'))
   );
 
-  if (matchedCommunityBand || (isExplicitBand && (matchedCommunityBand || (typeof userParam === 'object' && (userParam.isBandProfile || userParam.isRealBand || userParam.category === 'bands'))))) {
+  if (!isExplicitFanUser && (matchedCommunityBand || (isExplicitBand && (matchedCommunityBand || (typeof userParam === 'object' && (userParam.isBandProfile || userParam.isRealBand || userParam.category === 'bands')))))) {
     const bandObj = matchedCommunityBand;
     const bandName = bandObj?.name || (bandObj as any)?.band_name || userParam?.name || userParam?.band_name || cleanDisplayName;
     const bandLogo = bandObj?.logo_url || bandObj?.avatar_url || (bandObj as any)?.avatar || userParam?.logo_url || userParam?.avatar_url || userParam?.avatar || userParam?.image;
@@ -3906,7 +4187,9 @@ const getProfileForUser = (userParam: any) => {
       verification_status: bandObj?.verification_status || 'verified_official',
       is_verified: bandObj?.verification_status === 'verified_official' || (bandObj as any)?.is_verified === true,
       is_community_archive: bandObj?.verification_status === 'community_archive',
-      musicCatalog: bandObj?.discography || []
+      musicCatalog: bandObj?.discography || [],
+      isFollowed: isProfileFollowedGlobally({ id: bandId, name: bandName, raw_id: bandObj?.id || bandId, band_id: bandObj?.id || bandId, type: 'band', isBandProfile: true }, allFollows, userProfile?.id),
+      isFollowedByMe: isProfileFollowedGlobally({ id: bandId, name: bandName, raw_id: bandObj?.id || bandId, band_id: bandObj?.id || bandId, type: 'band', isBandProfile: true }, allFollows, userProfile?.id)
     };
   }
 
@@ -3930,9 +4213,10 @@ const getProfileForUser = (userParam: any) => {
 
     const isYou = isCurrentUser;
     
-    // Check if followed in discoverProfiles
+    // Check discover profiles for auxiliary assets
     const discoverProf = discoverProfiles.find(p => (p?.name || "User").toLowerCase() === (user?.name || "User").toLowerCase());
-    const isFollowed = discoverProf ? discoverProf.followed : false;
+    // Unified global follow check
+    const isFollowed = isProfileFollowedGlobally(userParam || user, allFollows, userProfile?.id);
 
     // Predefined biographies & details
     const profileRegistry = PROFILE_REGISTRY;
@@ -4036,45 +4320,79 @@ const getProfileForUser = (userParam: any) => {
       }
     }
 
-    // Build dynamic associated profiles/ties from registered workspaces & real profile attributes
+    // Build dynamic associated profiles/ties from registered workspaces & real confirmed profile attributes
 const dynamicUserTies: { name: string; role: string; avatar: string }[] = [];
 const targetProfObj = isYou ? userProfile : dbProfile;
+const isTargetMiguel = isMiguelNameOrProfile(targetProfObj) || (isYou && isMiguelNameOrProfile(userProfile));
+const targetAccLower = String(targetProfObj?.account_type || '').toLowerCase().trim();
+const isFanOnlyTarget = targetAccLower === 'fan' || targetAccLower === 'fan_only';
 
-// Ensure workspaces is always treated as an array regardless of DB return type
-const rawWorkspaces = targetProfObj?.registered_workspaces || targetProfObj?.allowed_workspaces || [];
-const regWorkspaces: string[] = Array.isArray(rawWorkspaces) 
-  ? rawWorkspaces 
-  : typeof rawWorkspaces === 'string' 
-    ? rawWorkspaces.split(',').map((s: string) => s.trim()) 
+// Ensure workspaces is always treated as an array (never treat allowed_workspaces as registered entities)
+const rawWorkspaces = targetProfObj?.registered_workspaces || [];
+const regWorkspaces: string[] = Array.isArray(rawWorkspaces)
+  ? rawWorkspaces.map((w: any) => String(typeof w === 'string' ? w : (w?.type || w?.key || '')).toLowerCase().trim()).filter(Boolean)
+  : typeof rawWorkspaces === 'string'
+    ? rawWorkspaces.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean)
     : [];
 
-if (regWorkspaces.includes('label') || targetProfObj?.label_company_name) {
+const confirmedLabelName = targetProfObj?.label_company_name || targetProfObj?.label_name || targetProfObj?.label_metadata?.company_name;
+if (confirmedLabelName && String(confirmedLabelName).trim()) {
   dynamicUserTies.push({
-    name: targetProfObj?.label_company_name || 'Record Label',
+    name: String(confirmedLabelName).trim(),
     role: 'Label',
     avatar: targetProfObj?.label_avatar || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1542208998-f6dbbb27a72f?w=150'
   });
 }
 
-const promoterName = targetProfObj?.promoter_name || targetProfObj?.promoter_metadata?.brand_name;
-if (regWorkspaces.includes('promoter') || promoterName) {
+const cleanPromoterTie = (v?: string | null) => {
+  if (!v || typeof v !== 'string') return '';
+  const t = v.trim();
+  if (!t) return '';
+  if (!isTargetMiguel && t.toLowerCase().includes('nexus live')) return '';
+  return t;
+};
+const promoterName =
+  cleanPromoterTie(targetProfObj?.promoter_name) ||
+  cleanPromoterTie(targetProfObj?.promoter_agency) ||
+  cleanPromoterTie(targetProfObj?.promoter_metadata?.brand_name) ||
+  cleanPromoterTie(targetProfObj?.promoter_metadata?.agency_name) ||
+  (isTargetMiguel ? 'Nexus Live Productions' : '');
+const hasConfirmedPromoterTie = Boolean(
+  promoterName && (
+    isTargetMiguel ||
+    targetProfObj?.account_type === 'promoter' ||
+    targetProfObj?.promoter_metadata?.is_registered === true ||
+    !isFanOnlyTarget
+  )
+);
+if (hasConfirmedPromoterTie) {
   dynamicUserTies.push({
-    name: promoterName || 'Live Event Promoter',
+    name: promoterName,
     role: 'Promoter',
-    avatar: targetProfObj?.promoter_logo || targetProfObj?.promoter_metadata?.logo || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=150'
+    avatar: targetProfObj?.promoter_logo || targetProfObj?.promoter_metadata?.logo_url || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=150'
   });
 }
 
-const creativeName = targetProfObj?.creative_name || targetProfObj?.creative_metadata?.business_name;
-if (regWorkspaces.includes('creative') || creativeName) {
+const cleanCreativeTie = (v?: string | null) => {
+  if (!v || typeof v !== 'string') return '';
+  const t = v.trim();
+  if (!t) return '';
+  if (!isTargetMiguel && t.toLowerCase().includes('vortex graphics')) return '';
+  return t;
+};
+const creativeName =
+  cleanCreativeTie(targetProfObj?.creative_name) ||
+  cleanCreativeTie(targetProfObj?.creative_business_name) ||
+  cleanCreativeTie(targetProfObj?.creative_metadata?.business_name) ||
+  (isTargetMiguel ? 'Vortex Graphics' : '');
+if (creativeName && (isTargetMiguel || !isFanOnlyTarget || targetProfObj?.creative_metadata?.is_registered === true)) {
   dynamicUserTies.push({
-    name: creativeName || 'Creative Services',
+    name: creativeName,
     role: 'Creative',
     avatar: targetProfObj?.creative_avatar || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1626544827763-d516dce335e2?w=150'
   });
 }
 
-const isTargetMiguel = isMiguelNameOrProfile(targetProfObj) || (isYou && isMiguelNameOrProfile(userProfile));
 const rawBandNameVal = targetProfObj?.band_name || targetProfObj?.bandName || (isYou ? userProfile?.band_name : null);
 const targetFullName = (
   targetProfObj?.full_name ||
@@ -4084,7 +4402,6 @@ const targetFullName = (
   ''
 ).trim();
 
-// Find matched community band by direct name or member name (e.g. Andre Gonzalez -> Cordyceps, Christopher Wirstrom -> Cranial Impalement)
 const isEmmanuelTargetProfile = Boolean(
   (targetFullName.toLowerCase().includes('emmanuel') && targetFullName.toLowerCase().includes('flores')) ||
   (targetProfObj?.username && String(targetProfObj.username).toLowerCase().includes('emmanuel') && String(targetProfObj.username).toLowerCase().includes('flores'))
@@ -4095,8 +4412,8 @@ if (!isTargetMiguel) {
   if (rawBandNameVal && (!isEmmanuelTargetProfile || rawBandNameVal.toLowerCase() !== 'origin')) {
     resolvedBandForTies = communityBandManager.findByName(rawBandNameVal) || communityBandManager.findMatch(rawBandNameVal);
   }
-  if (!resolvedBandForTies && targetFullName && !isEmmanuelTargetProfile) {
-    resolvedBandForTies = communityBandManager.findByMember(targetFullName);
+  if (!resolvedBandForTies && targetProfObj?.band_id && targetProfObj.band_id !== targetProfObj.id) {
+    resolvedBandForTies = communityBandManager.getById(targetProfObj.band_id);
   }
   if (!resolvedBandForTies) {
     const targetEmailLower = (targetProfObj?.email || dbProfile?.email || '').toLowerCase();
@@ -4116,13 +4433,13 @@ const bandNameVal = isTargetMiguel
   ? 'Virulent Excision'
   : (resolvedBandForTies?.name || resolvedBandForTies?.band_name || rawBandNameVal || null);
 
-if (regWorkspaces.includes('band') || (bandNameVal && (isTargetMiguel || resolvedBandForTies || rawBandNameVal))) {
+if (bandNameVal && (isTargetMiguel || resolvedBandForTies || rawBandNameVal)) {
   const finalBandName = bandNameVal;
   if (finalBandName) {
     const isVE = isTargetMiguel || finalBandName.toLowerCase() === 'virulent excision';
     const bandAvatar = isVE
       ? 'https://cyjnpuneruonskfzpmqo.supabase.co/storage/v1/object/public/avatars/5403162d-1947-43aa-b5f6-38a1bd2a1b80/band-logo_1786739491396.jpg?t=1786739491396'
-      : (resolvedBandForTies?.logo_url || resolvedBandForTies?.avatar_url || targetProfObj?.band_logo || targetProfObj?.avatar || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150');
+      : (pickBestBandImage(resolvedBandForTies?.logo_url, resolvedBandForTies?.avatar_url, targetProfObj?.band_logo, targetProfObj?.avatar, isGorgasmBand(finalBandName) ? GORGASM_OFFICIAL_LOGO : null) || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150');
     dynamicUserTies.push({
       name: finalBandName,
       role: 'Artist',
@@ -4582,8 +4899,9 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
       timeAgo: 'Just now',
       authorId: userProfile?.id || 'current_user',
       authorName: sellerDisplayName,
-      authorAvatar: userProfile?.avatar || userProfile?.avatar_url || '',
-      authorRole: portalRole === 'band' ? 'Band / Artist' : portalRole === 'label' ? 'Record Label' : portalRole === 'promoter' ? 'Promoter' : 'Community Member',
+      authorAvatar: resolveEffectiveAvatar(portalRole, activeBand, userProfile, profileAvatarUrl),
+      authorRole: portalRole === 'band' ? 'Band / Artist' : portalRole === 'label' ? 'Record Label' : portalRole === 'promoter' ? 'Venue Promoter' : portalRole === 'creative' ? 'Creative Pro' : 'Community Member',
+      workspace_type: portalRole,
       location: newListingItem.location,
       message: newListingDescription.trim() || `${newListingTitle.trim()} - Pinned to the Community Bulletin Board`,
       content: newListingDescription.trim() || `${newListingTitle.trim()} - Pinned to the Community Bulletin Board`,
@@ -4910,24 +5228,38 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
       try {
         const queryTerm = `%${q}%`;
 
-        // 1. Query profiles table across all name, handle, role, and workspace fields
+        // 1. Query profiles table using explicit card column selection, .order(), and .range()
         const { data: profData } = await supabaseClient
           .from('profiles')
-          .select('*')
-          .or(`full_name.ilike.${queryTerm},username.ilike.${queryTerm},band_name.ilike.${queryTerm},console_handle.ilike.${queryTerm},business_name.ilike.${queryTerm},agency_name.ilike.${queryTerm},label_name.ilike.${queryTerm},role.ilike.${queryTerm}`)
-          .limit(20);
+          .select(
+            'id, full_name, username, console_handle, email, account_type, role, band_name, business_name, agency_name, label_name, avatar_url, band_logo, creative_avatar, promoter_logo, label_avatar, genre, city, state, location, bio'
+          )
+          .or(`full_name.ilike.${queryTerm},console_handle.ilike.${queryTerm},email.ilike.${queryTerm}`)
+          .order('created_at', { ascending: false })
+          .range(0, 19);
 
-        // 2. Query registered bands table
+        // 2. Query registered bands table using explicit card column selection, .order(), and .range()
         const { data: bandsData } = await supabaseClient
           .from('bands')
-          .select('*')
-          .or(`band_name.ilike.${queryTerm},name.ilike.${queryTerm},city.ilike.${queryTerm},state_province.ilike.${queryTerm},country.ilike.${queryTerm}`)
-          .limit(20);
+          .select(
+            'id, name, band_name, category, avatar_url, logo_url, city, state, state_province, country, micro_genres, custom_slug, bio'
+          )
+          .or(`band_name.ilike.${queryTerm},city.ilike.${queryTerm},state_province.ilike.${queryTerm},country.ilike.${queryTerm}`)
+          .order('created_at', { ascending: false })
+          .range(0, 19);
+
+        // 3. Query venues table using explicit card column selection, .order(), and .range()
+        const { data: venuesData } = await supabaseClient
+          .from('venues')
+          .select('id, name, category, avatar_url, city, state')
+          .or(`name.ilike.${queryTerm},city.ilike.${queryTerm},state.ilike.${queryTerm}`)
+          .order('name', { ascending: true })
+          .range(0, 19);
 
         const mappedProfiles = (profData || []).map(p => ({
           ...p,
           name: p.full_name || p.username || p.band_name || p.business_name || p.agency_name || p.label_name || 'Unknown',
-          avatar: p.avatar_url || p.band_logo || p.creative_avatar || p.promoter_logo || p.label_avatar,
+          avatar: p.avatar_url || p.band_logo || p.creative_avatar || p.promoter_logo || p.label_avatar || null,
           category: (p.account_type === 'industry_pro' || p.account_type === 'industry pro') ? 'people' :
                     (p.role?.includes('band') || p.role?.includes('artist') || p.band_name) ? 'bands' : 
                     (p.role?.includes('label') || p.label_name) ? 'labels' : 
@@ -4935,20 +5267,30 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
                     (p.role?.includes('creative') || p.business_name) ? 'creatives' : 'people'
         }));
 
-        const mappedBands = (bandsData || []).map(b => {
+        const mappedBands = (bandsData || []).map((b: any) => {
           const loc = formatBandLocation(b);
           const cleanMicros = sanitizeMicroGenres(b.micro_genres || b.sub_genres || b.genre_tags || b.genres || b.genre);
+          const bTitle = b.band_name || b.name || 'Registered Band';
+          const commMatch = communityBandManager.findByName(bTitle) || communityBandManager.findMatch(bTitle);
+          const bestBandAvatar = pickBestBandImage(
+            b.logo_url,
+            b.avatar_url,
+            commMatch?.logo_url,
+            commMatch?.avatar_url,
+            isGorgasmBand(b.id || bTitle, b.custom_slug) ? GORGASM_OFFICIAL_LOGO : null
+          );
 
           return {
             ...b,
             id: b.id || `band_${b.band_name || b.name}`,
             band_id: b.id,
-            name: b.band_name || b.name || 'Registered Band',
-            band_name: b.band_name || b.name,
-            full_name: b.band_name || b.name,
-            username: (b.band_name || b.name || '').toLowerCase().replace(/\s+/g, '_'),
-            avatar: b.logo_url || b.avatar_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150',
-            avatar_url: b.logo_url || b.avatar_url,
+            name: bTitle,
+            band_name: bTitle,
+            full_name: bTitle,
+            username: (bTitle || '').toLowerCase().replace(/\s+/g, '_'),
+            avatar: bestBandAvatar || null,
+            avatar_url: bestBandAvatar || b.logo_url || b.avatar_url || null,
+            logo_url: bestBandAvatar || b.logo_url || b.avatar_url || null,
             role: 'band',
             portalRole: 'Band / Artist',
             type: 'band',
@@ -4965,11 +5307,24 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
           };
         });
 
-        const combined = [...mappedProfiles, ...mappedBands];
+        const mappedVenues = (venuesData || []).map((v: any) => ({
+          ...v,
+          id: v.id || `venue_${v.name}`,
+          name: v.name || 'Venue',
+          avatar: v.avatar_url || null,
+          avatar_url: v.avatar_url || null,
+          role: 'venue',
+          portalRole: 'Promoter / Venue',
+          type: 'venue',
+          category: 'venues',
+          location: [v.city, v.state].filter(Boolean).join(', '),
+          homebase: [v.city, v.state].filter(Boolean).join(', '),
+        }));
+
+        const combined = [...mappedProfiles, ...mappedBands, ...mappedVenues];
         const seen = new Set();
         const deduped = combined.filter(item => {
           const nameLower = (item.name || '').toLowerCase();
-          // If searching for Miguel, exclude "Vortex Graphics" creative/band profile.
           const isSearchingForMiguel = q.toLowerCase().includes('miguel') || q.toLowerCase().includes('goregrinder') || q.toLowerCase().includes('goregrindsickness');
           const isVortexProfile = nameLower.includes('vortex graphics') || nameLower.includes('vortex graphic');
           if (isSearchingForMiguel && isVortexProfile) {
@@ -5347,9 +5702,10 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         containerRef={containerRef}
         dataTheme={dataTheme}
         gridStyle={gridStyle}
+        activeTab={activeTab}
       >
 
-      <div className="transition-all duration-300 opacity-100">
+      <div className={`transition-all duration-300 opacity-100 ${activeTab === 'messages' ? 'shrink-0' : ''}`}>
       {/* Standalone Navigation Header */}
       <FeedTopHeader
         isEmbedded={isEmbedded}
@@ -5371,6 +5727,9 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         userProfile={userProfile}
         setUserProfile={setUserProfile}
         activeBand={resolvedActiveBand || activeBand}
+        bands={effectiveBands}
+        activeBandId={activeBandId}
+        setActiveBandId={setActiveBandId}
         getRoleBorderAndGlowClass={getRoleBorderAndGlowClass}
         unreadNotifsCount={unreadNotifsCount}
         setRightDrawerOpen={setRightDrawerOpen}
@@ -5395,8 +5754,8 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setActiveFeedCategoryFilter={setActiveFeedCategoryFilter}
       />
 
-        {/* Profile Hub Card */}
-        <ProfileHubCard
+        {/* Profile Hub Card (Profile Command Bar) */}
+        <ProfileCommandBar
           activeTab={activeTab}
           setLeftDrawerOpen={setLeftDrawerOpen}
           setDrawerCurrentView={setDrawerCurrentView}
@@ -5416,9 +5775,36 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
           userProfile={userProfile}
         />
 
+        {/* Post Composer Trigger Bar (Placed cleanly beneath Profile Command Bar & above Upcoming Shows) */}
+        {ENABLE_COMPACT_COMPOSER_STRIP_AB_TEST && activeTab === 'feed' && (() => {
+          const triggerPersona = resolveActivePersona({
+            postIdentity,
+            portalRole,
+            userProfile,
+            activeBand: resolvedActiveBand || activeBand,
+            bands,
+            profileFullLegalName,
+            profileHandle,
+            profileAvatarUrl,
+          });
+          const triggerPostingLabel =
+            triggerPersona.type === 'industry_pro' || triggerPersona.type === 'fan'
+              ? (String(profileHandle || userProfile?.console_handle || '').replace(/^@/, '').trim() || triggerPersona.name)
+              : triggerPersona.name;
+
+          return (
+            <PostComposerTrigger
+              avatarUrl={triggerPersona.avatarUrl}
+              personaName={triggerPersona.name}
+              postingLabel={triggerPostingLabel}
+              onOpenComposer={() => setIsComposerModalOpen(true)}
+            />
+          );
+        })()}
+
         {/* Sub-view control panels & Live Tonight Header inside unified sticky header */}
         {activeTab !== 'forum' && activeTab !== 'messages' && activeTab !== 'reels' && activeTab !== 'shop' && activeTab !== 'gallery' && (activeTab as string) !== 'photopit' && (
-          <SubViewControlPanels
+          <UpcomingShowsCarousel
             isLiveTonightOpen={isLiveTonightOpen}
             setIsLiveTonightOpen={setIsLiveTonightOpen}
             liveEvents={liveEvents}
@@ -5502,6 +5888,12 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         </div>
       ) : (
 <FeedViewRouter
+  isComposerModalOpen={isComposerModalOpen}
+  setIsComposerModalOpen={setIsComposerModalOpen}
+  setLeftDrawerOpen={setLeftDrawerOpen}
+  setDrawerCurrentView={setDrawerCurrentView}
+  profileCoverUrl={profileCoverUrl}
+  profileBlurb={profileBlurb}
   activeTab={activeTab}
   setActiveTab={setActiveTab}
   userProfile={userProfile}
@@ -5672,11 +6064,17 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
   setIsCartOpen={setIsCartOpen}
   chats={chats}
   setChats={setChats}
+  setUserProfile={setUserProfile}
+  liveEvents={liveEvents}
+  prefPushNotifications={prefPushNotifications}
+  setPrefPushNotifications={setPrefPushNotifications}
+  setShowMapModal={setShowMapModal}
 />
 
       )}
 
       {/* Side Drawers & Floating Handles */}
+      <Suspense fallback={null}>
       <FeedSideDrawers
         leftDrawerOpen={leftDrawerOpen}
         setLeftDrawerOpen={setLeftDrawerOpen}
@@ -5701,6 +6099,7 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setViewingReceipt={setViewingReceipt}
         isMiguelNameOrProfile={isMiguelNameOrProfile}
         userProfile={userProfile}
+        setUserProfile={setUserProfile}
         activeBand={resolvedActiveBand || activeBand}
         portalRole={portalRole}
         isEmbedded={isEmbedded}
@@ -5734,6 +6133,12 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setProfileStealthMode={setProfileStealthMode}
         profileFavoriteSong={profileFavoriteSong}
         setProfileFavoriteSong={setProfileFavoriteSong}
+        profileBirthdayMonth={profileBirthdayMonth}
+        setProfileBirthdayMonth={setProfileBirthdayMonth}
+        profileBirthdayDay={profileBirthdayDay}
+        setProfileBirthdayDay={setProfileBirthdayDay}
+        profileShowBirthdayShoutout={profileShowBirthdayShoutout}
+        setProfileShowBirthdayShoutout={setProfileShowBirthdayShoutout}
         profileEmail={profileEmail}
         setProfileEmail={setProfileEmail}
         profilePassword={profilePassword}
@@ -6187,39 +6592,67 @@ if (Array.isArray(targetProfObj?.label_band_roster)) {
         setFeed={setFeed}
         syncPostToSupabase={syncPostToSupabase}
       />
+      </Suspense>
       {/* Floating Particle Reaction Overlay */}
       <FloatingReactionOverlay particles={particles} />
 
-      <CreateCommunityShowModal
-        isOpen={isCommunityShowModalOpen}
-        onClose={() => { setIsCommunityShowModalOpen(false); setEditingCommunityShow(null); }}
-        onSubmit={handleCommunityShowSubmit}
-        editingShow={editingCommunityShow}
-        triggerNotification={triggerNotification}
-      />
+      {isCommunityShowModalOpen && (
+        <Suspense fallback={null}>
+          <CreateCommunityShowModal
+            isOpen={isCommunityShowModalOpen}
+            onClose={() => { setIsCommunityShowModalOpen(false); setEditingCommunityShow(null); }}
+            onSubmit={handleCommunityShowSubmit}
+            editingShow={editingCommunityShow}
+            triggerNotification={triggerNotification}
+          />
+        </Suspense>
+      )}
 
       {/* Facebook-style Story Viewer Modal */}
-      <StoryViewerModal
-        activeStory={activeStory}
-        stories={stories}
-        progress={storyProgress}
-        isPaused={isStoryPaused}
-        setIsPaused={setIsStoryPaused}
-        onClose={() => setActiveStory(null)}
-        onNext={handleNextStory}
-        onPrev={handlePrevStory}
-        triggerNotification={triggerNotification}
-        userProfile={userProfile}
-      />
+      {activeStory && (
+        <Suspense fallback={null}>
+          <StoryViewerModal
+            activeStory={activeStory}
+            stories={stories}
+            progress={storyProgress}
+            isPaused={isStoryPaused}
+            setIsPaused={setIsStoryPaused}
+            onClose={() => setActiveStory(null)}
+            onNext={handleNextStory}
+            onPrev={handlePrevStory}
+            triggerNotification={triggerNotification}
+            userProfile={userProfile}
+          />
+        </Suspense>
+      )}
       {/* Historic Show Archives Modal */}
-      <PromoterArchivesModal
-        isOpen={showPromoterArchivesModal}
-        onClose={() => setShowPromoterArchivesModal(false)}
-        promoterProfile={userProfile}
-        userProfile={userProfile}
-        shows={liveEvents}
-        triggerNotification={triggerNotification}
-      />
+      {showPromoterArchivesModal && (
+        <Suspense fallback={null}>
+          <PromoterArchivesModal
+            isOpen={showPromoterArchivesModal}
+            onClose={() => setShowPromoterArchivesModal(false)}
+            promoterProfile={userProfile}
+            userProfile={userProfile}
+            shows={liveEvents}
+            triggerNotification={triggerNotification}
+          />
+        </Suspense>
+      )}
+      {/* Conditional Floating Shopping Cart Button (Only shown when cart has items) */}
+      {cartItems.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setIsCartOpen(true)}
+          aria-label="Open shopping cart"
+          title="View Cart & Checkout"
+          className="fixed bottom-5 right-5 z-40 w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-[#0d0b14]/95 backdrop-blur-md border border-purple-500/65 hover:border-teal-400 text-white shadow-[0_0_24px_rgba(157,78,223,0.45),0_0_14px_rgba(20,184,166,0.3)] flex items-center justify-center hover:scale-105 active:scale-95 transition-all cursor-pointer"
+        >
+          <ShoppingCart className="w-5 h-5 sm:w-6 sm:h-6 text-teal-300" />
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 border border-zinc-950 flex items-center justify-center text-[10px] font-mono font-black text-white shadow-lg">
+            {cartItems.reduce((acc, item) => acc + (item.quantity || 1), 0)}
+          </span>
+        </button>
+      )}
       </SocialThemeShell>
     </SocialRoleProvider>
   );
